@@ -135,7 +135,6 @@ export function AdminLocationBottomSheet({ isOpen, onClose, location }: AdminLoc
   const displayAddress = location.place_address || location.address || '';
   const displayPhone = location.place_phone || location.phone || '';
   const displayWebsite = location.place_website || location.website || '';
-  const hasGoogleData = !!location.google_place_id;
   const openStatus = getOpenStatus(location.opening_hours);
 
   const primaryType = location.place_types?.[0];
@@ -304,7 +303,7 @@ export function AdminLocationBottomSheet({ isOpen, onClose, location }: AdminLoc
             </div>
 
             {/* Rating block */}
-            {hasGoogleData && location.place_rating && (
+            {location.place_rating && (
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="text-lg font-bold text-gray-800">{location.place_rating.toFixed(1)}</span>
                 {renderStars(location.place_rating)}
