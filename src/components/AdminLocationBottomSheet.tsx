@@ -63,8 +63,10 @@ export function AdminLocationBottomSheet({ isOpen, onClose, location, currentUse
   const [hoverRating, setHoverRating] = useState(0);
   const [myComment, setMyComment] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [reviewError, setReviewError] = useState('');
   const [myExistingReview, setMyExistingReview] = useState<Review | null>(null);
   const sheetRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (location) {
@@ -95,12 +97,13 @@ export function AdminLocationBottomSheet({ isOpen, onClose, location, currentUse
   const submitReview = async () => {
     if (!currentUserId || !location || myRating === 0) return;
     setSubmitting(true);
+    setReviewError('');
     try {
-      if (myExistingReview) {
-        await supabase.from('location_reviews').update({ rating: myRating, comment: myComment || null }).eq('id', myExistingReview.id);
-      } else {
-        await supabase.from('location_reviews').insert({ location_id: location.id, user_id: currentUserId, rating: myRating, comment: myComment || null });
-      }
+      const payload = { location_id: location.id, user_id: currentUserId, rating: myRating, comment: myComment || null };
+      const { error } = myExistingReview
+        ? await supabase.from('location_reviews').update(payload).eq('id', myExistingReview.id)
+        : await supabase.from('location_reviews').insert(payload);
+      if (error) { setReviewError(error.message); return; }
       await fetchReviews();
     } finally {
       setSubmitting(false);
@@ -111,7 +114,10 @@ export function AdminLocationBottomSheet({ isOpen, onClose, location, currentUse
 
   const handleClose = () => setTimeout(onClose, 200);
 
-  const handleTouchStart = (e: React.TouchEvent) => { setStartY(e.touches[0].clientY); setIsDragging(true); };
+  const handleTouchStart = (e: React.TouchEvent) => {
+    if (scrollRef.current && scrollRef.current.scrollTop > 0) return;
+    setStartY(e.touches[0].clientY); setIsDragging(true);
+  };
   const handleTouchMove = (e: React.TouchEvent) => { if (!isDragging) return; const d = e.touches[0].clientY - startY; if (d > 0) setCurrentY(d); };
   const handleTouchEnd = () => { if (currentY > 80) handleClose(); setCurrentY(0); setIsDragging(false); };
   const handleMouseDown = (e: React.MouseEvent) => { setStartY(e.clientY); setIsDragging(true); };
@@ -154,7 +160,7 @@ export function AdminLocationBottomSheet({ isOpen, onClose, location, currentUse
         style={{ transform: isOpen ? `translateY(${currentY}px)` : 'translateY(100%)', transition: isDragging ? 'none' : 'transform 0.3s cubic-bezier(0.32,0.72,0,1)', maxHeight: '92vh' }}
         dir="rtl"
       >
-        <div className="w-full h-full overflow-y-auto bg-white" style={{ borderTopLeftRadius: 28, borderTopRightRadius: 28 }}>
+        <div ref={scrollRef} className="w-full overflow-y-auto bg-white" style={{ maxHeight: '92vh', borderTopLeftRadius: 28, borderTopRightRadius: 28 }}>
 
           {/* ── Photo header ── */}
           {photos.length > 0 ? (
@@ -351,6 +357,7 @@ export function AdminLocationBottomSheet({ isOpen, onClose, location, currentUse
                     rows={2}
                     className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-400 resize-none bg-white"
                   />
+                  {reviewError && <p className="text-xs text-red-500 mt-1">{reviewError}</p>}
                   <button
                     onClick={submitReview}
                     disabled={myRating === 0 || submitting}
