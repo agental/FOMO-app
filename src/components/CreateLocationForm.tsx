@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { MapPin, X, Navigation, Phone, Globe, Palette, Link, Loader, CircleCheck as CheckCircle, CircleAlert as AlertCircle } from 'lucide-react';
+import { MapPin, X, Navigation, Phone, Globe, Palette, Link, Loader, CircleCheck as CheckCircle, CircleAlert as AlertCircle, Upload, Star, Camera } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { COUNTRIES } from '../utils/countries';
 import { LOCATION_PIN_COLORS, createLocationPinSVG } from '../utils/createLocationPin';
@@ -52,6 +52,8 @@ export function CreateLocationForm({ onSuccess, onCancel, currentUserId }: Creat
   const [description, setDescription] = useState('');
   const [country, setCountry] = useState('TH');
   const [city, setCity] = useState('');
+  const [phone, setPhone] = useState('');
+  const [manualRating, setManualRating] = useState<number>(0);
   const [pinColor, setPinColor] = useState('#EF4444');
   const [emoji, setEmoji] = useState('');
   const [emojiCategory, setEmojiCategory] = useState<string>('food');
@@ -60,6 +62,13 @@ export function CreateLocationForm({ onSuccess, onCancel, currentUserId }: Creat
   const [longitude, setLongitude] = useState<number | null>(null);
   const [showMapPicker, setShowMapPicker] = useState(false);
   const [mapLoading, setMapLoading] = useState(false);
+
+  // Image upload
+  const [customImageUrl, setCustomImageUrl] = useState<string | null>(null);
+  const [imageUploading, setImageUploading] = useState(false);
+  const [imageError, setImageError] = useState('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<mapboxgl.Map | null>(null);
   const markerRef = useRef<mapboxgl.Marker | null>(null);
@@ -141,6 +150,8 @@ export function CreateLocationForm({ onSuccess, onCancel, currentUserId }: Creat
       if (place.latitude) setLatitude(place.latitude);
       if (place.longitude) setLongitude(place.longitude);
       if (place.latitude && place.longitude) setShowMapPicker(true);
+      if (place.phone) setPhone(place.phone);
+      if (place.rating) setManualRating(place.rating);
 
       if (place.country) {
         const countryCode = Object.entries(COUNTRIES).find(
@@ -182,6 +193,41 @@ export function CreateLocationForm({ onSuccess, onCancel, currentUserId }: Creat
     }
   };
 
+  const handleImageSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      setImageError('נא להעלות קובץ תמונה בלבד');
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setImageError('התמונה גדולה מדי. מקסימום 5MB');
+      return;
+    }
+
+    setImageError('');
+    setImageUploading(true);
+
+    try {
+      const fileExt = file.name.split('.').pop();
+      const fileName = `locations/${currentUserId}-${Date.now()}.${fileExt}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from('images')
+        .upload(fileName, file, { cacheControl: '3600', upsert: false });
+
+      if (uploadError) throw uploadError;
+
+      const { data: { publicUrl } } = supabase.storage.from('images').getPublicUrl(fileName);
+      setCustomImageUrl(publicUrl);
+    } catch (err: any) {
+      setImageError(err.message || 'שגיאה בהעלאת התמונה');
+    } finally {
+      setImageUploading(false);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -201,33 +247,32 @@ export function CreateLocationForm({ onSuccess, onCancel, currentUserId }: Creat
         if (!city && geoResult.city) setCity(geoResult.city);
       }
 
-      const photoUrl = placeData?.photoUrl || placeData?.photos?.[0] || null;
+      const photoUrl = customImageUrl || placeData?.photoUrl || placeData?.photos?.[0] || null;
       const emojiValue = emoji.trim() || null;
+      const finalRating = manualRating > 0 ? manualRating : (placeData?.rating ?? null);
 
       const corePayload = {
         name,
         country:    finalCountry,
         latitude:   latitude!,
         longitude:  longitude!,
-        // Encode emoji into pin_color as "color|emoji" — avoids schema cache issues with
-        // the separately-added emoji column. MapScreen parses this on read.
         pin_color:  emojiValue ? `${pinColor}|${emojiValue}` : pinColor,
         created_by: currentUserId,
         description:    description || null,
         city:           city || placeData?.city || null,
         address:        placeData?.placeAddress || null,
-        phone:          placeData?.phone || null,
+        phone:          phone || placeData?.phone || null,
         email:          null as null,
         website:        placeData?.website || null,
         image_url:      photoUrl,
         google_place_id:    placeData?.placeId || null,
         place_name:         placeData?.placeName || null,
         place_address:      placeData?.placeAddress || null,
-        place_rating:       placeData?.rating ?? null,
+        place_rating:       finalRating,
         place_review_count: placeData?.reviewCount ?? null,
         place_photo_url:    photoUrl,
         place_photos:       placeData?.photos || null,
-        place_phone:        placeData?.phone || null,
+        place_phone:        phone || placeData?.phone || null,
         place_website:      placeData?.website || null,
         place_types:        placeData?.types || null,
         place_open_now:     placeData?.openNow ?? null,
@@ -253,7 +298,7 @@ export function CreateLocationForm({ onSuccess, onCancel, currentUserId }: Creat
     }
   };
 
-  const hasPhoto = placeData?.photoUrl || placeData?.photos?.[0];
+  const displayImage = customImageUrl || placeData?.photoUrl || placeData?.photos?.[0];
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-end justify-center z-50" dir="rtl">
@@ -297,22 +342,14 @@ export function CreateLocationForm({ onSuccess, onCancel, currentUserId }: Creat
                 disabled={fetchStatus === 'loading' || !googleMapsUrl.trim()}
                 className="px-4 py-2.5 bg-blue-600 text-white rounded-xl text-sm font-bold hover:bg-blue-700 transition-colors disabled:opacity-50 flex items-center gap-1.5 flex-shrink-0"
               >
-                {fetchStatus === 'loading' ? (
-                  <Loader className="w-4 h-4 animate-spin" />
-                ) : (
-                  'טען'
-                )}
+                {fetchStatus === 'loading' ? <Loader className="w-4 h-4 animate-spin" /> : 'טען'}
               </button>
             </div>
 
             {fetchStatus === 'success' && placeData && (
               <div className="flex items-start gap-3 bg-green-50 border border-green-200 rounded-xl p-3">
-                {hasPhoto && (
-                  <img
-                    src={hasPhoto}
-                    alt={placeData.placeName}
-                    className="w-14 h-14 rounded-xl object-cover flex-shrink-0"
-                  />
+                {displayImage && (
+                  <img src={displayImage} alt={placeData.placeName} className="w-14 h-14 rounded-xl object-cover flex-shrink-0" />
                 )}
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-1.5 mb-0.5">
@@ -341,6 +378,66 @@ export function CreateLocationForm({ onSuccess, onCancel, currentUserId }: Creat
             )}
           </div>
 
+          {/* Image upload */}
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 mb-2">
+              <Camera className="inline w-4 h-4 ml-1" />
+              תמונה למקום
+            </label>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              onChange={handleImageSelect}
+              className="hidden"
+            />
+            {displayImage ? (
+              <div className="relative rounded-2xl overflow-hidden border border-gray-200">
+                <img src={displayImage} alt="תמונת המקום" className="w-full h-48 object-cover" />
+                <div className="absolute top-2 left-2 flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="bg-white/90 backdrop-blur text-gray-700 text-xs font-bold px-3 py-1.5 rounded-full shadow hover:bg-white transition-all flex items-center gap-1"
+                  >
+                    <Upload className="w-3 h-3" />
+                    החלף
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCustomImageUrl(null)}
+                    className="bg-red-500/90 backdrop-blur text-white text-xs font-bold px-3 py-1.5 rounded-full shadow hover:bg-red-600 transition-all"
+                  >
+                    הסר
+                  </button>
+                </div>
+                {customImageUrl && (
+                  <div className="absolute bottom-2 right-2 bg-green-500 text-white text-xs font-bold px-2 py-1 rounded-full">
+                    תמונה שהועלתה
+                  </div>
+                )}
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={imageUploading}
+                className="w-full h-36 border-2 border-dashed border-gray-300 rounded-2xl flex flex-col items-center justify-center gap-2 hover:border-blue-400 hover:bg-blue-50 transition-all disabled:opacity-50"
+              >
+                {imageUploading ? (
+                  <Loader className="w-6 h-6 text-blue-500 animate-spin" />
+                ) : (
+                  <>
+                    <Upload className="w-8 h-8 text-gray-400" />
+                    <span className="text-sm text-gray-500 font-medium">לחץ להעלאת תמונה</span>
+                    <span className="text-xs text-gray-400">JPG, PNG עד 5MB</span>
+                  </>
+                )}
+              </button>
+            )}
+            {imageError && <p className="text-red-500 text-xs mt-1">{imageError}</p>}
+          </div>
+
           {/* Place name */}
           <div>
             <label className="block text-sm font-semibold text-gray-700 mb-2">שם המקום *</label>
@@ -364,6 +461,58 @@ export function CreateLocationForm({ onSuccess, onCancel, currentUserId }: Creat
               rows={2}
               className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
             />
+          </div>
+
+          {/* Phone */}
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 mb-2">
+              <Phone className="inline w-4 h-4 ml-1" />
+              טלפון (אופציונלי)
+            </label>
+            <input
+              type="tel"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              placeholder="+66 2 123 4567"
+              className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
+              dir="ltr"
+            />
+          </div>
+
+          {/* Rating */}
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 mb-2">
+              <Star className="inline w-4 h-4 ml-1" />
+              דירוג (אופציונלי)
+            </label>
+            <div className="flex items-center gap-2">
+              <div className="flex gap-1">
+                {[1, 2, 3, 4, 5].map((star) => (
+                  <button
+                    key={star}
+                    type="button"
+                    onClick={() => setManualRating(manualRating === star ? 0 : star)}
+                    className="transition-all hover:scale-110 active:scale-90"
+                  >
+                    <Star
+                      className={`w-8 h-8 ${star <= manualRating ? 'text-amber-400 fill-amber-400' : 'text-gray-300'}`}
+                    />
+                  </button>
+                ))}
+              </div>
+              {manualRating > 0 && (
+                <span className="text-sm font-bold text-amber-600 mr-1">{manualRating}.0</span>
+              )}
+              {manualRating > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setManualRating(0)}
+                  className="text-xs text-gray-400 hover:text-red-400 transition-colors"
+                >
+                  נקה
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Country + City */}
@@ -401,12 +550,6 @@ export function CreateLocationForm({ onSuccess, onCancel, currentUserId }: Creat
                 <div className="flex items-start gap-2 text-sm text-gray-700">
                   <MapPin className="w-4 h-4 text-gray-400 flex-shrink-0 mt-0.5" />
                   <span>{placeData.placeAddress}</span>
-                </div>
-              )}
-              {placeData.phone && (
-                <div className="flex items-center gap-2 text-sm text-gray-700">
-                  <Phone className="w-4 h-4 text-gray-400 flex-shrink-0" />
-                  <span>{placeData.phone}</span>
                 </div>
               )}
               {placeData.website && (
@@ -506,11 +649,9 @@ export function CreateLocationForm({ onSuccess, onCancel, currentUserId }: Creat
             </div>
           </div>
 
-          {/* Emoji badge — WhatsApp-style picker */}
+          {/* Emoji badge */}
           <div>
             <label className="block text-sm font-semibold text-gray-700 mb-2">אימוג'י לסמן (אופציונלי)</label>
-
-            {/* Selected emoji display */}
             <div className="flex items-center gap-3 mb-3">
               <div className={`w-14 h-14 rounded-2xl flex items-center justify-center text-3xl flex-shrink-0 transition-all ${
                 emoji ? 'bg-blue-50 ring-2 ring-blue-400' : 'bg-gray-100 border-2 border-dashed border-gray-300'
@@ -522,18 +663,13 @@ export function CreateLocationForm({ onSuccess, onCancel, currentUserId }: Creat
                   {emoji ? 'אימוג׳י נבחר — יופיע על הסמן במפה' : 'לחץ על אימוג׳י כדי לבחור'}
                 </p>
                 {emoji && (
-                  <button
-                    type="button"
-                    onClick={() => setEmoji('')}
-                    className="text-xs text-red-400 hover:text-red-600 text-right w-fit"
-                  >
+                  <button type="button" onClick={() => setEmoji('')} className="text-xs text-red-400 hover:text-red-600 text-right w-fit">
                     הסר
                   </button>
                 )}
               </div>
             </div>
 
-            {/* Category tabs */}
             <div className="flex gap-1.5 mb-3 overflow-x-auto pb-1 scrollbar-none">
               {EMOJI_CATEGORIES.map(cat => (
                 <button
@@ -541,9 +677,7 @@ export function CreateLocationForm({ onSuccess, onCancel, currentUserId }: Creat
                   type="button"
                   onClick={() => setEmojiCategory(cat.id)}
                   className={`flex flex-col items-center gap-0.5 px-3 py-2 rounded-xl flex-shrink-0 transition-all ${
-                    emojiCategory === cat.id
-                      ? 'bg-blue-500 text-white'
-                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                    emojiCategory === cat.id ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                   }`}
                 >
                   <span className="text-lg leading-none">{cat.icon}</span>
@@ -552,7 +686,6 @@ export function CreateLocationForm({ onSuccess, onCancel, currentUserId }: Creat
               ))}
             </div>
 
-            {/* Emoji grid */}
             <div className="grid grid-cols-7 gap-1.5">
               {EMOJI_CATEGORIES.find(c => c.id === emojiCategory)?.emojis.map(e => (
                 <button
@@ -560,9 +693,7 @@ export function CreateLocationForm({ onSuccess, onCancel, currentUserId }: Creat
                   type="button"
                   onClick={() => setEmoji(e)}
                   className={`h-11 flex items-center justify-center rounded-xl text-2xl transition-all active:scale-90 ${
-                    emoji === e
-                      ? 'bg-blue-100 ring-2 ring-blue-500 scale-110'
-                      : 'bg-gray-100 hover:bg-gray-200 hover:scale-110'
+                    emoji === e ? 'bg-blue-100 ring-2 ring-blue-500 scale-110' : 'bg-gray-100 hover:bg-gray-200 hover:scale-110'
                   }`}
                 >
                   {e}
@@ -572,11 +703,11 @@ export function CreateLocationForm({ onSuccess, onCancel, currentUserId }: Creat
           </div>
 
           {/* Pin preview */}
-          {hasPhoto && (
+          {displayImage && (
             <div>
               <label className="block text-sm font-semibold text-gray-700 mb-2">תצוגה מקדימה של הסמן</label>
               <div className="bg-gradient-to-br from-gray-50 to-gray-100 rounded-xl p-8 flex items-center justify-center">
-                <div dangerouslySetInnerHTML={{ __html: createLocationPinSVG(hasPhoto, pinColor, emoji || undefined).outerHTML }} />
+                <div dangerouslySetInnerHTML={{ __html: createLocationPinSVG(displayImage, pinColor, emoji || undefined).outerHTML }} />
               </div>
             </div>
           )}
