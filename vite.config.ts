@@ -1,8 +1,10 @@
 import react from '@vitejs/plugin-react';
 import basicSsl from '@vitejs/plugin-basic-ssl';
 
+const isDev = process.env.NODE_ENV !== 'production';
+
 export default {
-  plugins: [react(), basicSsl()],
+  plugins: [react(), ...(isDev ? [basicSsl()] : [])],
   server: {
     host: true,
     allowedHosts: true,
