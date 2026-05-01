@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { X, MapPin, Phone, Globe, Navigation, Share2, ChevronLeft, ChevronRight, Clock, Star, Send, ChevronDown, ChevronUp } from 'lucide-react';
+import { X, MapPin, Phone, Globe, Navigation, Share2, ChevronLeft, ChevronRight, Clock, Star, Send, ChevronDown, ChevronUp, Trash2 } from 'lucide-react';
 import { type AdminLocation } from '../lib/supabase';
 import { supabase } from '../lib/supabase';
 
@@ -65,8 +65,16 @@ export function AdminLocationBottomSheet({ isOpen, onClose, location, currentUse
   const [submitting, setSubmitting] = useState(false);
   const [reviewError, setReviewError] = useState('');
   const [myExistingReview, setMyExistingReview] = useState<Review | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
   const sheetRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (currentUserId) {
+      supabase.from('users').select('role').eq('id', currentUserId).single()
+        .then(({ data }) => setIsAdmin(data?.role === 'admin'));
+    }
+  }, [currentUserId]);
 
   useEffect(() => {
     if (location) {
@@ -392,6 +400,18 @@ export function AdminLocationBottomSheet({ isOpen, onClose, location, currentUse
                             <span className="text-xs text-gray-400">{new Date(r.created_at).toLocaleDateString('he-IL')}</span>
                           </div>
                         </div>
+                        {isAdmin && (
+                          <button
+                            onClick={async () => {
+                              if (!confirm('למחוק ביקורת זו?')) return;
+                              await supabase.from('location_reviews').delete().eq('id', r.id);
+                              fetchReviews();
+                            }}
+                            className="w-7 h-7 flex items-center justify-center rounded-full hover:bg-red-100 text-gray-300 hover:text-red-500 transition-colors flex-shrink-0"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
                       </div>
                       {r.comment && <p className="text-sm text-gray-600 leading-relaxed">{r.comment}</p>}
                     </div>
