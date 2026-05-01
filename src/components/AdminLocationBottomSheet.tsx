@@ -63,6 +63,7 @@ export function AdminLocationBottomSheet({ isOpen, onClose, location }: AdminLoc
   const [startY, setStartY] = useState(0);
   const [currentY, setCurrentY] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
+  const [showFullHours, setShowFullHours] = useState(false);
   const sheetRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -136,7 +137,6 @@ export function AdminLocationBottomSheet({ isOpen, onClose, location }: AdminLoc
   const displayWebsite = location.place_website || location.website || '';
   const hasGoogleData = !!location.google_place_id;
   const openStatus = getOpenStatus(location.opening_hours);
-  const [showFullHours, setShowFullHours] = useState(false);
 
   const primaryType = location.place_types?.[0];
 
