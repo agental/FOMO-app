@@ -133,6 +133,7 @@ export type AdminLocation = {
   place_types?: string[];
   place_open_now?: boolean;
   google_maps_url?: string;
+  opening_hours?: Record<string, { open: string; close: string; closed: boolean }> | null;
   created_by?: string;
   created_at: string;
   updated_at: string;

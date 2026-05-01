@@ -44,6 +44,20 @@ function formatPlaceType(type: string): string {
   return type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 }
 
+const DAY_NAMES = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
+
+function getOpenStatus(hours: Record<string, { open: string; close: string; closed: boolean }> | null | undefined) {
+  if (!hours) return null;
+  const now = new Date();
+  const day = now.getDay();
+  const dayHours = hours[day.toString()];
+  if (!dayHours) return null;
+  if (dayHours.closed) return { isOpen: false, todayOpen: null, todayClose: null };
+  const cur = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+  const isOpen = cur >= dayHours.open && cur <= dayHours.close;
+  return { isOpen, todayOpen: dayHours.open, todayClose: dayHours.close };
+}
+
 export function AdminLocationBottomSheet({ isOpen, onClose, location }: AdminLocationBottomSheetProps) {
   const [activePhoto, setActivePhoto] = useState(0);
   const [startY, setStartY] = useState(0);
@@ -121,6 +135,8 @@ export function AdminLocationBottomSheet({ isOpen, onClose, location }: AdminLoc
   const displayPhone = location.place_phone || location.phone || '';
   const displayWebsite = location.place_website || location.website || '';
   const hasGoogleData = !!location.google_place_id;
+  const openStatus = getOpenStatus(location.opening_hours);
+  const [showFullHours, setShowFullHours] = useState(false);
 
   const primaryType = location.place_types?.[0];
 
@@ -392,14 +408,58 @@ export function AdminLocationBottomSheet({ isOpen, onClose, location }: AdminLoc
                 </div>
               )}
 
-              {location.place_open_now !== undefined && (
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 bg-gray-100 rounded-full flex items-center justify-center flex-shrink-0">
+              {(openStatus || location.place_open_now !== undefined) && (
+                <div className="flex items-start gap-3">
+                  <div className="w-8 h-8 bg-gray-100 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5">
                     <Clock className="w-4 h-4 text-gray-600" />
                   </div>
-                  <span className={`text-sm font-semibold ${location.place_open_now ? 'text-green-600' : 'text-red-500'}`}>
-                    {location.place_open_now ? 'פתוח עכשיו' : 'סגור עכשיו'}
-                  </span>
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {openStatus ? (
+                        <>
+                          <span className={`text-sm font-bold ${openStatus.isOpen ? 'text-green-600' : 'text-red-500'}`}>
+                            {openStatus.isOpen ? '● פתוח עכשיו' : '● סגור עכשיו'}
+                          </span>
+                          {openStatus.todayOpen && (
+                            <span className="text-xs text-gray-500">
+                              {openStatus.isOpen ? `סוגר ב-${openStatus.todayClose}` : `נפתח ב-${openStatus.todayOpen}`}
+                            </span>
+                          )}
+                        </>
+                      ) : (
+                        <span className={`text-sm font-bold ${location.place_open_now ? 'text-green-600' : 'text-red-500'}`}>
+                          {location.place_open_now ? '● פתוח עכשיו' : '● סגור עכשיו'}
+                        </span>
+                      )}
+                      {openStatus && location.opening_hours && (
+                        <button
+                          type="button"
+                          onClick={() => setShowFullHours(v => !v)}
+                          className="text-xs text-blue-500 font-medium hover:underline"
+                        >
+                          {showFullHours ? 'הסתר' : 'כל השעות'}
+                        </button>
+                      )}
+                    </div>
+
+                    {showFullHours && location.opening_hours && (
+                      <div className="mt-2 space-y-1">
+                        {DAY_NAMES.map((day, i) => {
+                          const h = location.opening_hours![i.toString()];
+                          const isToday = new Date().getDay() === i;
+                          return (
+                            <div key={i} className={`flex items-center justify-between text-xs py-0.5 ${isToday ? 'font-bold text-gray-900' : 'text-gray-600'}`}>
+                              <span>{day}{isToday ? ' (היום)' : ''}</span>
+                              {h?.closed
+                                ? <span className="text-red-500">סגור</span>
+                                : <span>{h?.open} – {h?.close}</span>
+                              }
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </div>

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { MapPin, X, Navigation, Phone, Globe, Palette, Link, Loader, CircleCheck as CheckCircle, CircleAlert as AlertCircle, Upload, Star, Camera } from 'lucide-react';
+import { MapPin, X, Navigation, Phone, Globe, Palette, Link, Loader, CircleCheck as CheckCircle, CircleAlert as AlertCircle, Upload, Star, Camera, Clock } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { COUNTRIES } from '../utils/countries';
 import { LOCATION_PIN_COLORS, createLocationPinSVG } from '../utils/createLocationPin';
@@ -62,6 +62,21 @@ export function CreateLocationForm({ onSuccess, onCancel, currentUserId }: Creat
   const [longitude, setLongitude] = useState<number | null>(null);
   const [showMapPicker, setShowMapPicker] = useState(false);
   const [mapLoading, setMapLoading] = useState(false);
+
+  // Opening hours
+  const DAY_NAMES = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
+  const defaultHours = () => Object.fromEntries(
+    Array.from({ length: 7 }, (_, i) => [i, { open: '09:00', close: '22:00', closed: i === 6 }])
+  );
+  const [hoursEnabled, setHoursEnabled] = useState(false);
+  const [openingHours, setOpeningHours] = useState<Record<string, { open: string; close: string; closed: boolean }>>(defaultHours());
+
+  const toggleDayClosed = (day: number) => {
+    setOpeningHours(prev => ({ ...prev, [day]: { ...prev[day], closed: !prev[day].closed } }));
+  };
+  const updateHours = (day: number, field: 'open' | 'close', value: string) => {
+    setOpeningHours(prev => ({ ...prev, [day]: { ...prev[day], [field]: value } }));
+  };
 
   // Image upload
   const [customImageUrl, setCustomImageUrl] = useState<string | null>(null);
@@ -251,7 +266,7 @@ export function CreateLocationForm({ onSuccess, onCancel, currentUserId }: Creat
       const emojiValue = emoji.trim() || null;
       const finalRating = manualRating > 0 ? manualRating : (placeData?.rating ?? null);
 
-      const corePayload = {
+      const corePayload: Record<string, unknown> = {
         name,
         country:    finalCountry,
         latitude:   latitude!,
@@ -277,6 +292,7 @@ export function CreateLocationForm({ onSuccess, onCancel, currentUserId }: Creat
         place_types:        placeData?.types || null,
         place_open_now:     placeData?.openNow ?? null,
         google_maps_url:    googleMapsUrl.trim() || null,
+        opening_hours:      hoursEnabled ? openingHours : null,
       };
 
       const { error: insertError } = await supabase
@@ -513,6 +529,61 @@ export function CreateLocationForm({ onSuccess, onCancel, currentUserId }: Creat
                 </button>
               )}
             </div>
+          </div>
+
+          {/* Opening hours */}
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <label className="text-sm font-semibold text-gray-700 flex items-center gap-1">
+                <Clock className="w-4 h-4" />
+                שעות פתיחה
+              </label>
+              <button
+                type="button"
+                onClick={() => setHoursEnabled(v => !v)}
+                className={`relative w-12 h-6 rounded-full transition-colors ${hoursEnabled ? 'bg-blue-600' : 'bg-gray-300'}`}
+              >
+                <div className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow transition-all ${hoursEnabled ? 'right-1' : 'left-1'}`} />
+              </button>
+            </div>
+
+            {hoursEnabled && (
+              <div className="bg-gray-50 rounded-2xl p-3 space-y-2 border border-gray-200">
+                {DAY_NAMES.map((dayName, i) => (
+                  <div key={i} className="flex items-center gap-2">
+                    <span className="text-sm text-gray-700 w-14 flex-shrink-0 font-medium">{dayName}</span>
+                    <button
+                      type="button"
+                      onClick={() => toggleDayClosed(i)}
+                      className={`text-xs font-bold px-2.5 py-1 rounded-lg flex-shrink-0 transition-colors ${
+                        openingHours[i]?.closed
+                          ? 'bg-red-100 text-red-600 hover:bg-red-200'
+                          : 'bg-green-100 text-green-600 hover:bg-green-200'
+                      }`}
+                    >
+                      {openingHours[i]?.closed ? 'סגור' : 'פתוח'}
+                    </button>
+                    {!openingHours[i]?.closed && (
+                      <>
+                        <input
+                          type="time"
+                          value={openingHours[i]?.open || '09:00'}
+                          onChange={(e) => updateHours(i, 'open', e.target.value)}
+                          className="flex-1 text-sm border border-gray-300 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-400"
+                        />
+                        <span className="text-gray-400 text-xs">—</span>
+                        <input
+                          type="time"
+                          value={openingHours[i]?.close || '22:00'}
+                          onChange={(e) => updateHours(i, 'close', e.target.value)}
+                          className="flex-1 text-sm border border-gray-300 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-400"
+                        />
+                      </>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Country + City */}
