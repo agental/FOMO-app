@@ -118,9 +118,10 @@ export function MapScreen({
   };
 
   const loadAdminLocations = async () => {
-    let q = supabase.from('admin_locations').select('*');
-    if (countriesToFilter.length > 0) q = q.in('country', countriesToFilter);
-    const { data, error: e } = await q.order('created_at', { ascending: false });
+    const { data, error: e } = await supabase
+      .from('admin_locations')
+      .select('*')
+      .order('created_at', { ascending: false });
     if (e) { console.error('loadAdminLocations:', e); return; }
     if (data) setAdminLocations(data);
   };
