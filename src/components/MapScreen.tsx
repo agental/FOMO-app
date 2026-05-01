@@ -604,6 +604,7 @@ export function MapScreen({
         isOpen={showAdminLocation}
         onClose={() => { setShowAdminLocation(false); setSelectedAdminLocation(null); }}
         location={selectedAdminLocation}
+        currentUserId={userId}
       />
 
       <MeetupBottomSheet
