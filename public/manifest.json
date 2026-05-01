@@ -1,0 +1,56 @@
+{
+  "name": "הטיול הגדול",
+  "short_name": "הטיול הגדול",
+  "description": "רשת חברתית לטיילים ישראלים - התחבר, שתף וגלה חוויות בכל העולם",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#667eea",
+  "theme_color": "#667eea",
+  "orientation": "portrait-primary",
+  "dir": "rtl",
+  "lang": "he",
+  "categories": ["travel", "social", "lifestyle"],
+  "icons": [
+    {
+      "src": "/icon-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "/icon-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "form_factor": "narrow"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "מפה",
+      "short_name": "מפה",
+      "description": "צפה במפת אירועים",
+      "url": "/?view=map",
+      "icons": [{ "src": "/icon-192x192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "צור אירוע",
+      "short_name": "אירוע",
+      "description": "צור אירוע חדש",
+      "url": "/?create=event",
+      "icons": [{ "src": "/icon-192x192.png", "sizes": "192x192" }]
+    }
+  ]
+}
