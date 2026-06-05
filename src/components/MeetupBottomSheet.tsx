@@ -1,8 +1,20 @@
-import { useState } from 'react';
-import { X, Clock, MapPin, Users, Lock, Check, ChevronLeft } from 'lucide-react';
+import { useState, useRef, useEffect } from 'react';
+import { motion, AnimatePresence, useDragControls } from 'framer-motion';
+import { Clock, Lock, X, Users } from 'lucide-react';
 import { supabase, type Meetup } from '../lib/supabase';
+import { createMeetupPinSVG } from '../utils/createMeetupPin';
+import { getMeetupPinColor } from '../utils/meetupPinColor';
+import { JoinRequestCard } from './JoinRequestCard';
 
-interface MeetupBottomSheetProps {
+/* ─────────────────────────────────────── types ─── */
+
+interface UserProfile {
+  id: string;
+  display_name: string;
+  avatar_url?: string | null;
+}
+
+interface Props {
   meetup: Meetup | null;
   isOpen: boolean;
   currentUserId: string;
@@ -12,41 +24,125 @@ interface MeetupBottomSheetProps {
   onRefresh: () => void;
 }
 
-function formatScheduledAt(iso: string) {
-  const d = new Date(iso);
-  const now = new Date();
-  const diffMs  = d.getTime() - now.getTime();
-  const diffMin = Math.round(diffMs / 60000);
-  const diffHr  = Math.round(diffMs / 3600000);
+/* ─────────────────────────────────────── helpers ─ */
 
-  if (diffMin < 0) return 'כבר התחיל';
-  if (diffMin < 60) return `בעוד ${diffMin} דקות`;
-  if (diffHr  < 24) return `בעוד ${diffHr} שעות`;
+const HE_DAYS = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
 
-  return d.toLocaleDateString('he-IL', { weekday: 'long', day: 'numeric', month: 'long' }) +
-    ' · ' + d.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' });
+function sameLocalDay(a: Date, b: Date) {
+  return a.getFullYear() === b.getFullYear() &&
+         a.getMonth()    === b.getMonth()    &&
+         a.getDate()     === b.getDate();
 }
 
+function getMeetupDayLabel(iso: string): string {
+  const d        = new Date(iso);
+  const today    = new Date();
+  const tomorrow = new Date(); tomorrow.setDate(today.getDate() + 1);
+  if (sameLocalDay(d, today))    return 'היום';
+  if (sameLocalDay(d, tomorrow)) return 'מחר';
+  return `ביום ${HE_DAYS[d.getDay()]}`;
+}
+
+/* ─────────────────────────────────── Avatar chip ─ */
+
+function AvatarChip({ profile, isCreator, color }: { profile: UserProfile; isCreator: boolean; color: string }) {
+  const SIZE = 52;
+  const initial = (profile.display_name?.[0] ?? '?').toUpperCase();
+  return (
+    /* paddingTop absorbs the crown's upward overflow so it isn't clipped */
+    <div className="flex flex-col items-center gap-1 flex-shrink-0" style={{ width: 68, paddingTop: 10 }}>
+      <div style={{ position: 'relative', width: SIZE, height: SIZE, overflow: 'visible' }}>
+        {profile.avatar_url ? (
+          <img
+            src={profile.avatar_url}
+            alt={profile.display_name}
+            style={{
+              width: SIZE, height: SIZE, borderRadius: '50%',
+              objectFit: 'cover',
+              border: isCreator ? `2.5px solid ${color}` : '2.5px solid #E5E7EB',
+              display: 'block',
+            }}
+          />
+        ) : (
+          <div style={{
+            width: SIZE, height: SIZE, borderRadius: '50%',
+            background: `linear-gradient(135deg, ${color}CC, ${color}88)`,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: 20, color: 'white', fontWeight: 700,
+            border: isCreator ? `2.5px solid ${color}` : '2.5px solid #E5E7EB',
+          }}>
+            {initial}
+          </div>
+        )}
+        {isCreator && (
+          <span style={{
+            position: 'absolute', top: -8, right: -8,
+            fontSize: 17, lineHeight: 1, userSelect: 'none',
+            zIndex: 10,
+            /* own stacking context so it floats above the avatar */
+            filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.25))',
+          }}>
+            👑
+          </span>
+        )}
+      </div>
+      <p style={{
+        fontSize: 11, color: '#6B7280', textAlign: 'center',
+        width: 68, overflow: 'hidden', textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap', lineHeight: 1.3,
+      }}>
+        {profile.display_name?.split(' ')[0] ?? ''}
+      </p>
+    </div>
+  );
+}
+
+/* ─────────────────────────────────── component ─── */
+
 export function MeetupBottomSheet({
-  meetup,
-  isOpen,
-  currentUserId,
-  onClose,
-  onJoined,
-  onOpenChat,
-  onRefresh,
-}: MeetupBottomSheetProps) {
-  const [loading, setLoading] = useState(false);
+  meetup, isOpen, currentUserId,
+  onClose, onJoined, onOpenChat, onRefresh,
+}: Props) {
+  const [loading,          setLoading]          = useState(false);
+  const [attendeeProfiles, setAttendeeProfiles] = useState<UserProfile[]>([]);
+  const [pendingProfiles,  setPendingProfiles]  = useState<UserProfile[]>([]);
+  const pinRef       = useRef<HTMLDivElement>(null);
+  const dragControls = useDragControls();
 
-  if (!isOpen || !meetup) return null;
+  /* fetch all relevant user profiles when sheet opens */
+  useEffect(() => {
+    if (!meetup || !isOpen) { setAttendeeProfiles([]); setPendingProfiles([]); return; }
 
-  const isOrganizer     = meetup.user_id === currentUserId;
-  const isAttending     = meetup.attendees.includes(currentUserId);
-  const hasPendingReq   = meetup.pending_requests?.includes(currentUserId);
-  const pendingCount    = meetup.pending_requests?.length ?? 0;
-  const attendeeCount   = meetup.attendees.length;
+    const attendeeIds = meetup.attendees ?? [];
+    const pendingIds  = meetup.pending_requests ?? [];
+    const allIds      = [...new Set([...attendeeIds, ...pendingIds])];
+
+    if (allIds.length === 0) return;
+
+    supabase
+      .from('users')
+      .select('id, display_name, avatar_url')
+      .in('id', allIds)
+      .then(({ data }) => {
+        if (!data) return;
+        const byId = Object.fromEntries(data.map(u => [u.id, u]));
+        setAttendeeProfiles(attendeeIds.map(id => byId[id]).filter(Boolean));
+        setPendingProfiles(pendingIds.map(id => byId[id]).filter(Boolean));
+      });
+  }, [meetup?.id, isOpen]);
+
+  /* re-render SVG pin whenever emoji / avatar / visibility changes */
+  useEffect(() => {
+    if (!pinRef.current || !meetup || !isOpen) return;
+    pinRef.current.innerHTML = '';
+    const pin = createMeetupPinSVG(meetup.emoji, meetup.users?.avatar_url ?? null);
+    pinRef.current.appendChild(pin);
+  }, [meetup?.emoji, meetup?.users?.avatar_url, isOpen]);
+
+  /* ── actions ── */
 
   const handleJoin = async () => {
+    if (!meetup) return;
     setLoading(true);
     try {
       if (meetup.privacy === 'open') {
@@ -74,200 +170,289 @@ export function MeetupBottomSheet({
   };
 
   const handleApprove = async (uid: string) => {
+    if (!meetup) return;
     setLoading(true);
     try {
-      const newAttendees = [...meetup.attendees, uid];
-      const newPending   = (meetup.pending_requests ?? []).filter(x => x !== uid);
-      const { error } = await supabase
-        .from('meetups')
-        .update({ attendees: newAttendees, pending_requests: newPending })
-        .eq('id', meetup.id);
+      const { error } = await supabase.from('meetups').update({
+        attendees:        [...meetup.attendees, uid],
+        pending_requests: (meetup.pending_requests ?? []).filter(x => x !== uid),
+      }).eq('id', meetup.id);
       if (error) throw error;
       onRefresh();
-    } catch (err) {
-      alert('שגיאה באישור: ' + (err instanceof Error ? err.message : String(err)));
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   };
 
   const handleReject = async (uid: string) => {
+    if (!meetup) return;
     setLoading(true);
     try {
-      const newPending = (meetup.pending_requests ?? []).filter(x => x !== uid);
-      const { error } = await supabase
-        .from('meetups')
-        .update({ pending_requests: newPending })
-        .eq('id', meetup.id);
+      const { error } = await supabase.from('meetups').update({
+        pending_requests: (meetup.pending_requests ?? []).filter(x => x !== uid),
+      }).eq('id', meetup.id);
       if (error) throw error;
       onRefresh();
-    } catch (err) {
-      alert('שגיאה: ' + (err instanceof Error ? err.message : String(err)));
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   };
 
-  const handleDeleteMeetup = async () => {
-    if (!confirm('למחוק את הישיבה?')) return;
+  const handleDelete = async () => {
+    if (!meetup || !confirm('למחוק את הישיבה?')) return;
     setLoading(true);
     try {
       await supabase.from('meetups').delete().eq('id', meetup.id);
       onRefresh();
       onClose();
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   };
 
+  /* ── derived state ── */
+
+  if (!meetup) return null;
+
+  const isOrganizer   = meetup.user_id === currentUserId;
+  const isAttending   = meetup.attendees.includes(currentUserId);
+  const hasPendingReq = (meetup.pending_requests ?? []).includes(currentUserId);
+  const attendeeCount = meetup.attendees.length;
+  const pendingCount  = meetup.pending_requests?.length ?? 0;
+  const color         = getMeetupPinColor(meetup.emoji);
+  const firstName     = (meetup.users?.display_name ?? 'מישהו').split(' ')[0];
+
+  /* ── render ── */
+
   return (
-    <>
-      <div
-        className="fixed inset-0 bg-black/40 z-[55]"
-        onClick={onClose}
-      />
-      <div
-        className="fixed bottom-0 left-0 right-0 bg-white rounded-t-3xl shadow-2xl z-[55] flex flex-col"
-        style={{ maxHeight: '85dvh' }}
-        dir="rtl"
-      >
-        {/* Handle */}
-        <div className="w-full pt-3 pb-2 flex justify-center flex-shrink-0">
-          <div className="w-10 h-1 bg-gray-300 rounded-full" />
-        </div>
+    <AnimatePresence>
+      {isOpen && (
+        <>
+          {/* blurred dark overlay */}
+          <motion.div
+            className="fixed inset-0 z-[55]"
+            style={{ background: 'rgba(0,0,0,0.52)', backdropFilter: 'blur(3px)', WebkitBackdropFilter: 'blur(3px)' }}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.22 }}
+            onClick={onClose}
+          />
 
-        <div className="flex-1 overflow-y-auto">
-          <div className="px-5 pb-6 space-y-5">
+          {/* sheet */}
+          <motion.div
+            dir="rtl"
+            className="fixed bottom-0 left-0 right-0 bg-white z-[56] flex flex-col"
+            style={{
+              borderRadius: '28px 28px 0 0',
+              boxShadow: '0 -8px 60px rgba(0,0,0,0.20)',
+              maxHeight: 'calc(90dvh - env(safe-area-inset-bottom, 0px))',
+            }}
+            initial={{ y: '100%' }}
+            animate={{ y: 0 }}
+            exit={{ y: '100%' }}
+            transition={{ type: 'spring', damping: 28, stiffness: 280 }}
+            drag="y"
+            dragControls={dragControls}
+            dragListener={false}
+            dragConstraints={{ top: 0 }}
+            dragElastic={{ top: 0, bottom: 0.35 }}
+            onDragEnd={(_, info) => {
+              if (info.offset.y > 120 || info.velocity.y > 500) onClose();
+            }}
+          >
+            {/* drag handle */}
+            <div
+              className="w-full pt-3 pb-2 flex justify-center flex-shrink-0 cursor-grab active:cursor-grabbing touch-none"
+              onPointerDown={e => dragControls.start(e)}
+            >
+              <div className="w-9 h-[4px] rounded-full bg-[#D1D1D6]" />
+            </div>
 
-            {/* Hero */}
-            <div className="relative">
-              <button onClick={onClose} className="absolute left-0 top-0 w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center hover:bg-gray-200 transition-colors">
-                <X className="w-4 h-4 text-gray-600" />
-              </button>
+            {/* close button */}
+            <button
+              onClick={onClose}
+              className="absolute top-4 left-4 w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center hover:bg-gray-200 transition-colors z-10"
+            >
+              <X size={15} className="text-gray-500" />
+            </button>
 
-              <div className="flex flex-col items-center pt-2 pb-4">
-                <div className="w-24 h-24 rounded-3xl bg-gradient-to-br from-orange-50 to-orange-100 border-2 border-orange-200 flex items-center justify-center text-5xl shadow-inner mb-4">
-                  {meetup.emoji}
+            {/* scrollable body */}
+            <div className="flex-1 overflow-y-auto overscroll-contain">
+              <div className="flex flex-col items-center px-5 pt-1 pb-6">
+
+                {/* ── SVG pin hero ── */}
+                {/*
+                  No filter on the rectangle wrapper — CSS drop-shadow on a
+                  sized div shadows the bounding box, not the pin shape.
+                  The SVG already carries its own internal drop-shadow filter.
+                  We add a separate blurred oval for the colored glow.
+                */}
+                <div style={{
+                  position: 'relative',
+                  width: 49 * 2.4,
+                  height: 54 * 2.4,
+                  overflow: 'visible',
+                  background: 'transparent',
+                  marginBottom: 2,
+                }}>
+                  <div
+                    ref={pinRef}
+                    style={{
+                      transform: 'scale(2.4)',
+                      transformOrigin: 'top left',
+                      position: 'absolute',
+                      top: 0, left: 0,
+                      overflow: 'visible',
+                      background: 'transparent',
+                    }}
+                  />
                 </div>
-                <h2 className="text-xl font-bold text-gray-900 text-center leading-snug">{meetup.text}</h2>
-                {meetup.users && (
-                  <p className="text-sm text-gray-500 mt-1">
-                    {isOrganizer ? 'הישיבה שלך' : `מאורגן ע"י ${meetup.users.display_name}`}
+
+                {/* colored glow oval — sits below the pin tip, no box artifact */}
+                <div style={{
+                  width: 64, height: 18, borderRadius: '50%',
+                  background: color, opacity: 0.28,
+                  filter: 'blur(10px)',
+                  marginTop: -6, marginBottom: 18,
+                  pointerEvents: 'none',
+                }} />
+
+                {/* ── title ── */}
+                <h2
+                  className="text-[22px] font-bold text-gray-900 text-center leading-snug mb-1 px-2"
+                  dir="rtl"
+                >
+                  {`${firstName} רוצה ${meetup.emoji} ${getMeetupDayLabel(meetup.scheduled_at)}`}
+                </h2>
+
+                {/* description */}
+                {meetup.text && (
+                  <p className="text-[15px] text-gray-500 text-center mb-3 px-4 leading-snug">
+                    {meetup.text}
                   </p>
                 )}
-              </div>
-            </div>
 
-            {/* Info pills */}
-            <div className="grid grid-cols-2 gap-3">
-              <div className="bg-orange-50 rounded-2xl px-4 py-3 flex items-center gap-3">
-                <Clock className="w-5 h-5 text-orange-500 flex-shrink-0" />
-                <p className="text-sm font-medium text-gray-800 leading-tight">
-                  {formatScheduledAt(meetup.scheduled_at)}
-                </p>
-              </div>
-              <div className="bg-orange-50 rounded-2xl px-4 py-3 flex items-center gap-3">
-                <Users className="w-5 h-5 text-orange-500 flex-shrink-0" />
-                <p className="text-sm font-medium text-gray-800">
-                  {attendeeCount} {attendeeCount === 1 ? 'משתתף' : 'משתתפים'}
-                </p>
-              </div>
-              <div className="bg-orange-50 rounded-2xl px-4 py-3 flex items-center gap-3">
-                {meetup.privacy === 'open'
-                  ? <Users className="w-5 h-5 text-green-500 flex-shrink-0" />
-                  : <Lock className="w-5 h-5 text-orange-500 flex-shrink-0" />
-                }
-                <p className="text-sm font-medium text-gray-800">
-                  {meetup.privacy === 'open' ? 'הצטרפות חופשית' : 'אישור נדרש'}
-                </p>
-              </div>
-              {(meetup.city || meetup.country) && (
-                <div className="bg-orange-50 rounded-2xl px-4 py-3 flex items-center gap-3">
-                  <MapPin className="w-5 h-5 text-orange-500 flex-shrink-0" />
-                  <p className="text-sm font-medium text-gray-800 truncate">
-                    {meetup.city || meetup.country}
-                  </p>
+                {/* time + privacy pills */}
+                <div className="flex items-center gap-2 mb-5 flex-wrap justify-center">
+                  <div className="flex items-center gap-1.5 bg-gray-100 rounded-full px-3 py-1.5">
+                    {meetup.privacy === 'open'
+                      ? <Users size={12} className="text-green-500" />
+                      : <Lock size={12} className="text-gray-400" />
+                    }
+                    <span className="text-xs font-medium" style={{ color: meetup.privacy === 'open' ? '#22c55e' : '#6B7280' }}>
+                      {meetup.privacy === 'open' ? 'פתוח להצטרפות' : 'אישור נדרש'}
+                    </span>
+                  </div>
                 </div>
-              )}
-            </div>
 
-            {/* Organizer: pending requests */}
-            {isOrganizer && pendingCount > 0 && (
-              <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4">
-                <p className="text-sm font-bold text-amber-800 mb-3">
-                  {pendingCount} בקש{pendingCount === 1 ? 'ה' : 'ות'} ממתינות לאישור
+                {/* ── attendee count ── */}
+                <p className="text-sm font-bold mb-4" style={{ color }}>
+                  {attendeeCount} {attendeeCount === 1 ? 'משתתף' : 'משתתפים'} 🎉
                 </p>
-                <div className="space-y-2">
-                  {(meetup.pending_requests ?? []).map(uid => (
-                    <div key={uid} className="flex items-center justify-between">
-                      <span className="text-sm text-gray-700 font-mono text-left">{uid.slice(0, 8)}…</span>
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => handleApprove(uid)}
-                          disabled={loading}
-                          className="px-3 py-1.5 bg-green-500 text-white text-xs rounded-lg font-semibold hover:bg-green-600 transition-colors disabled:opacity-50"
-                        >
-                          אשר
-                        </button>
-                        <button
-                          onClick={() => handleReject(uid)}
-                          disabled={loading}
-                          className="px-3 py-1.5 bg-gray-200 text-gray-700 text-xs rounded-lg font-semibold hover:bg-gray-300 transition-colors disabled:opacity-50"
-                        >
-                          דחה
-                        </button>
-                      </div>
+
+                {/* ── attendee avatar row ── */}
+                {attendeeProfiles.length > 0 && (
+                  <div
+                    className="flex gap-3 overflow-x-auto pb-1 mb-5 w-full"
+                    style={{
+                      justifyContent: attendeeProfiles.length <= 4 ? 'center' : 'flex-start',
+                      /* give room for the crown badge that floats above each chip */
+                      overflowY: 'visible',
+                      paddingTop: 2,
+                    }}
+                  >
+                    {attendeeProfiles.map(profile => (
+                      <AvatarChip
+                        key={profile.id}
+                        profile={profile}
+                        isCreator={profile.id === meetup.user_id}
+                        color={color}
+                      />
+                    ))}
+                  </div>
+                )}
+
+                {/* divider */}
+                <div className="w-full h-px bg-gray-100 mb-5" />
+
+                {/* ── pending requests (organizer only) ── */}
+                {isOrganizer && pendingCount > 0 && (
+                  <div className="w-full space-y-2 mb-4">
+                    <p className="text-sm font-bold text-amber-800 mb-1 px-1">
+                      {pendingCount} בקש{pendingCount === 1 ? 'ה' : 'ות'} ממתינות לאישור
+                    </p>
+                    {pendingProfiles.map(profile => (
+                      <JoinRequestCard
+                        key={profile.id}
+                        profile={profile}
+                        meetupLabel={`${meetup.emoji} ${meetup.text}`}
+                        onApprove={() => handleApprove(profile.id)}
+                        onReject={() => handleReject(profile.id)}
+                        disabled={loading}
+                      />
+                    ))}
+                  </div>
+                )}
+
+                {/* ── action buttons ── */}
+                <div className="w-full space-y-3">
+
+                  {/* Chat — organizer or attendee */}
+                  {(isOrganizer || isAttending) && (
+                    <motion.button
+                      whileTap={{ scale: 0.97 }}
+                      onClick={() => onOpenChat(meetup.id)}
+                      className="w-full py-4 text-white rounded-full font-bold text-[15px] flex items-center justify-center gap-2"
+                      style={{
+                        background: `linear-gradient(135deg, ${color}, ${color}BB)`,
+                        boxShadow: `0 6px 24px ${color}45`,
+                      }}
+                    >
+                      💬 {isOrganizer ? 'פתח צ׳אט קבוצתי' : 'כנס לצ׳אט הקבוצתי'}
+                    </motion.button>
+                  )}
+
+                  {/* Join — non-member, non-pending */}
+                  {!isOrganizer && !isAttending && !hasPendingReq && (
+                    <motion.button
+                      whileTap={{ scale: 0.97 }}
+                      onClick={handleJoin}
+                      disabled={loading}
+                      className="w-full py-4 text-white rounded-full font-bold text-[15px] flex items-center justify-center gap-2 disabled:opacity-50"
+                      style={{
+                        background: `linear-gradient(135deg, ${color}, ${color}BB)`,
+                        boxShadow: `0 6px 24px ${color}45`,
+                      }}
+                    >
+                      {loading ? 'מצטרף...' :
+                        meetup.privacy === 'open' ? '✅ הצטרף לישיבה' : '📩 שלח בקשת הצטרפות'
+                      }
+                    </motion.button>
+                  )}
+
+                  {/* Pending state */}
+                  {!isOrganizer && hasPendingReq && (
+                    <div className="w-full py-4 bg-gray-100 text-gray-500 rounded-full font-semibold text-[15px] flex items-center justify-center gap-2">
+                      <Clock size={17} />
+                      ממתין לאישור המארגן
                     </div>
-                  ))}
+                  )}
+
+                  {/* Delete — organizer only */}
+                  {isOrganizer && (
+                    <motion.button
+                      whileTap={{ scale: 0.97 }}
+                      onClick={handleDelete}
+                      disabled={loading}
+                      className="w-full py-3.5 rounded-full font-semibold text-sm text-red-500 border-2 border-red-100 hover:bg-red-50 transition-colors disabled:opacity-50"
+                    >
+                      🗑 מחק ישיבה
+                    </motion.button>
+                  )}
                 </div>
               </div>
-            )}
+            </div>
 
-            {/* Action area */}
-            {isOrganizer ? (
-              <div className="space-y-3">
-                <button
-                  onClick={() => onOpenChat(meetup.id)}
-                  className="w-full py-4 bg-gradient-to-r from-orange-500 to-orange-600 text-white rounded-2xl font-bold text-base hover:from-orange-600 hover:to-orange-700 transition-all shadow-md shadow-orange-200 flex items-center justify-center gap-2"
-                >
-                  💬 פתח צ׳אט קבוצתי
-                  <ChevronLeft className="w-4 h-4" />
-                </button>
-                <button
-                  onClick={handleDeleteMeetup}
-                  disabled={loading}
-                  className="w-full py-3 text-red-500 text-sm font-medium hover:text-red-700 transition-colors"
-                >
-                  מחק ישיבה
-                </button>
-              </div>
-            ) : isAttending ? (
-              <button
-                onClick={() => onOpenChat(meetup.id)}
-                className="w-full py-4 bg-gradient-to-r from-orange-500 to-orange-600 text-white rounded-2xl font-bold text-base hover:from-orange-600 hover:to-orange-700 transition-all shadow-md shadow-orange-200 flex items-center justify-center gap-2"
-              >
-                💬 כנס לצ׳אט הקבוצתי
-                <ChevronLeft className="w-4 h-4" />
-              </button>
-            ) : hasPendingReq ? (
-              <div className="w-full py-4 bg-gray-100 text-gray-500 rounded-2xl font-semibold text-base flex items-center justify-center gap-2">
-                <Clock className="w-5 h-5" />
-                ממתין לאישור המארגן
-              </div>
-            ) : (
-              <button
-                onClick={handleJoin}
-                disabled={loading}
-                className="w-full py-4 bg-gradient-to-r from-orange-500 to-orange-600 text-white rounded-2xl font-bold text-base hover:from-orange-600 hover:to-orange-700 transition-all disabled:opacity-50 shadow-md shadow-orange-200"
-              >
-                {loading ? 'מצטרף...' :
-                  meetup.privacy === 'open' ? '✅ הצטרף לישיבה' : '📩 שלח בקשת הצטרפות'
-                }
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
-    </>
+            {/* iPhone home indicator spacer */}
+            <div style={{ height: 'env(safe-area-inset-bottom, 12px)', flexShrink: 0 }} />
+          </motion.div>
+        </>
+      )}
+    </AnimatePresence>
   );
 }

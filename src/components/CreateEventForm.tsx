@@ -43,21 +43,19 @@ export function CreateEventForm({ onSuccess, onCancel, currentUserId, userCountr
   const markerRef = useRef<mapboxgl.Marker | null>(null);
 
   const eventTypes = [
-    { id: 'parties', label: 'מסיבות', emoji: '🎉' },
-    { id: 'treks', label: 'טרקים', emoji: '🏕️' },
-    { id: 'food', label: 'אוכל', emoji: '🍔' },
-    { id: 'sports', label: 'ספורט', emoji: '🏄' },
+    { id: 'parties',   label: 'מסיבות', emoji: '🎉' },
+    { id: 'treks',     label: 'טרקים',  emoji: '🏕️' },
+    { id: 'food',      label: 'אוכל',   emoji: '🍔' },
+    { id: 'sports',    label: 'ספורט',  emoji: '🏄' },
     { id: 'workshops', label: 'סדנאות', emoji: '🧘' },
-    { id: 'yeshivot', label: 'ישיבות', emoji: '📖' },
   ];
 
   const emojiOptions: Record<string, string[]> = {
-    parties: ['🎉', '🥳', '🎊', '🪩', '🍾', '🎈', '🎵', '💃'],
-    treks: ['🏕️', '⛺', '🥾', '🏔️', '🌲', '🌄', '🗻', '🧗'],
-    food: ['🍔', '🍕', '🍜', '🍣', '🥗', '🍰', '☕', '🍺'],
-    sports: ['🏄', '⚽', '🏀', '🎾', '🏊', '🚴', '🧘', '💪'],
+    parties:   ['🎉', '🥳', '🎊', '🪩', '🍾', '🎈', '🎵', '💃'],
+    treks:     ['🏕️', '⛺', '🥾', '🏔️', '🌲', '🌄', '🗻', '🧗'],
+    food:      ['🍔', '🍕', '🍜', '🍣', '🥗', '🍰', '☕', '🍺'],
+    sports:    ['🏄', '⚽', '🏀', '🎾', '🏊', '🚴', '🧘', '💪'],
     workshops: ['🧘', '🎨', '📚', '💡', '🎸', '📷', '✍️', '🧠'],
-    yeshivot: ['📖', '📚', '🕯️', '✡️', '🙏', '📜', '🎓', '💫'],
   };
 
   useEffect(() => {

@@ -6,34 +6,29 @@ export interface EventCategoryConfig {
 
 export const eventCategories: Record<string, EventCategoryConfig> = {
   parties: {
-    color: '#14B8A6',
+    color: '#A855F7',   // purple
     label: 'מסיבות',
     emoji: '🎉',
   },
   food: {
-    color: '#F97316',
+    color: '#F97316',   // orange
     label: 'אוכל',
     emoji: '🍔',
   },
   sports: {
-    color: '#0EA5E9',
+    color: '#0EA5E9',   // sky blue
     label: 'ספורט',
     emoji: '🏄',
   },
   treks: {
-    color: '#22C55E',
+    color: '#22C55E',   // green
     label: 'טרקים',
     emoji: '🏕️',
   },
   workshops: {
-    color: '#D97706',
+    color: '#FACC15',   // sun yellow
     label: 'סדנאות',
     emoji: '🧘',
-  },
-  yeshivot: {
-    color: '#0D9488',
-    label: 'ישיבות',
-    emoji: '📖',
   },
 };
 

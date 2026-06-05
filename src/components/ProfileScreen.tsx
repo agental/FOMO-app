@@ -1,10 +1,9 @@
 import { useState, useEffect } from 'react';
-import { ArrowRight, LogOut, MessageCircle, Instagram, Edit2, Search, Check, Camera } from 'lucide-react';
+import { ArrowRight, LogOut, MessageCircle, Edit2, Search, Check, Camera, MapPin, Globe } from 'lucide-react';
 import { supabase, type User } from '../lib/supabase';
 import { flagEmoji } from '../utils/flags';
 import { COUNTRIES } from '../utils/countries';
 import { FloatingNavBar } from './FloatingNavBar';
-import { UserAvatar } from './UserAvatar';
 import { ImageUpload } from './ImageUpload';
 
 interface ProfileScreenProps {
@@ -15,52 +14,82 @@ interface ProfileScreenProps {
   onMessageUser?: (otherUserId: string) => void;
 }
 
-/* ── Circular progress ring around avatar ── */
-function CircularProgress({ value, size = 116 }: { value: number; size?: number }) {
-  const stroke = 4;
+function InstagramIcon({ size = 20 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="2" y="2" width="20" height="20" rx="5" ry="5" />
+      <circle cx="12" cy="12" r="4" />
+      <circle cx="17.5" cy="6.5" r="1" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+function OrangeRing({ value, size = 136 }: { value: number; size?: number }) {
+  const stroke = 3.5;
   const r = (size - stroke * 2) / 2;
   const circ = 2 * Math.PI * r;
-  const offset = circ * (1 - value / 100);
   const cx = size / 2;
-
   return (
-    <svg
-      width={size} height={size}
-      className="absolute inset-0 pointer-events-none"
-      style={{ transform: 'rotate(-90deg)' }}
-    >
+    <svg width={size} height={size} style={{ position: 'absolute', inset: 0, transform: 'rotate(-90deg)', pointerEvents: 'none' }}>
       <defs>
-        <linearGradient id="pgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stopColor="#20D5EC" />
-          <stop offset="100%" stopColor="#38BDF8" />
+        <linearGradient id="rg" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#FB923C" />
+          <stop offset="100%" stopColor="#DC2626" />
         </linearGradient>
       </defs>
-      {/* track */}
-      <circle cx={cx} cy={cx} r={r} fill="none"
-        stroke="rgba(255,255,255,0.15)" strokeWidth={stroke} />
-      {/* progress */}
-      <circle cx={cx} cy={cx} r={r} fill="none"
-        stroke="url(#pgGrad)" strokeWidth={stroke}
+      <circle cx={cx} cy={cx} r={r} fill="none" stroke="rgba(255,255,255,0.07)" strokeWidth={stroke} />
+      <circle cx={cx} cy={cx} r={r} fill="none" stroke="url(#rg)" strokeWidth={stroke}
         strokeLinecap="round"
         strokeDasharray={circ}
-        strokeDashoffset={offset}
-        style={{ transition: 'stroke-dashoffset 1s cubic-bezier(0.4,0,0.2,1)' }}
+        strokeDashoffset={circ * (1 - value / 100)}
+        style={{
+          transition: 'stroke-dashoffset 1.2s cubic-bezier(0.4,0,0.2,1)',
+          filter: 'drop-shadow(0 0 5px rgba(249,115,22,0.65))',
+        }}
       />
     </svg>
   );
 }
 
-/* ── Compute profile completion 0–100 ── */
 function calcCompletion(p: User): number {
   let s = 0;
-  if (p.display_name) s += 20;
-  if (p.avatar_url)   s += 20;
-  if (p.bio)          s += 15;
-  if (p.age)          s += 10;
-  if (p.current_country) s += 10;
-  if (p.languages?.length)  s += 15;
-  if (p.interests?.length)  s += 10;
+  if (p.display_name)      s += 20;
+  if (p.avatar_url)        s += 20;
+  if (p.bio)               s += 15;
+  if (p.age)               s += 10;
+  if (p.current_country)   s += 10;
+  if (p.languages?.length) s += 15;
+  if (p.interests?.length) s += 10;
   return Math.min(s, 100);
+}
+
+function SectionCard({ label, emoji, children }: { label: string; emoji: string; children: React.ReactNode }) {
+  return (
+    <div style={{
+      background: '#fff', borderRadius: 22,
+      padding: '18px 18px 20px',
+      boxShadow: '0 1px 3px rgba(0,0,0,0.04), 0 4px 20px rgba(0,0,0,0.06)',
+      marginBottom: 12,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+        <div style={{
+          width: 34, height: 34, borderRadius: 11,
+          background: 'linear-gradient(135deg, #FFF7ED, #FFEDD5)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          fontSize: 16, flexShrink: 0,
+          border: '1px solid rgba(249,115,22,0.12)',
+        }}>
+          {emoji}
+        </div>
+        <span style={{
+          fontSize: 11, fontWeight: 800, color: '#9CA3AF',
+          textTransform: 'uppercase', letterSpacing: '0.1em',
+          fontFamily: 'Heebo, sans-serif',
+        }}>{label}</span>
+      </div>
+      {children}
+    </div>
+  );
 }
 
 const INTEREST_EMOJI: Record<string, string> = {
@@ -115,87 +144,115 @@ export default function ProfileScreen({
     setIsSelectingCountries(false);
   };
 
-  /* ── loading / empty states ── */
+  /* ── loading ── */
   if (loading) return (
-    <div className="min-h-screen bg-[#0A1628] flex items-center justify-center">
-      <div className="w-10 h-10 border-2 border-[#20D5EC]/30 border-t-[#20D5EC] rounded-full animate-spin" />
+    <div style={{ minHeight: '100dvh', background: '#0C0C10', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <style>{`@keyframes sp{to{transform:rotate(360deg)}}`}</style>
+      <div style={{ width: 40, height: 40, borderRadius: '50%', border: '2.5px solid rgba(249,115,22,0.2)', borderTop: '2.5px solid #F97316', animation: 'sp 0.75s linear infinite' }} />
     </div>
   );
 
   if (!profile) return (
-    <div className="min-h-screen bg-[#0A1628] flex items-center justify-center">
-      <p className="text-white/60">לא נמצא פרופיל</p>
+    <div style={{ minHeight: '100dvh', background: '#0C0C10', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <p style={{ color: 'rgba(255,255,255,0.35)', fontFamily: 'Heebo, sans-serif' }}>לא נמצא פרופיל</p>
     </div>
   );
 
   const completion  = calcCompletion(profile);
-  const memberSince = new Date(profile.created_at).toLocaleDateString('he-IL', { year: 'numeric', month: 'long' });
+  const memberSince = new Date(profile.created_at).toLocaleDateString('he-IL', { year: 'numeric', month: 'short' });
 
-  /* ══════════════════════════════════════════════════════════════════════ */
+  /* ═══════════════════════════════════════════════════ */
   return (
-    <div className="min-h-screen bg-[#F0F5FA] overflow-x-hidden" dir="rtl">
+    <div style={{ minHeight: '100dvh', background: '#EFEFEF', overflowX: 'hidden' }} dir="rtl">
 
-      {/* ── HERO GRADIENT HEADER ── */}
-      <div
-        className="relative overflow-hidden"
-        style={{
-          background: 'linear-gradient(160deg, #0A1628 0%, #0D2745 55%, #0C7BA0 100%)',
-          paddingTop: 'max(1.25rem, env(safe-area-inset-top))',
-        }}
-      >
-        {/* Decorative blobs */}
-        <div className="absolute top-0 left-0 w-64 h-64 rounded-full opacity-10"
-          style={{ background: 'radial-gradient(circle, #20D5EC, transparent)', transform: 'translate(-30%, -30%)' }} />
-        <div className="absolute bottom-0 right-0 w-48 h-48 rounded-full opacity-10"
-          style={{ background: 'radial-gradient(circle, #38BDF8, transparent)', transform: 'translate(30%, 30%)' }} />
+      {/* ══ HERO ══ */}
+      <div style={{
+        position: 'relative', overflow: 'hidden',
+        background: '#0C0C10',
+        paddingTop: 'max(16px, env(safe-area-inset-top))',
+        paddingBottom: 52,
+      }}>
+        {/* Subtle dot grid */}
+        <div style={{
+          position: 'absolute', inset: 0, pointerEvents: 'none', opacity: 0.035,
+          backgroundImage: 'radial-gradient(circle, #ffffff 1px, transparent 1px)',
+          backgroundSize: '28px 28px',
+        }} />
 
-        {/* Top bar */}
-        <div className="relative flex items-center justify-between px-5 mb-6">
-          <button
-            onClick={onBack}
-            className="flex items-center gap-1.5 text-white/80 hover:text-white active:scale-95 transition-all px-3 py-2 rounded-xl hover:bg-white/10"
-          >
-            <ArrowRight className="w-5 h-5" />
-            <span className="text-sm font-medium">חזרה</span>
+        {/* Orange radial glow — behind avatar */}
+        <div style={{
+          position: 'absolute', top: 60, left: '50%', transform: 'translateX(-50%)',
+          width: 340, height: 340, borderRadius: '50%', pointerEvents: 'none',
+          background: 'radial-gradient(circle at center, rgba(249,115,22,0.2) 0%, rgba(249,115,22,0.06) 45%, transparent 70%)',
+        }} />
+
+        {/* ── Top bar ── */}
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: '0 18px', marginBottom: 36, position: 'relative',
+        }}>
+          <button onClick={onBack} style={{
+            display: 'flex', alignItems: 'center', gap: 6,
+            padding: '9px 16px', borderRadius: 50,
+            background: 'rgba(255,255,255,0.07)',
+            border: '1px solid rgba(255,255,255,0.1)',
+            color: 'rgba(255,255,255,0.75)', cursor: 'pointer',
+            fontFamily: 'Heebo, sans-serif', fontSize: 14, fontWeight: 600,
+            backdropFilter: 'blur(8px)', transition: 'all 0.15s',
+          }}>
+            <ArrowRight size={15} />
+            חזרה
           </button>
 
-          <div className="flex items-center gap-2">
+          <div style={{ display: 'flex', gap: 8 }}>
             {isOwnProfile && isEditing && (
-              <button
-                onClick={() => setIsEditing(false)}
-                className="text-[#20D5EC] text-sm font-semibold px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 transition-all active:scale-95"
-              >
-                סיום
-              </button>
+              <button onClick={() => setIsEditing(false)} style={{
+                padding: '9px 18px', borderRadius: 50,
+                background: 'rgba(249,115,22,0.15)',
+                border: '1px solid rgba(249,115,22,0.3)',
+                color: '#FB923C', cursor: 'pointer',
+                fontFamily: 'Heebo, sans-serif', fontSize: 14, fontWeight: 700,
+                backdropFilter: 'blur(8px)', transition: 'all 0.15s',
+              }}>סיום</button>
             )}
             {isOwnProfile && !isEditing && (
-              <button
-                onClick={() => setIsEditing(true)}
-                className="w-9 h-9 rounded-xl bg-white/10 hover:bg-white/20 flex items-center justify-center transition-all active:scale-95"
-              >
-                <Edit2 className="w-4 h-4 text-white/80" />
+              <button onClick={() => setIsEditing(true)} style={{
+                width: 40, height: 40, borderRadius: '50%',
+                background: 'rgba(255,255,255,0.07)',
+                border: '1px solid rgba(255,255,255,0.1)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                cursor: 'pointer', color: 'rgba(255,255,255,0.65)',
+                backdropFilter: 'blur(8px)', transition: 'all 0.15s',
+              }}>
+                <Edit2 size={15} />
               </button>
             )}
             {isOwnProfile && (
-              <button
-                onClick={handleLogout}
-                className="w-9 h-9 rounded-xl bg-red-500/20 hover:bg-red-500/30 flex items-center justify-center transition-all active:scale-95"
-              >
-                <LogOut className="w-4 h-4 text-red-300" />
+              <button onClick={handleLogout} style={{
+                width: 40, height: 40, borderRadius: '50%',
+                background: 'rgba(239,68,68,0.12)',
+                border: '1px solid rgba(239,68,68,0.18)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                cursor: 'pointer', backdropFilter: 'blur(8px)', transition: 'all 0.15s',
+              }}>
+                <LogOut size={15} style={{ color: '#F87171' }} />
               </button>
             )}
           </div>
         </div>
 
-        {/* Avatar area */}
-        <div className="flex flex-col items-center pb-10">
+        {/* ── Avatar block ── */}
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', position: 'relative' }}>
 
-          {/* Avatar + circular progress */}
-          <div className="relative mb-4" style={{ width: 116, height: 116 }}>
-            <CircularProgress value={completion} size={116} />
+          {/* Ring + avatar */}
+          <div style={{ position: 'relative', width: 136, height: 136, marginBottom: 22 }}>
+            <OrangeRing value={completion} size={136} />
 
-            {/* Avatar */}
-            <div className="absolute inset-[6px] rounded-full overflow-hidden ring-2 ring-white/30 shadow-2xl bg-[#0D2745]">
+            <div style={{
+              position: 'absolute', inset: 8, borderRadius: '50%', overflow: 'hidden',
+              background: '#1E2030',
+              boxShadow: '0 0 0 2px rgba(255,255,255,0.08), 0 24px 64px rgba(0,0,0,0.7), 0 0 40px rgba(249,115,22,0.15)',
+            }}>
               {isEditing && isOwnProfile ? (
                 <ImageUpload
                   currentImageUrl={profile.avatar_url}
@@ -203,96 +260,139 @@ export default function ProfileScreen({
                   userId={currentUserId!}
                 />
               ) : profile.avatar_url ? (
-                <img src={profile.avatar_url} alt="" className="w-full h-full object-cover" />
+                <img src={profile.avatar_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
               ) : (
-                <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-[#20D5EC] to-[#0891B2]">
-                  <span className="text-3xl font-bold text-white">
+                <div style={{
+                  width: '100%', height: '100%',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  background: 'linear-gradient(135deg, #F97316 0%, #EA580C 100%)',
+                }}>
+                  <span style={{ fontSize: 38, fontWeight: 900, color: 'white', letterSpacing: '-1px' }}>
                     {profile.display_name?.[0]?.toUpperCase() || '?'}
                   </span>
                 </div>
               )}
             </div>
 
-            {/* Camera icon when editing */}
             {isEditing && isOwnProfile && (
-              <div className="absolute inset-[6px] rounded-full bg-black/40 flex items-center justify-center pointer-events-none">
-                <Camera className="w-7 h-7 text-white" />
+              <div style={{
+                position: 'absolute', inset: 8, borderRadius: '50%',
+                background: 'rgba(0,0,0,0.52)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                pointerEvents: 'none',
+              }}>
+                <Camera size={28} style={{ color: 'white' }} />
               </div>
             )}
 
-            {/* Completion badge */}
-            <div
-              className="absolute -bottom-1 left-1/2 -translate-x-1/2 px-2.5 py-0.5 rounded-full text-[11px] font-bold text-white shadow-lg"
-              style={{ background: 'linear-gradient(90deg, #20D5EC, #0891B2)' }}
-            >
+            {/* % badge */}
+            <div style={{
+              position: 'absolute', bottom: -3, left: '50%', transform: 'translateX(-50%)',
+              background: 'linear-gradient(90deg, #F97316, #EA580C)',
+              borderRadius: 30, padding: '3px 11px',
+              fontSize: 11, fontWeight: 900, color: 'white',
+              boxShadow: '0 2px 14px rgba(249,115,22,0.55)',
+              fontFamily: 'Heebo, sans-serif', whiteSpace: 'nowrap',
+              border: '2px solid #0C0C10',
+            }}>
               {completion}%
             </div>
           </div>
 
           {/* Name */}
-          <h1 className="text-[28px] font-bold text-white tracking-tight mb-1">
+          <h1 style={{
+            margin: '0 0 10px',
+            fontSize: 30, fontWeight: 900, color: '#FFFFFF',
+            fontFamily: 'Heebo, sans-serif', letterSpacing: '-0.03em', lineHeight: 1,
+          }}>
             {profile.display_name}
           </h1>
 
           {/* Bio */}
           {profile.bio ? (
-            <p className="text-white/60 text-sm text-center max-w-[260px] leading-relaxed mb-3 px-2">
+            <p style={{
+              margin: '0 0 18px', padding: '0 24px',
+              fontSize: 14, lineHeight: 1.65, textAlign: 'center',
+              color: 'rgba(255,255,255,0.48)',
+              fontFamily: 'Rubik, sans-serif', maxWidth: 280,
+            }}>
               {profile.bio}
             </p>
-          ) : (
-            isOwnProfile && (
-              <p className="text-white/30 text-xs italic mb-3">הוסף תיאור אישי</p>
-            )
-          )}
+          ) : isOwnProfile ? (
+            <p style={{ margin: '0 0 18px', fontSize: 12, fontStyle: 'italic', color: 'rgba(255,255,255,0.2)', fontFamily: 'Heebo, sans-serif' }}>
+              הוסף תיאור אישי
+            </p>
+          ) : <div style={{ marginBottom: 14 }} />}
 
-          {/* Quick info badges */}
-          <div className="flex items-center gap-2 flex-wrap justify-center">
+          {/* Info chips */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center', padding: '0 20px' }}>
             {profile.age && (
-              <span className="flex items-center gap-1 bg-white/10 text-white/80 text-xs font-medium px-3 py-1.5 rounded-full">
-                🎂 {profile.age}
-              </span>
+              <Chip>🎂&nbsp;{profile.age}</Chip>
             )}
             {profile.current_country && (
-              <span className="flex items-center gap-1 bg-white/10 text-white/80 text-xs font-medium px-3 py-1.5 rounded-full">
-                {flagEmoji(profile.current_country)} {COUNTRIES[profile.current_country]?.name || profile.current_country}
-              </span>
+              <Chip>
+                <MapPin size={11} style={{ color: '#F97316' }} />
+                &nbsp;{COUNTRIES[profile.current_country]?.name || profile.current_country}
+              </Chip>
             )}
             {profile.instagram && (
-              <span className="flex items-center gap-1 bg-white/10 text-white/80 text-xs font-medium px-3 py-1.5 rounded-full">
-                📸 {profile.instagram.replace('@', '')}
-              </span>
+              <Chip>
+                <InstagramIcon size={11} />
+                &nbsp;{profile.instagram.replace('@', '')}
+              </Chip>
             )}
           </div>
         </div>
       </div>
 
-      {/* ── SCROLLABLE CONTENT ── */}
-      <div className="px-4 -mt-5 pb-32 space-y-4">
+      {/* ══ CONTENT SHEET ══ */}
+      <div style={{
+        background: '#EFEFEF',
+        borderRadius: '28px 28px 0 0',
+        marginTop: -26,
+        padding: '20px 14px 140px',
+        position: 'relative',
+      }}>
 
         {/* Stats strip */}
-        <div className="bg-white rounded-2xl shadow-[0_4px_20px_rgba(0,0,0,0.08)] p-4 grid grid-cols-3 divide-x divide-x-reverse divide-gray-100">
+        <div style={{
+          background: '#fff',
+          borderRadius: 22,
+          display: 'grid', gridTemplateColumns: '1fr 1px 1fr 1px 1fr',
+          overflow: 'hidden',
+          boxShadow: '0 1px 3px rgba(0,0,0,0.04), 0 6px 24px rgba(0,0,0,0.07)',
+          marginBottom: 12,
+        }}>
           {[
-            { value: eventsCount,                          label: 'אירועים',   emoji: '🎪' },
-            { value: profile.visited_countries?.length || 0, label: 'מדינות',    emoji: '✈️' },
-            { value: memberSince,                           label: 'חבר מאז',   emoji: '📅' },
-          ].map(({ value, label, emoji }) => (
-            <div key={label} className="flex flex-col items-center gap-0.5 px-2">
-              <span className="text-lg">{emoji}</span>
-              <span className="text-lg font-bold text-gray-900">{value}</span>
-              <span className="text-[11px] text-gray-400 font-medium">{label}</span>
-            </div>
-          ))}
+            { value: eventsCount,                            label: 'אירועים', icon: '🎪' },
+            { value: profile.visited_countries?.length || 0, label: 'מדינות',  icon: '✈️' },
+            { value: memberSince,                             label: 'חבר מאז', icon: '📅' },
+          ].flatMap(({ value, label, icon }, i) => [
+            <div key={label} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '20px 6px' }}>
+              <span style={{ fontSize: 22, marginBottom: 5 }}>{icon}</span>
+              <span style={{ fontSize: 17, fontWeight: 900, color: '#111827', fontFamily: 'Heebo, sans-serif', lineHeight: 1 }}>{value}</span>
+              <span style={{ fontSize: 10.5, fontWeight: 700, color: '#9CA3AF', fontFamily: 'Heebo, sans-serif', marginTop: 4 }}>{label}</span>
+            </div>,
+            i < 2 ? <div key={`d${i}`} style={{ background: '#F3F4F6' }} /> : null,
+          ])}
         </div>
 
-        {/* Contact buttons (other user's profile) */}
+        {/* Action buttons — viewing other user */}
         {!isOwnProfile && (
-          <div className="space-y-3">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 12 }}>
             <button
               onClick={() => onMessageUser?.(targetUserId!)}
-              className="w-full h-14 rounded-2xl font-bold text-white text-base flex items-center justify-center gap-2 active:scale-[0.98] transition-all shadow-lg shadow-cyan-200"
-              style={{ background: 'linear-gradient(135deg, #20D5EC, #0891B2)' }}
+              style={{
+                width: '100%', height: 58, borderRadius: 20, border: 'none',
+                background: 'linear-gradient(135deg, #F97316 0%, #EA580C 100%)',
+                color: 'white', fontSize: 16, fontWeight: 900,
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9,
+                cursor: 'pointer', fontFamily: 'Heebo, sans-serif',
+                boxShadow: '0 8px 30px rgba(249,115,22,0.4)',
+                transition: 'transform 0.12s, box-shadow 0.12s',
+              }}
             >
-              <MessageCircle className="w-5 h-5" />
+              <MessageCircle size={20} />
               שלח הודעה
             </button>
 
@@ -300,146 +400,233 @@ export default function ProfileScreen({
               <a
                 href={profile.instagram.startsWith('http') ? profile.instagram : `https://instagram.com/${profile.instagram.replace('@', '')}`}
                 target="_blank" rel="noopener noreferrer"
-                className="w-full h-14 rounded-2xl font-bold text-white text-base flex items-center justify-center gap-2 active:scale-[0.98] transition-all shadow-lg shadow-pink-200"
-                style={{ background: 'linear-gradient(135deg, #F43F5E, #EC4899, #F97316)' }}
+                style={{
+                  width: '100%', height: 52, borderRadius: 18,
+                  background: 'linear-gradient(135deg, #F43F5E, #C026D3, #F97316)',
+                  color: 'white', fontSize: 15, fontWeight: 800,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                  textDecoration: 'none', cursor: 'pointer',
+                  fontFamily: 'Heebo, sans-serif',
+                  boxShadow: '0 6px 22px rgba(244,63,94,0.3)',
+                }}
               >
-                <Instagram className="w-5 h-5" />
+                <InstagramIcon size={18} />
                 פתח באינסטגרם
               </a>
             ) : (
-              <div className="w-full h-12 rounded-2xl border-2 border-dashed border-gray-200 flex items-center justify-center gap-2 text-gray-400 text-sm">
-                <Instagram className="w-4 h-4" />
+              <div style={{
+                width: '100%', height: 46, borderRadius: 18,
+                border: '2px dashed #E5E7EB',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
+                color: '#D1D5DB', fontSize: 13, fontFamily: 'Heebo, sans-serif',
+              }}>
+                <InstagramIcon size={15} />
                 אינסטגרם לא מחובר
               </div>
             )}
           </div>
         )}
 
-        {/* Profile completion hint (own profile only, incomplete) */}
+        {/* Profile completion */}
         {isOwnProfile && completion < 100 && (
-          <div
-            className="rounded-2xl p-4 flex items-center gap-3"
-            style={{ background: 'linear-gradient(135deg, #E0F7FF, #CCF2FF)' }}
-          >
-            <div className="w-10 h-10 rounded-xl bg-[#20D5EC] flex items-center justify-center flex-shrink-0">
-              <span className="text-white text-lg font-bold">{completion}%</span>
+          <div style={{
+            background: '#fff', borderRadius: 22, padding: '18px 18px 20px',
+            marginBottom: 12,
+            boxShadow: '0 1px 3px rgba(0,0,0,0.04), 0 4px 20px rgba(0,0,0,0.06)',
+            border: '1.5px solid rgba(249,115,22,0.15)',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 14 }}>
+              <div style={{
+                width: 46, height: 46, borderRadius: 15, flexShrink: 0,
+                background: 'linear-gradient(135deg, #F97316, #EA580C)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                boxShadow: '0 4px 16px rgba(249,115,22,0.35)',
+              }}>
+                <span style={{ color: 'white', fontSize: 13, fontWeight: 900, fontFamily: 'Heebo, sans-serif' }}>{completion}%</span>
+              </div>
+              <div>
+                <p style={{ margin: 0, fontSize: 14, fontWeight: 800, color: '#111827', fontFamily: 'Heebo, sans-serif' }}>
+                  השלם את הפרופיל שלך
+                </p>
+                <p style={{ margin: '3px 0 0', fontSize: 12, color: '#9CA3AF', fontFamily: 'Rubik, sans-serif' }}>
+                  פרופיל מלא מקבל פי 3 יותר חיבורים
+                </p>
+              </div>
             </div>
-            <div className="flex-1">
-              <p className="text-[#0C7BA0] font-semibold text-sm">השלם את הפרופיל שלך</p>
-              <p className="text-[#0C7BA0]/70 text-xs">פרופיל מלא מקבל פי 3 יותר חיבורים</p>
+            {/* Progress bar */}
+            <div style={{ height: 7, background: '#F3F4F6', borderRadius: 99, overflow: 'hidden' }}>
+              <div style={{
+                height: '100%', borderRadius: 99,
+                background: 'linear-gradient(90deg, #FB923C, #EA580C)',
+                width: `${completion}%`,
+                transition: 'width 1.2s cubic-bezier(0.4,0,0.2,1)',
+                boxShadow: '0 0 10px rgba(249,115,22,0.45)',
+              }} />
             </div>
           </div>
         )}
 
         {/* Languages */}
         {profile.languages && profile.languages.length > 0 && (
-          <div className="bg-white rounded-2xl shadow-[0_4px_20px_rgba(0,0,0,0.06)] p-5">
-            <h3 className="text-sm font-bold text-gray-400 uppercase tracking-widest mb-3">שפות</h3>
-            <div className="flex flex-wrap gap-2">
+          <SectionCard label="שפות" emoji="💬">
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
               {profile.languages.map((lang: string) => (
-                <span
-                  key={lang}
-                  className="px-4 py-2 rounded-full text-sm font-semibold text-white shadow-sm"
-                  style={{ background: 'linear-gradient(135deg, #20D5EC, #0891B2)' }}
-                >
-                  💬 {lang}
+                <span key={lang} style={{
+                  padding: '8px 16px', borderRadius: 30,
+                  background: 'linear-gradient(135deg, #F97316, #EA580C)',
+                  color: 'white', fontSize: 13, fontWeight: 700,
+                  fontFamily: 'Heebo, sans-serif',
+                  boxShadow: '0 3px 12px rgba(249,115,22,0.32)',
+                }}>
+                  💬&nbsp;{lang}
                 </span>
               ))}
             </div>
-          </div>
+          </SectionCard>
         )}
 
         {/* Interests */}
         {profile.interests && profile.interests.length > 0 && (
-          <div className="bg-white rounded-2xl shadow-[0_4px_20px_rgba(0,0,0,0.06)] p-5">
-            <h3 className="text-sm font-bold text-gray-400 uppercase tracking-widest mb-3">תחומי עניין</h3>
-            <div className="flex flex-wrap gap-2">
+          <SectionCard label="תחומי עניין" emoji="❤️">
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
               {profile.interests.map((interest: string) => (
-                <span
-                  key={interest}
-                  className="px-4 py-2 rounded-full text-sm font-semibold bg-gray-50 text-gray-800 border border-gray-100 hover:border-[#20D5EC] hover:bg-[#E0F7FF] transition-all cursor-default active:scale-95"
-                >
-                  {INTEREST_EMOJI[interest] || '✨'} {interest}
+                <span key={interest} style={{
+                  padding: '8px 14px', borderRadius: 30,
+                  background: '#F9FAFB', border: '1.5px solid #EBEBEB',
+                  color: '#374151', fontSize: 13, fontWeight: 700,
+                  fontFamily: 'Heebo, sans-serif', cursor: 'default',
+                }}>
+                  {INTEREST_EMOJI[interest] || '✨'}&nbsp;{interest}
                 </span>
               ))}
             </div>
-          </div>
+          </SectionCard>
         )}
 
         {/* Visited countries */}
         {profile.visited_countries && profile.visited_countries.length > 0 && (
-          <div className="bg-white rounded-2xl shadow-[0_4px_20px_rgba(0,0,0,0.06)] p-5">
-            <h3 className="text-sm font-bold text-gray-400 uppercase tracking-widest mb-3">
-              ✈️ מדינות שביקרתי
-            </h3>
-            <div className="flex flex-wrap gap-2">
+          <SectionCard label="מדינות שביקרתי" emoji="✈️">
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
               {profile.visited_countries.map((c: string) => (
-                <span key={c}
-                  className="flex items-center gap-1.5 px-3 py-2 bg-gray-50 hover:bg-blue-50 rounded-xl text-sm font-medium text-gray-700 border border-gray-100 hover:border-blue-200 transition-all active:scale-95 cursor-default"
-                >
-                  <span className="text-xl">{flagEmoji(c)}</span>
+                <span key={c} style={{
+                  display: 'flex', alignItems: 'center', gap: 6,
+                  padding: '8px 14px', borderRadius: 14,
+                  background: '#F9FAFB', border: '1.5px solid #EBEBEB',
+                  fontSize: 13, fontWeight: 600, color: '#374151',
+                  fontFamily: 'Heebo, sans-serif',
+                }}>
+                  <span style={{ fontSize: 19 }}>{flagEmoji(c)}</span>
                   {COUNTRIES[c]?.name || c}
                 </span>
               ))}
             </div>
-          </div>
+          </SectionCard>
         )}
 
-        {/* My travel countries (own profile) */}
+        {/* Travel destinations — own profile, editable */}
         {isOwnProfile && (
           <button
             onClick={() => setIsSelectingCountries(true)}
-            className="w-full bg-white rounded-2xl shadow-[0_4px_20px_rgba(0,0,0,0.06)] p-5 text-right active:scale-[0.98] transition-all"
+            style={{
+              width: '100%', background: '#fff', borderRadius: 22,
+              padding: '18px 18px 20px',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.04), 0 4px 20px rgba(0,0,0,0.06)',
+              border: 'none', cursor: 'pointer', textAlign: 'right',
+              marginBottom: 12, transition: 'transform 0.12s',
+            }}
           >
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-bold text-gray-400 uppercase tracking-widest mb-1">מדינות לטיול</p>
-                <div className="flex gap-1 flex-wrap mt-2">
-                  {(profile.selected_countries || []).slice(0, 8).map((c: string) => (
-                    <span key={c} className="text-2xl">{flagEmoji(c)}</span>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+                  <div style={{
+                    width: 34, height: 34, borderRadius: 11, flexShrink: 0,
+                    background: 'linear-gradient(135deg, #FFF7ED, #FFEDD5)',
+                    border: '1px solid rgba(249,115,22,0.12)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }}>
+                    <Globe size={16} style={{ color: '#F97316' }} />
+                  </div>
+                  <span style={{
+                    fontSize: 11, fontWeight: 800, color: '#9CA3AF',
+                    textTransform: 'uppercase', letterSpacing: '0.1em',
+                    fontFamily: 'Heebo, sans-serif',
+                  }}>מדינות לטיול</span>
+                </div>
+                <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>
+                  {(profile.selected_countries || []).slice(0, 10).map((c: string) => (
+                    <span key={c} style={{ fontSize: 24 }}>{flagEmoji(c)}</span>
                   ))}
-                  {(profile.selected_countries || []).length > 8 && (
-                    <span className="text-xs font-bold text-[#0891B2] bg-blue-50 px-2 py-1 rounded-full self-center">
-                      +{(profile.selected_countries || []).length - 8}
+                  {(profile.selected_countries || []).length > 10 && (
+                    <span style={{
+                      fontSize: 12, fontWeight: 800, color: '#F97316',
+                      background: '#FFF7ED', borderRadius: 20, padding: '3px 8px',
+                      fontFamily: 'Heebo, sans-serif',
+                    }}>
+                      +{(profile.selected_countries || []).length - 10}
                     </span>
                   )}
-                  {(profile.selected_countries || []).length === 0 && (
-                    <span className="text-sm text-gray-400">לא נבחרו מדינות</span>
+                  {!(profile.selected_countries || []).length && (
+                    <span style={{ fontSize: 13, color: '#D1D5DB', fontFamily: 'Heebo, sans-serif' }}>הוסף מדינות</span>
                   )}
                 </div>
               </div>
-              <div className="w-9 h-9 rounded-xl bg-gray-50 border border-gray-100 flex items-center justify-center flex-shrink-0">
-                <Edit2 className="w-4 h-4 text-gray-400" />
+              <div style={{
+                width: 36, height: 36, borderRadius: 12, flexShrink: 0,
+                background: '#F9FAFB', border: '1.5px solid #EBEBEB',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                marginRight: 10,
+              }}>
+                <Edit2 size={14} style={{ color: '#9CA3AF' }} />
               </div>
             </div>
           </button>
         )}
       </div>
 
-      {/* ── COUNTRY PICKER BOTTOM SHEET ── */}
+      {/* ══ COUNTRY PICKER ══ */}
       {isSelectingCountries && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-end"
-          onClick={() => setIsSelectingCountries(false)}>
+        <div
+          style={{
+            position: 'fixed', inset: 0, zIndex: 50,
+            background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(8px)',
+            display: 'flex', alignItems: 'flex-end',
+          }}
+          onClick={() => setIsSelectingCountries(false)}
+        >
           <div
-            className="bg-white rounded-t-3xl w-full flex flex-col"
-            style={{ maxHeight: '85dvh' }}
+            style={{
+              background: '#fff', width: '100%',
+              borderRadius: '28px 28px 0 0',
+              maxHeight: '88dvh', display: 'flex', flexDirection: 'column',
+              boxShadow: '0 -20px 60px rgba(0,0,0,0.25)',
+            }}
             onClick={e => e.stopPropagation()}
           >
-            <div className="px-5 pt-5 pb-4 border-b border-gray-100 flex-shrink-0">
-              <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-4" />
-              <h3 className="text-lg font-bold text-gray-900 mb-3">בחר מדינות לטיול</h3>
-              <div className="relative">
-                <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+            <div style={{ padding: '16px 20px 14px', borderBottom: '1px solid #F3F4F6', flexShrink: 0 }}>
+              <div style={{ width: 40, height: 4, borderRadius: 99, background: '#E5E7EB', margin: '0 auto 18px' }} />
+              <h3 style={{ margin: '0 0 14px', fontSize: 19, fontWeight: 900, color: '#111827', fontFamily: 'Heebo, sans-serif' }}>
+                בחר מדינות לטיול
+              </h3>
+              <div style={{ position: 'relative' }}>
+                <Search size={15} style={{ position: 'absolute', right: 14, top: '50%', transform: 'translateY(-50%)', color: '#9CA3AF' }} />
                 <input
                   type="text" value={countrySearch}
                   onChange={e => setCountrySearch(e.target.value)}
                   placeholder="חיפוש מדינה..."
-                  className="w-full bg-gray-50 rounded-full h-10 pr-10 pl-4 text-sm focus:outline-none focus:ring-2 focus:ring-[#20D5EC]"
+                  style={{
+                    width: '100%', height: 44, borderRadius: 99,
+                    background: '#F3F4F6', border: 'none', outline: 'none',
+                    paddingRight: 38, paddingLeft: 16,
+                    fontSize: 14, fontFamily: 'Heebo, sans-serif', boxSizing: 'border-box',
+                  }}
                 />
               </div>
             </div>
 
-            <div className="flex-1 overflow-y-auto px-4 py-3 grid grid-cols-2 gap-2">
+            <div style={{
+              flex: 1, overflowY: 'auto', padding: '12px 14px',
+              display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8,
+            }}>
               {Object.entries(COUNTRIES)
                 .filter(([code, c]) =>
                   !countrySearch || c.name.includes(countrySearch) || code.toLowerCase().includes(countrySearch.toLowerCase())
@@ -447,30 +634,46 @@ export default function ProfileScreen({
                 .map(([code, c]) => {
                   const selected = selectedCountries.includes(code);
                   return (
-                    <button key={code}
+                    <button
+                      key={code}
                       onClick={() => setSelectedCountries(
                         selected ? selectedCountries.filter(x => x !== code) : [...selectedCountries, code]
                       )}
-                      className={`flex items-center gap-2 p-3 rounded-xl transition-all border text-right ${
-                        selected ? 'border-[#20D5EC] bg-[#E0F7FF]' : 'border-gray-100 bg-gray-50 hover:border-gray-200'
-                      }`}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 9,
+                        padding: '11px 12px', borderRadius: 16, textAlign: 'right',
+                        border: selected ? '2px solid #F97316' : '1.5px solid #EBEBEB',
+                        background: selected ? '#FFF7ED' : '#FAFAFA',
+                        cursor: 'pointer', transition: 'all 0.14s',
+                      }}
                     >
-                      <span className="text-2xl">{c.flag}</span>
-                      <span className={`text-sm font-medium flex-1 ${selected ? 'text-[#0C7BA0]' : 'text-gray-700'}`}>
-                        {c.name}
-                      </span>
-                      {selected && <Check className="w-4 h-4 text-[#20D5EC] flex-shrink-0" />}
+                      <span style={{ fontSize: 22, flexShrink: 0 }}>{c.flag}</span>
+                      <span style={{
+                        fontSize: 13, fontWeight: 600, flex: 1,
+                        color: selected ? '#EA580C' : '#374151',
+                        fontFamily: 'Heebo, sans-serif',
+                      }}>{c.name}</span>
+                      {selected && <Check size={14} style={{ color: '#F97316', flexShrink: 0 }} />}
                     </button>
                   );
                 })}
             </div>
 
-            <div className="px-4 py-4 border-t border-gray-100 flex-shrink-0"
-              style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom))' }}>
+            <div style={{
+              padding: '14px 16px',
+              paddingBottom: 'max(14px, env(safe-area-inset-bottom))',
+              borderTop: '1px solid #F3F4F6', flexShrink: 0,
+            }}>
               <button
                 onClick={saveCountries}
-                className="w-full h-13 rounded-2xl font-bold text-white py-4 text-base active:scale-[0.98] transition-all shadow-lg"
-                style={{ background: 'linear-gradient(135deg, #20D5EC, #0891B2)' }}
+                style={{
+                  width: '100%', height: 58, borderRadius: 20, border: 'none',
+                  background: 'linear-gradient(135deg, #F97316, #EA580C)',
+                  color: 'white', fontSize: 16, fontWeight: 900, cursor: 'pointer',
+                  fontFamily: 'Heebo, sans-serif',
+                  boxShadow: '0 8px 28px rgba(249,115,22,0.38)',
+                  transition: 'transform 0.12s, box-shadow 0.12s',
+                }}
               >
                 שמור ({selectedCountries.length} מדינות)
               </button>
@@ -488,3 +691,21 @@ export default function ProfileScreen({
     </div>
   );
 }
+
+/* ── tiny helpers ── */
+
+function Chip({ children }: { children: React.ReactNode }) {
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center',
+      background: 'rgba(255,255,255,0.08)',
+      border: '1px solid rgba(255,255,255,0.11)',
+      borderRadius: 30, padding: '6px 13px',
+      fontSize: 12, fontWeight: 700, color: 'rgba(255,255,255,0.8)',
+      fontFamily: 'Heebo, sans-serif', backdropFilter: 'blur(6px)',
+    }}>
+      {children}
+    </span>
+  );
+}
+

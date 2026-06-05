@@ -16,12 +16,11 @@ interface MapCreateEventFlowProps {
 type FlowStep = 1 | 2 | 3 | 4;
 
 const EVENT_TYPES = [
-  { id: 'parties', label: 'מסיבות', emoji: '🎉', color: '#14B8A6' },
-  { id: 'food', label: 'אוכל', emoji: '🍔', color: '#F97316' },
-  { id: 'sports', label: 'ספורט', emoji: '🏄', color: '#3B82F6' },
-  { id: 'treks', label: 'טיולים', emoji: '🏕️', color: '#22C55E' },
-  { id: 'workshops', label: 'סדנאות', emoji: '🧘', color: '#EAB308' },
-  { id: 'yeshivot', label: 'ישיבות', emoji: '📖', color: '#0D9488' },
+  { id: 'parties',   label: 'מסיבות', emoji: '🎉', color: '#A855F7' },
+  { id: 'food',      label: 'אוכל',   emoji: '🍔', color: '#F97316' },
+  { id: 'sports',    label: 'ספורט',  emoji: '🏄', color: '#0EA5E9' },
+  { id: 'treks',     label: 'טיולים', emoji: '🏕️', color: '#22C55E' },
+  { id: 'workshops', label: 'סדנאות', emoji: '🧘', color: '#FACC15' },
 ];
 
 const EMOJI_BY_TYPE: Record<string, string[]> = {
@@ -30,7 +29,6 @@ const EMOJI_BY_TYPE: Record<string, string[]> = {
   sports: ['🏄', '⚽', '🏀', '🎾', '🏊', '🚴', '🤸', '🧗', '🏋️', '⛷️', '🎿', '🏈'],
   treks: ['🏕️', '⛺', '🥾', '🏔️', '🌲', '🌄', '🌿', '🌊', '🦅', '🌅', '🗺️', '🧭'],
   workshops: ['🧘', '🎨', '📚', '💡', '🎸', '📷', '🖌️', '✂️', '🎭', '🪴', '🧪', '🛠️'],
-  yeshivot: ['📖', '📚', '🕯️', '✡️', '🙏', '📜', '🕎', '🌟', '❤️', '🤝', '💫', '🕊️'],
 };
 
 const SUGGESTED_IMAGES: Record<string, string[]> = {
@@ -58,11 +56,6 @@ const SUGGESTED_IMAGES: Record<string, string[]> = {
     'https://images.pexels.com/photos/1181406/pexels-photo-1181406.jpeg?auto=compress&cs=tinysrgb&w=400',
     'https://images.pexels.com/photos/3184418/pexels-photo-3184418.jpeg?auto=compress&cs=tinysrgb&w=400',
     'https://images.pexels.com/photos/373545/pexels-photo-373545.jpeg?auto=compress&cs=tinysrgb&w=400',
-  ],
-  yeshivot: [
-    'https://images.pexels.com/photos/267559/pexels-photo-267559.jpeg?auto=compress&cs=tinysrgb&w=400',
-    'https://images.pexels.com/photos/415071/pexels-photo-415071.jpeg?auto=compress&cs=tinysrgb&w=400',
-    'https://images.pexels.com/photos/301920/pexels-photo-301920.jpeg?auto=compress&cs=tinysrgb&w=400',
   ],
 };
 

@@ -9,7 +9,7 @@ import { getCategoryColor, getCategoryEmoji } from './eventCategories';
  *   • Small badge circle (r=9)  — lower-right, shows the admin-chosen emoji
  *     (badgeEmoji = event.emoji set when the event was created)
  */
-export function createEventPinSVG(eventType: string, badgeEmoji?: string): SVGElement {
+export function createEventPinSVG(eventType: string, badgeEmoji?: string, imageUrl?: string | null): SVGElement {
   const PIN_W = 44;
   const PIN_H = 54;
 
@@ -63,6 +63,13 @@ export function createEventPinSVG(eventType: string, badgeEmoji?: string): SVGEl
     mk('feBlend',       { mode: 'normal', in: 'SourceGraphic', in2: 'effect1_dropShadow', result: 'shape' }),
   );
   defs.appendChild(filter);
+
+  /* clip path for event image in main circle */
+  const mainClip = document.createElementNS(NS, 'clipPath');
+  mainClip.setAttribute('id', `${uid}-main-clip`);
+  mainClip.appendChild(mk('circle', { cx: String(CX), cy: String(CY), r: String(CIRCLE_R) }));
+  defs.appendChild(mainClip);
+
   svg.appendChild(defs);
 
   /* ── pin body (teardrop) ────────────────────────────────────────────────── */
@@ -89,19 +96,30 @@ export function createEventPinSVG(eventType: string, badgeEmoji?: string): SVGEl
     fill: 'white',
   }));
 
-  /* ── event emoji (foreignObject for colour-emoji rendering) ─────────────── */
-  const fo = document.createElementNS(NS, 'foreignObject');
-  fo.setAttribute('x',      String(CX - CIRCLE_R));
-  fo.setAttribute('y',      String(CY - CIRCLE_R));
-  fo.setAttribute('width',  String(CIRCLE_R * 2));
-  fo.setAttribute('height', String(CIRCLE_R * 2));
-
-  const div = document.createElement('div');
-  div.style.cssText =
-    'width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:20px;line-height:1;user-select:none;';
-  div.textContent = categoryEmoji;
-  fo.appendChild(div);
-  svg.appendChild(fo);
+  /* ── main circle content: event image OR category emoji ─────────────────── */
+  if (imageUrl) {
+    svg.appendChild(mk('image', {
+      href:                  imageUrl,
+      x:                     String(CX - CIRCLE_R),
+      y:                     String(CY - CIRCLE_R),
+      width:                 String(CIRCLE_R * 2),
+      height:                String(CIRCLE_R * 2),
+      'clip-path':           `url(#${uid}-main-clip)`,
+      preserveAspectRatio:   'xMidYMid slice',
+    }));
+  } else {
+    const fo = document.createElementNS(NS, 'foreignObject');
+    fo.setAttribute('x',      String(CX - CIRCLE_R));
+    fo.setAttribute('y',      String(CY - CIRCLE_R));
+    fo.setAttribute('width',  String(CIRCLE_R * 2));
+    fo.setAttribute('height', String(CIRCLE_R * 2));
+    const div = document.createElement('div');
+    div.style.cssText =
+      'width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:20px;line-height:1;user-select:none;';
+    div.textContent = categoryEmoji;
+    fo.appendChild(div);
+    svg.appendChild(fo);
+  }
 
   /* ── badge circle (Figma: small ring lower-right, white fill + colour border) */
   if (badgeEmoji) {

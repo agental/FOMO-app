@@ -127,11 +127,11 @@ export function MapScreen({
   };
 
   const loadMeetups = async () => {
-    const now = new Date().toISOString();
+    const threeHoursAgo = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
     const { data, error: e } = await supabase
       .from('meetups')
       .select('*, users(id, display_name, avatar_url)')
-      .gte('scheduled_at', now)
+      .gte('scheduled_at', threeHoursAgo)
       .order('scheduled_at', { ascending: true });
     if (e) {
       console.error('loadMeetups error:', JSON.stringify(e));
@@ -139,7 +139,7 @@ export function MapScreen({
       const { data: d2, error: e2 } = await supabase
         .from('meetups')
         .select('*')
-        .gte('scheduled_at', now)
+        .gte('scheduled_at', threeHoursAgo)
         .order('scheduled_at', { ascending: true });
       if (e2) { console.error('loadMeetups fallback error:', JSON.stringify(e2)); return; }
       if (d2) setMeetups(d2 as Meetup[]);
@@ -279,7 +279,7 @@ export function MapScreen({
 
     nearbyEvents.forEach(event => {
       if (!event.latitude || !event.longitude) return;
-      const svg = createEventPinSVG(event.event_type || 'parties', event.emoji ?? undefined);
+      const svg = createEventPinSVG(event.event_type || 'parties', event.emoji ?? undefined, event.image_url);
       const scaleWrapper = document.createElement('div');
       scaleWrapper.style.cssText = `line-height:0;transform-origin:center bottom;transition:transform 0.15s ease;transform:scale(${getPinScale('event', mapInstanceRef.current!.getZoom())});${showEvents ? '' : 'display:none;'}`;
       scaleWrapper.appendChild(svg);
@@ -377,7 +377,7 @@ export function MapScreen({
     meetupElsRef.current = [];
 
     meetups.forEach(meetup => {
-      const pin = createMeetupPinSVG(meetup.emoji, meetup.attendees.length);
+      const pin = createMeetupPinSVG(meetup.emoji, meetup.users?.avatar_url);
       const scaleWrapper = document.createElement('div');
       scaleWrapper.style.cssText = `line-height:0;transform-origin:center bottom;transition:transform 0.15s ease;transform:scale(${getPinScale('yeshiva', mapInstanceRef.current!.getZoom())});${showMeetups ? '' : 'display:none;'}`;
       scaleWrapper.appendChild(pin);

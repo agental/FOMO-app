@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { SplashScreen } from './components/SplashScreen';
 import { HomeScreen } from './components/HomeScreen';
 import ProfileScreen from './components/ProfileScreen';
 import { AuthScreen } from './components/AuthScreen';
@@ -16,6 +17,7 @@ import { supabase } from './lib/supabase';
 
 function App() {
   type Screen = 'auth' | 'onboarding' | 'createProfile' | 'profileComplete' | 'country' | 'home' | 'profile' | 'map' | 'admin' | 'userProfile' | 'messages' | 'requests' | 'chat' | 'settings';
+  const [splashDone, setSplashDone] = useState(false);
   const [currentScreen, setCurrentScreen] = useState<Screen>('auth');
   const [authChecked, setAuthChecked] = useState(false);
   const [previousScreen, setPreviousScreen] = useState<Screen | null>(null);
@@ -198,6 +200,10 @@ function App() {
       alert('אירעה שגיאה ביצירת השיחה');
     }
   };
+
+  if (!splashDone) {
+    return <SplashScreen onComplete={() => setSplashDone(true)} />;
+  }
 
   if (!authChecked) {
     return (
