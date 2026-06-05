@@ -5,6 +5,7 @@ import { flagEmoji } from '../utils/flags';
 import { COUNTRIES } from '../utils/countries';
 import { FloatingNavBar } from './FloatingNavBar';
 import { ImageUpload } from './ImageUpload';
+import { CountriesVisitedCard } from './CountriesVisitedCard';
 
 interface ProfileScreenProps {
   onBack: () => void;
@@ -503,25 +504,13 @@ export default function ProfileScreen({
           </SectionCard>
         )}
 
-        {/* Visited countries */}
-        {profile.visited_countries && profile.visited_countries.length > 0 && (
-          <SectionCard label="מדינות שביקרתי" emoji="✈️">
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-              {profile.visited_countries.map((c: string) => (
-                <span key={c} style={{
-                  display: 'flex', alignItems: 'center', gap: 6,
-                  padding: '8px 14px', borderRadius: 14,
-                  background: '#F9FAFB', border: '1.5px solid #EBEBEB',
-                  fontSize: 13, fontWeight: 600, color: '#374151',
-                  fontFamily: 'Heebo, sans-serif',
-                }}>
-                  <span style={{ fontSize: 19 }}>{flagEmoji(c)}</span>
-                  {COUNTRIES[c]?.name || c}
-                </span>
-              ))}
-            </div>
-          </SectionCard>
-        )}
+        {/* Countries Visited — full interactive card */}
+        <CountriesVisitedCard
+          userId={targetUserId!}
+          visitedCodes={profile.visited_countries || []}
+          isOwnProfile={isOwnProfile}
+          onUpdate={(codes) => setProfile(p => p ? { ...p, visited_countries: codes } : p)}
+        />
 
         {/* Travel destinations — own profile, editable */}
         {isOwnProfile && (

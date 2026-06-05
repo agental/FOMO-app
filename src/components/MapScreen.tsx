@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Loader as Loader2, CircleAlert as AlertCircle, ArrowRight, Search, List, X } from 'lucide-react';
+import { Loader as Loader2, CircleAlert as AlertCircle, Search, List, X, SlidersHorizontal } from 'lucide-react';
 import { supabase, type ChabadHouse, type AdminLocation, type Meetup } from '../lib/supabase';
 import { FloatingNavBar } from './FloatingNavBar';
 import { EventMapBottomSheet } from './EventMapBottomSheet';
@@ -57,13 +57,15 @@ export function MapScreen({
   onNavigateToUserProfile,
 }: MapScreenProps) {
   /* location & map */
-  const [location,  setLocation]  = useState<UserLocation | null>(null);
-  const [loading,   setLoading]   = useState(true);
-  const [error,     setError]     = useState<string | null>(null);
-  const [mapReady,  setMapReady]  = useState(false);
+  const [location,      setLocation]      = useState<UserLocation | null>(null);
+  const [loading,       setLoading]       = useState(true);
+  const [loadingFading, setLoadingFading] = useState(false);
+  const [error,         setError]         = useState<string | null>(null);
+  const [mapReady,      setMapReady]      = useState(false);
 
-  /* map filter (segmented control) */
-  const [mapFilter, setMapFilter] = useState<MapFilter>('all');
+  /* map filter */
+  const [mapFilter,       setMapFilter]       = useState<MapFilter>('all');
+  const [filterSheetOpen, setFilterSheetOpen] = useState(false);
 
   /* search */
   const [searchQuery, setSearchQuery] = useState('');
@@ -183,31 +185,40 @@ export function MapScreen({
   /* Geolocation */
   useEffect(() => {
     mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN || '';
+    let resolved = false;
+
+    const applyLocation = (lat: number, lng: number) => {
+      if (resolved) return;
+      resolved = true;
+      setLocation({ latitude: lat, longitude: lng });
+      loadChabadHouses();
+      // Fade out loading screen, then remove it
+      setLoadingFading(true);
+      setTimeout(() => setLoading(false), 600);
+    };
+
+    // Fallback: listen for location injected by React Native WebView
+    // (fires when navigator.geolocation prototype override fails on iOS HTTP)
+    const onNativeLocation = (e: Event) => {
+      const { lat, lng } = (e as CustomEvent).detail;
+      applyLocation(lat, lng);
+    };
+    window.addEventListener('nativeLocation', onNativeLocation);
 
     if ('geolocation' in navigator) {
       navigator.geolocation.getCurrentPosition(
-        (pos) => {
-          setLocation({ latitude: pos.coords.latitude, longitude: pos.coords.longitude });
-          setLoading(false);
-          loadChabadHouses();
+        (pos) => applyLocation(pos.coords.latitude, pos.coords.longitude),
+        () => {
+          // Don't show error — nativeLocation event will fire when GPS arrives
         },
-        (err) => {
-          const msgs: Record<number, string> = {
-            1: 'אין הרשאה לגישה למיקום. אנא אפשר גישה במדפדפן',
-            2: 'מידע על המיקום אינו זמין',
-            3: 'תם הזמן לקבלת המיקום',
-          };
-          setError(msgs[err.code] || 'לא ניתן להשיג מיקום');
-          setLoading(false);
-        },
-        { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 },
+        { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 },
       );
-    } else {
-      setError('הדפדפן שלך לא תומך באיתור מיקום');
-      setLoading(false);
     }
 
-    return () => { if (mapInstanceRef.current) mapInstanceRef.current.remove(); };
+    return () => {
+      window.removeEventListener('nativeLocation', onNativeLocation);
+      if (mapInstanceRef.current) mapInstanceRef.current.remove();
+    };
   }, []);
 
   /* ── Build map ── */
@@ -221,7 +232,6 @@ export function MapScreen({
       zoom: 12,
     });
 
-    map.addControl(new mapboxgl.NavigationControl(), 'top-right');
     new mapboxgl.Marker({ color: '#3B82F6' })
       .setLngLat([location.longitude, location.latitude])
       .setPopup(new mapboxgl.Popup().setHTML('<p style="color:black;font-weight:bold;">אתה כאן</p>'))
@@ -436,10 +446,101 @@ export function MapScreen({
 
       {/* Loading */}
       {loading && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#1A1F2E] z-10">
-          <Loader2 className="w-12 h-12 text-blue-400 animate-spin mb-4" />
-          <p className="text-gray-300 font-medium">מאתר את המיקום שלך...</p>
-        </div>
+        <>
+          <style>{`
+            @keyframes radar-ping {
+              0% { transform: scale(0.4); opacity: 0.9; }
+              100% { transform: scale(4.5); opacity: 0; }
+            }
+            @keyframes pin-float {
+              0%, 100% { transform: translateY(0px) rotate(-45deg); filter: drop-shadow(0 0 16px rgba(249,115,22,0.7)); }
+              50% { transform: translateY(-8px) rotate(-45deg); filter: drop-shadow(0 0 28px rgba(249,115,22,0.9)); }
+            }
+            @keyframes dot-flash {
+              0%, 80%, 100% { opacity: 0.2; transform: scale(0.7); }
+              40% { opacity: 1; transform: scale(1); }
+            }
+            @keyframes map-loader-fade {
+              from { opacity: 1; }
+              to { opacity: 0; }
+            }
+          `}</style>
+          <div style={{
+            position: 'absolute', inset: 0, zIndex: 10,
+            background: 'radial-gradient(ellipse at center, #1E2A3A 0%, #0D1117 100%)',
+            backgroundImage: 'radial-gradient(ellipse at center, #1E2A3A 0%, #0D1117 100%), radial-gradient(rgba(249,115,22,0.04) 1px, transparent 1px)',
+            backgroundSize: 'cover, 28px 28px',
+            display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+            animation: loadingFading ? 'map-loader-fade 0.6s ease-out forwards' : 'none',
+          }}>
+            {/* Radar rings + pin */}
+            <div style={{ position: 'relative', width: 180, height: 180, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 36 }}>
+              {/* Pulsing radar rings */}
+              {[0, 0.55, 1.1].map((delay, i) => (
+                <div key={i} style={{
+                  position: 'absolute',
+                  width: 44, height: 44, borderRadius: '50%',
+                  border: '2px solid #F97316',
+                  opacity: 0,
+                  animation: `radar-ping 2.2s ease-out ${delay}s infinite`,
+                }} />
+              ))}
+
+              {/* Soft glow behind pin */}
+              <div style={{
+                position: 'absolute',
+                width: 90, height: 90, borderRadius: '50%',
+                background: 'radial-gradient(circle, rgba(249,115,22,0.18) 0%, transparent 70%)',
+              }} />
+
+              {/* Map pin shape */}
+              <div style={{ position: 'relative', zIndex: 2 }}>
+                <div style={{
+                  width: 46, height: 46,
+                  borderRadius: '50% 50% 50% 0',
+                  background: 'linear-gradient(135deg, #FB923C 0%, #DC2626 100%)',
+                  animation: 'pin-float 2s ease-in-out infinite',
+                  boxShadow: '0 8px 32px rgba(249,115,22,0.4)',
+                  position: 'relative',
+                }}>
+                  <div style={{
+                    position: 'absolute', top: 12, left: 12,
+                    width: 16, height: 16, borderRadius: '50%',
+                    background: 'rgba(255,255,255,0.45)',
+                    transform: 'rotate(45deg)',
+                  }} />
+                </div>
+                {/* Pin shadow on ground */}
+                <div style={{
+                  width: 14, height: 5, borderRadius: '50%',
+                  background: 'rgba(0,0,0,0.35)',
+                  margin: '4px auto 0',
+                  filter: 'blur(2px)',
+                }} />
+              </div>
+            </div>
+
+            {/* Text */}
+            <p style={{
+              color: '#F1F5F9', fontSize: 19, fontWeight: 700,
+              fontFamily: 'Heebo, sans-serif',
+              marginBottom: 14, letterSpacing: '0.01em',
+            }}>
+              מאתר את המיקום שלך
+            </p>
+
+            {/* Animated dots */}
+            <div style={{ display: 'flex', gap: 7 }}>
+              {[0, 0.22, 0.44].map((delay, i) => (
+                <div key={i} style={{
+                  width: 9, height: 9, borderRadius: '50%',
+                  background: '#F97316',
+                  animation: `dot-flash 1.3s ease-in-out ${delay}s infinite`,
+                }} />
+              ))}
+            </div>
+          </div>
+        </>
       )}
 
       {/* Error */}
@@ -465,18 +566,47 @@ export function MapScreen({
       {/* ── Top UI ── */}
       {location && !loading && !error && (
         <>
+          <style>{`
+            @keyframes chip-fall {
+              0%   { opacity: 0; transform: translateY(-32px) scale(0.85); }
+              60%  { transform: translateY(4px) scale(1.03); }
+              100% { opacity: 1; transform: translateY(0) scale(1); }
+            }
+            @keyframes chip-rise {
+              0%   { opacity: 1; transform: translateY(0) scale(1); }
+              100% { opacity: 0; transform: translateY(-24px) scale(0.88); }
+            }
+            @keyframes filter-btn-spin {
+              0%   { transform: rotate(0deg); }
+              100% { transform: rotate(180deg); }
+            }
+          `}</style>
           <div className="absolute left-4 right-4 z-10" style={{ top: 'max(1rem, env(safe-area-inset-top))' }}>
 
-            {/* Search bar */}
-            <div className="flex items-center gap-2 mb-3">
-              {onBack && (
-                <button
-                  onClick={onBack}
-                  className="p-2.5 bg-white rounded-full shadow-lg hover:bg-gray-50 transition-colors"
-                >
-                  <ArrowRight className="w-5 h-5 text-gray-700" />
-                </button>
-              )}
+            {/* Search bar + filter button */}
+            <div className="flex items-center gap-2 mb-2">
+              {/* Filter button */}
+              <button
+                onClick={() => setFilterSheetOpen(v => !v)}
+                style={{
+                  width: 44, height: 44, borderRadius: '50%',
+                  background: mapFilter !== 'all' ? '#F97316' : '#fff',
+                  boxShadow: '0 2px 12px rgba(0,0,0,0.18)',
+                  border: 'none', cursor: 'pointer', flexShrink: 0,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  transition: 'background 0.25s',
+                }}
+              >
+                <SlidersHorizontal
+                  size={19}
+                  color={mapFilter !== 'all' ? '#fff' : '#374151'}
+                  strokeWidth={2.2}
+                  style={{
+                    transition: 'transform 0.35s cubic-bezier(0.34,1.56,0.64,1)',
+                    transform: filterSheetOpen ? 'rotate(90deg)' : 'rotate(0deg)',
+                  }}
+                />
+              </button>
               <div className="relative flex-1">
                 <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
                 <input
@@ -484,35 +614,45 @@ export function MapScreen({
                   value={searchQuery}
                   onChange={e => setSearchQuery(e.target.value)}
                   placeholder="חיפוש אירועים ומקומות..."
-                  className="w-full bg-white text-gray-900 rounded-full h-11 pr-11 pl-4 text-sm placeholder:text-gray-400 shadow-lg focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  className="w-full bg-white text-gray-900 rounded-full h-11 pr-11 pl-4 text-sm placeholder:text-gray-400 shadow-lg focus:ring-2 focus:ring-orange-400 focus:outline-none"
                 />
               </div>
             </div>
 
-            {/* ── Premium segmented filter ── */}
-            <div className="bg-white/90 backdrop-blur-md rounded-2xl shadow-lg p-1.5 flex gap-1">
-              {FILTER_TABS.map(tab => (
-                <button
-                  key={tab.id}
-                  onClick={() => setMapFilter(tab.id)}
-                  className={`flex-1 flex flex-col items-center py-2 px-1 rounded-xl text-center transition-all duration-200 ${
-                    mapFilter === tab.id
-                      ? 'bg-white shadow-md'
-                      : 'hover:bg-white/60'
-                  }`}
-                >
-                  <span className="text-lg leading-none mb-0.5">{tab.emoji}</span>
-                  <span className={`text-[11px] font-semibold leading-none ${
-                    mapFilter === tab.id ? 'text-gray-900' : 'text-gray-500'
-                  }`}>
-                    {tab.label}
-                  </span>
-                  {mapFilter === tab.id && (
-                    <div className="w-4 h-0.5 bg-orange-500 rounded-full mt-1" />
-                  )}
-                </button>
-              ))}
-            </div>
+            {/* Filter chips — fall in below search bar */}
+            {filterSheetOpen && (
+              <div style={{ display: 'flex', gap: 8, paddingRight: 2 }}>
+                {FILTER_TABS.map((tab, i) => {
+                  const active = mapFilter === tab.id;
+                  return (
+                    <button
+                      key={tab.id}
+                      onClick={() => setMapFilter(tab.id)}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 5,
+                        padding: '7px 13px',
+                        borderRadius: 50,
+                        border: active ? '2px solid #F97316' : '2px solid transparent',
+                        background: active ? '#F97316' : 'rgba(255,255,255,0.95)',
+                        boxShadow: '0 2px 10px rgba(0,0,0,0.14)',
+                        cursor: 'pointer',
+                        animation: `chip-fall 0.38s cubic-bezier(0.34,1.56,0.64,1) ${i * 0.07}s both`,
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      <span style={{ fontSize: 15 }}>{tab.emoji}</span>
+                      <span style={{
+                        fontSize: 13, fontWeight: 700,
+                        color: active ? '#fff' : '#1F2937',
+                        fontFamily: 'Heebo, sans-serif',
+                      }}>
+                        {tab.label}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           {/* Events sidebar toggle */}
@@ -658,6 +798,7 @@ export function MapScreen({
           onClose={() => setGroupChatMeetup(null)}
         />
       )}
+
     </div>
   );
 }

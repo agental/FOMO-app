@@ -1,9 +1,111 @@
 import { useState, useEffect, useRef } from 'react';
-import { Search, MessageCircle, Plus, X } from 'lucide-react';
+import { Search, MessageCircle, Plus, X, Users } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { UserAvatar } from './UserAvatar';
 import { COUNTRIES } from '../utils/countries';
 import { FloatingNavBar } from './FloatingNavBar';
+import { CityGroupChat } from './CityGroupChat';
+
+const COUNTRY_CITIES: Record<string, { name: string; emoji: string }[]> = {
+  TH: [
+    { name: 'בנגקוק',    emoji: '🏙️' },
+    { name: 'קו פנגן',   emoji: '🏝️' },
+    { name: 'קו תאו',    emoji: '🤿' },
+    { name: 'קו סמואי',  emoji: '🌴' },
+    { name: "צ'יאנג מאי", emoji: '🏔️' },
+    { name: 'פוקט',      emoji: '🏖️' },
+    { name: 'פאי',       emoji: '🌿' },
+  ],
+  JP: [
+    { name: 'טוקיו',    emoji: '🗼' },
+    { name: 'אוסקה',    emoji: '🏯' },
+    { name: 'קיוטו',    emoji: '⛩️' },
+    { name: 'הירושימה', emoji: '☮️' },
+    { name: 'נארה',     emoji: '🦌' },
+    { name: 'פוקואוקה', emoji: '🍜' },
+    { name: 'הוקאידו',  emoji: '🌨️' },
+  ],
+  IT: [
+    { name: 'רומא',       emoji: '🏛️' },
+    { name: 'פירנצה',     emoji: '🎨' },
+    { name: 'ונציה',      emoji: '🚤' },
+    { name: 'מילאנו',     emoji: '👗' },
+    { name: 'אמאלפי',     emoji: '🌊' },
+    { name: "צ'ינקווה טרה", emoji: '🏘️' },
+    { name: 'סיציליה',   emoji: '🌋' },
+  ],
+  GR: [
+    { name: 'אתונה',    emoji: '🏛️' },
+    { name: 'סנטוריני', emoji: '🌅' },
+    { name: 'מיקונוס',  emoji: '🎉' },
+    { name: 'כרתים',    emoji: '🏝️' },
+    { name: 'רודוס',    emoji: '☀️' },
+    { name: 'קורפו',    emoji: '🌿' },
+  ],
+  FR: [
+    { name: "פריז",     emoji: '🗼' },
+    { name: "ניס",      emoji: '🌊' },
+    { name: "ליון",     emoji: '🍷' },
+    { name: "בורדו",    emoji: '🍇' },
+    { name: "מרסיי",    emoji: '⚓' },
+  ],
+  ES: [
+    { name: 'ברצלונה',  emoji: '🏟️' },
+    { name: 'מדריד',    emoji: '⚽' },
+    { name: 'איביזה',   emoji: '🎶' },
+    { name: 'מיורקה',   emoji: '🏖️' },
+    { name: 'סביליה',   emoji: '💃' },
+    { name: 'גרנדה',    emoji: '🏔️' },
+  ],
+  US: [
+    { name: 'ניו יורק',       emoji: '🗽' },
+    { name: 'מיאמי',          emoji: '🏖️' },
+    { name: 'לוס אנג׳לס',     emoji: '🎬' },
+    { name: 'לאס וגאס',       emoji: '🎰' },
+    { name: 'סן פרנסיסקו',    emoji: '🌉' },
+    { name: 'ניו אורלינס',    emoji: '🎷' },
+  ],
+  PT: [
+    { name: 'ליסבון', emoji: '🚃' },
+    { name: 'פורטו',  emoji: '🍷' },
+    { name: 'אלגרבה', emoji: '🏖️' },
+    { name: 'לאגוס',  emoji: '🌊' },
+  ],
+  ID: [
+    { name: 'באלי',         emoji: '🌺' },
+    { name: 'ג׳קרטה',       emoji: '🏙️' },
+    { name: 'לומבוק',       emoji: '🏝️' },
+    { name: "איי ג'ילי",    emoji: '🤿' },
+    { name: 'יוגיאקרטה',   emoji: '🏯' },
+  ],
+  VN: [
+    { name: 'האנוי',        emoji: '🏛️' },
+    { name: 'הו צ׳י מין',   emoji: '🏙️' },
+    { name: 'הוי אן',       emoji: '🏮' },
+    { name: 'דה נאנג',      emoji: '🌉' },
+    { name: 'האלונג ביי',   emoji: '⛵' },
+  ],
+  AU: [
+    { name: 'סידני',   emoji: '🎭' },
+    { name: 'מלבורן',  emoji: '☕' },
+    { name: 'קיירנס',  emoji: '🐊' },
+    { name: 'גולד קוסט', emoji: '🏄' },
+    { name: 'פרת׳',    emoji: '🌅' },
+  ],
+  TR: [
+    { name: 'איסטנבול',  emoji: '🕌' },
+    { name: 'קפדוקיה',   emoji: '🎈' },
+    { name: 'אנטליה',    emoji: '🏖️' },
+    { name: 'בודרום',    emoji: '⛵' },
+    { name: 'פמוקלה',    emoji: '♨️' },
+  ],
+  NZ: [
+    { name: 'אוקלנד',     emoji: '⛵' },
+    { name: 'קווינסטאון', emoji: '🎿' },
+    { name: 'רוטורוא',    emoji: '♨️' },
+    { name: 'קרייסטצ׳רץ׳', emoji: '🌿' },
+  ],
+};
 
 type Conversation = {
   id: string;
@@ -34,17 +136,35 @@ type MessagesScreenProps = {
 
 const DEMO_COUNTRIES = ['TH', 'JP', 'IT', 'FR', 'US', 'GR'];
 
+type GroupChat = {
+  channelId: string;
+  countryCode: string;
+  countryFlag: string;
+  cityName: string;
+  cityEmoji: string;
+  memberCount: number;
+  lastMessage: string | null;
+  lastMessageAt: string | null;
+  unreadCount: number;
+};
+
 export function MessagesScreen({ currentUserId, onBack, onConversationClick, onHomeClick, onMapClick, onCreateClick, onSettingsClick }: MessagesScreenProps) {
-  const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [swipedId, setSwipedId] = useState<string | null>(null);
-  const [userCountries, setUserCountries] = useState<string[]>(DEMO_COUNTRIES);
+  const [conversations,   setConversations]   = useState<Conversation[]>([]);
+  const [groupChats,      setGroupChats]      = useState<GroupChat[]>([]);
+  const [loading,         setLoading]         = useState(true);
+  const [searchQuery,     setSearchQuery]     = useState('');
+  const [swipedId,        setSwipedId]        = useState<string | null>(null);
+  const [userCountries,   setUserCountries]   = useState<string[]>(DEMO_COUNTRIES);
+  const [expandedCountry, setExpandedCountry] = useState<string | null>(null);
+  const [currentUserName, setCurrentUserName] = useState('');
+  const [currentUserAvatar, setCurrentUserAvatar] = useState<string | null>(null);
+  const [openCity, setOpenCity] = useState<{ code: string; flag: string; name: string; emoji: string } | null>(null);
   const touchStartX = useRef<number>(0);
 
   useEffect(() => {
     loadConversations();
     loadUserCountries();
+    loadGroupChats();
 
     const messagesChannel = supabase
       .channel('messages-changes')
@@ -53,8 +173,16 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
       })
       .subscribe();
 
+    const groupChannel = supabase
+      .channel('group-messages-changes')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'group_messages' }, () => {
+        loadGroupChats();
+      })
+      .subscribe();
+
     return () => {
       supabase.removeChannel(messagesChannel);
+      supabase.removeChannel(groupChannel);
     };
   }, [currentUserId]);
 
@@ -62,12 +190,68 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
     try {
       const { data } = await supabase
         .from('users')
-        .select('selected_countries')
+        .select('selected_countries, display_name, avatar_url')
         .eq('id', currentUserId)
         .maybeSingle();
       if (data?.selected_countries && data.selected_countries.length > 0) {
         setUserCountries(data.selected_countries.slice(0, 8));
       }
+      if (data?.display_name) setCurrentUserName(data.display_name);
+      if (data?.avatar_url !== undefined) setCurrentUserAvatar(data.avatar_url);
+    } catch {}
+  };
+
+  const loadGroupChats = async () => {
+    try {
+      const { data: memberships } = await supabase
+        .from('group_members')
+        .select('channel_id, last_seen_at')
+        .eq('user_id', currentUserId);
+      if (!memberships?.length) return;
+
+      const channelIds = memberships.map(m => m.channel_id);
+      const { data: channels } = await supabase
+        .from('group_channels').select('*').in('id', channelIds);
+      if (!channels) return;
+
+      const results: GroupChat[] = await Promise.all(channels.map(async (ch) => {
+        const membership = memberships.find(m => m.channel_id === ch.id);
+        const lastSeen = membership?.last_seen_at ?? '1970-01-01';
+        const country = COUNTRIES[ch.country_code];
+
+        const [lastMsgRes, unreadRes, memCountRes] = await Promise.all([
+          supabase.from('group_messages').select('content,type,created_at,display_name')
+            .eq('channel_id', ch.id).order('created_at', { ascending: false }).limit(1).maybeSingle(),
+          supabase.from('group_messages').select('id', { count: 'exact', head: true })
+            .eq('channel_id', ch.id).neq('user_id', currentUserId).gt('created_at', lastSeen),
+          supabase.from('group_members').select('*', { count: 'exact', head: true })
+            .eq('channel_id', ch.id),
+        ]);
+
+        const lastMsg = lastMsgRes.data;
+        let preview = null;
+        if (lastMsg) {
+          if (lastMsg.type === 'image') preview = `${lastMsg.display_name}: 📷 תמונה`;
+          else if (lastMsg.type === 'location') preview = `${lastMsg.display_name}: 📍 מיקום`;
+          else preview = `${lastMsg.display_name}: ${lastMsg.content}`;
+        }
+
+        return {
+          channelId: ch.id,
+          countryCode: ch.country_code,
+          countryFlag: country?.flag ?? '🌍',
+          cityName: ch.city_name,
+          cityEmoji: ch.city_emoji,
+          memberCount: memCountRes.count ?? 0,
+          lastMessage: preview,
+          lastMessageAt: lastMsg?.created_at ?? null,
+          unreadCount: unreadRes.count ?? 0,
+        };
+      }));
+
+      setGroupChats(results.sort((a, b) =>
+        (b.lastMessageAt ?? '').localeCompare(a.lastMessageAt ?? '')
+      ));
     } catch {}
   };
 
@@ -178,7 +362,21 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
       <div className="flex-1 overflow-y-auto pb-28">
         {/* Groups / Countries Section */}
         <div className="pt-4 pb-2">
+          <style>{`
+            @keyframes city-chip-fall {
+              0%   { opacity: 0; transform: translateY(-28px) scale(0.82); }
+              65%  { transform: translateY(3px) scale(1.04); }
+              100% { opacity: 1; transform: translateY(0) scale(1); }
+            }
+            @keyframes country-ring-pulse {
+              0%, 100% { box-shadow: 0 0 0 0 rgba(249,115,22,0.5); }
+              50%       { box-shadow: 0 0 0 5px rgba(249,115,22,0); }
+            }
+          `}</style>
+
           <p className="text-[13px] font-bold text-gray-400 px-4 mb-3 tracking-wide">קבוצות</p>
+
+          {/* Country circles row */}
           <div className="overflow-x-auto scrollbar-hide">
             <div className="flex gap-3 px-4 pb-1" style={{ width: 'max-content' }}>
               {/* Add button */}
@@ -189,36 +387,154 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
                 <span className="text-[11px] text-gray-400 font-medium">הוסף</span>
               </div>
 
-              {userCountries.map((code, idx) => {
+              {userCountries.map((code) => {
                 const country = COUNTRIES[code];
                 if (!country) return null;
-                const isActive = idx < 3;
+                const isExpanded = expandedCountry === code;
+                const hasCities  = !!COUNTRY_CITIES[code];
                 return (
-                  <div key={code} className="flex flex-col items-center gap-1.5 flex-shrink-0">
+                  <button
+                    key={code}
+                    onClick={() => setExpandedCountry(isExpanded ? null : code)}
+                    className="flex flex-col items-center gap-1.5 flex-shrink-0"
+                    style={{ background: 'none', border: 'none', cursor: hasCities ? 'pointer' : 'default', padding: 0 }}
+                  >
                     <div
                       className="w-14 h-14 rounded-full flex items-center justify-center p-[2.5px]"
-                      style={isActive ? {
-                        background: 'linear-gradient(135deg, #14B8A6, #0D9488)'
-                      } : {
-                        background: '#e5e7eb'
+                      style={{
+                        background: isExpanded
+                          ? 'linear-gradient(135deg, #F97316, #EA580C)'
+                          : 'linear-gradient(135deg, #14B8A6, #0D9488)',
+                        animation: isExpanded ? 'country-ring-pulse 1.4s ease-in-out infinite' : 'none',
+                        transition: 'background 0.25s',
                       }}
                     >
                       <div className="w-full h-full bg-white rounded-full flex items-center justify-center text-2xl">
                         {country.flag}
                       </div>
                     </div>
-                    <span className="text-[11px] text-gray-500 font-medium max-w-[56px] text-center truncate">
+                    <span
+                      className="text-[11px] font-medium max-w-[56px] text-center truncate"
+                      style={{ color: isExpanded ? '#F97316' : '#6B7280' }}
+                    >
                       {country.name}
                     </span>
-                  </div>
+                  </button>
                 );
               })}
             </div>
           </div>
+
+          {/* City chips — animate in when a country is expanded */}
+          {expandedCountry && COUNTRY_CITIES[expandedCountry] && (
+            <div className="overflow-x-auto scrollbar-hide mt-3">
+              <div className="flex gap-2 px-4 pb-1" style={{ width: 'max-content' }}>
+                {COUNTRY_CITIES[expandedCountry].map((city, i) => (
+                  <button
+                    key={city.name}
+                    onClick={() => {
+                      const country = COUNTRIES[expandedCountry!];
+                      setOpenCity({ code: expandedCountry!, flag: country?.flag ?? '🌍', name: city.name, emoji: city.emoji });
+                    }}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 6,
+                      padding: '8px 14px',
+                      borderRadius: 50,
+                      border: '1.5px solid #FED7AA',
+                      background: 'white',
+                      boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
+                      cursor: 'pointer',
+                      animation: `city-chip-fall 0.4s cubic-bezier(0.34,1.56,0.64,1) ${i * 0.06}s both`,
+                      whiteSpace: 'nowrap',
+                      flexShrink: 0,
+                    }}
+                  >
+                    <span style={{ fontSize: 17 }}>{city.emoji}</span>
+                    <span style={{
+                      fontSize: 13, fontWeight: 700,
+                      color: '#1F2937',
+                      fontFamily: 'Heebo, sans-serif',
+                    }}>
+                      {city.name}
+                    </span>
+                    <Users size={12} color="#F97316" strokeWidth={2.5} />
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Divider */}
         <div className="h-px bg-gray-100 mx-4 my-2" />
+
+        {/* Group chats the user has joined */}
+        {groupChats.length > 0 && (
+          <div>
+            <p className="text-[13px] font-bold text-gray-400 px-4 mb-1 mt-3 tracking-wide">קבוצות שלי</p>
+            {groupChats.map(gc => (
+              <button
+                key={gc.channelId}
+                onClick={() => setOpenCity({ code: gc.countryCode, flag: gc.countryFlag, name: gc.cityName, emoji: gc.cityEmoji })}
+                className="w-full flex items-center gap-3 px-4 bg-[#F8F9FB] active:scale-[0.98] transition-all duration-150"
+                style={{ height: 72, paddingTop: 6, paddingBottom: 6 }}
+              >
+                {/* Group avatar */}
+                <div style={{ position: 'relative', flexShrink: 0 }}>
+                  <div style={{
+                    width: 52, height: 52, borderRadius: '50%',
+                    background: gc.unreadCount > 0 ? 'linear-gradient(135deg, #F97316, #EA580C)' : 'linear-gradient(135deg, #E5E7EB, #D1D5DB)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    fontSize: 24,
+                    boxShadow: gc.unreadCount > 0 ? '0 3px 10px rgba(249,115,22,0.35)' : 'none',
+                  }}>
+                    {gc.cityEmoji}
+                  </div>
+                  {/* Member count badge */}
+                  <div style={{
+                    position: 'absolute', bottom: -2, right: -2,
+                    background: '#fff', borderRadius: 10, padding: '1px 5px',
+                    fontSize: 10, fontWeight: 700, color: '#6B7280',
+                    border: '1px solid #E5E7EB', display: 'flex', alignItems: 'center', gap: 2,
+                  }}>
+                    <Users size={9} />
+                    {gc.memberCount}
+                  </div>
+                </div>
+
+                {/* Content */}
+                <div className="flex-1 min-w-0 text-right">
+                  <div className="flex items-center justify-between mb-0.5">
+                    <span className="text-[12px] text-gray-400 flex-shrink-0 ml-2">
+                      {gc.lastMessageAt ? formatTime(gc.lastMessageAt) : ''}
+                    </span>
+                    <h3 className={`text-[15px] truncate ${gc.unreadCount > 0 ? 'font-bold text-[#111]' : 'font-semibold text-[#333]'}`}
+                      style={{ fontFamily: 'Heebo, sans-serif' }}>
+                      {gc.countryFlag} {gc.cityName}
+                    </h3>
+                  </div>
+                  <p className={`text-[13px] truncate text-right ${gc.unreadCount > 0 ? 'text-[#444] font-medium' : 'text-gray-400'}`}>
+                    {gc.lastMessage ?? 'טרם נשלחו הודעות'}
+                  </p>
+                </div>
+
+                {/* Unread badge */}
+                {gc.unreadCount > 0 && (
+                  <div style={{
+                    minWidth: 20, height: 20, borderRadius: 10, padding: '0 5px',
+                    background: 'linear-gradient(135deg, #F97316, #EA580C)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+                  }}>
+                    <span style={{ fontSize: 11, fontWeight: 800, color: '#fff' }}>
+                      {gc.unreadCount > 99 ? '99+' : gc.unreadCount}
+                    </span>
+                  </div>
+                )}
+              </button>
+            ))}
+            <div className="h-px bg-gray-100 mx-4 my-2" />
+          </div>
+        )}
 
         {/* Chat List */}
         {loading ? (
@@ -363,6 +679,20 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
         onChatClick={onBack}
         onSettingsClick={onSettingsClick}
       />
+
+      {/* City group chat overlay */}
+      {openCity && (
+        <CityGroupChat
+          countryCode={openCity.code}
+          countryFlag={openCity.flag}
+          cityName={openCity.name}
+          cityEmoji={openCity.emoji}
+          currentUserId={currentUserId}
+          currentUserName={currentUserName || 'אנונימי'}
+          currentUserAvatar={currentUserAvatar}
+          onClose={() => { setOpenCity(null); loadGroupChats(); }}
+        />
+      )}
     </div>
   );
 }
