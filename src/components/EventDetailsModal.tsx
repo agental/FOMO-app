@@ -347,8 +347,10 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
                   <div className="flex-1">
                     <div className="text-xs text-gray-500 mb-0.5">משתתפים</div>
                     <div className="text-[15px] font-semibold text-gray-900">
-                      {event.attendees.length} {event.attendees.length === 1 ? 'משתתף' : 'משתתפים'}
-                      {event.max_attendees && ` מתוך ${event.max_attendees}`}
+                      {event.max_attendees >= 9999
+                        ? '∞ משתתפים'
+                        : `${event.attendees.length} ${event.attendees.length === 1 ? 'משתתף' : 'משתתפים'}${event.max_attendees ? ` מתוך ${event.max_attendees}` : ''}`
+                      }
                     </div>
                   </div>
                 </div>
@@ -437,11 +439,17 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
                   <Users className="w-5 h-5" />
                   משתתפים
                 </h3>
-                <div className="text-center py-8 bg-gray-50 rounded-2xl">
-                  <Users className="w-12 h-12 text-gray-400 mx-auto mb-2" />
-                  <p className="text-gray-500">עדיין אין משתתפים רשומים</p>
-                  <p className="text-gray-400 text-sm mt-1">היה הראשון להירשם!</p>
-                </div>
+                {event.max_attendees >= 9999 ? (
+                  <div className="text-center py-8 bg-gray-50 rounded-2xl">
+                    <span className="text-5xl">∞</span>
+                  </div>
+                ) : (
+                  <div className="text-center py-8 bg-gray-50 rounded-2xl">
+                    <Users className="w-12 h-12 text-gray-400 mx-auto mb-2" />
+                    <p className="text-gray-500">עדיין אין משתתפים רשומים</p>
+                    <p className="text-gray-400 text-sm mt-1">היה הראשון להירשם!</p>
+                  </div>
+                )}
               </div>
             )}
           </div>

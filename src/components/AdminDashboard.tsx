@@ -312,7 +312,7 @@ export function AdminDashboard({ currentUserId, onBack }: AdminDashboardProps) {
 
 
         {activeTab === 'events' && (
-          <div className="space-y-5">
+          <div className="space-y-3">
             {loading ? (
               <div className="text-center py-16">
                 <div className="inline-block w-12 h-12 border-4 border-brand-500 border-t-transparent rounded-full animate-spin"></div>
@@ -326,13 +326,36 @@ export function AdminDashboard({ currentUserId, onBack }: AdminDashboardProps) {
               </div>
             ) : (
               events.map((event) => (
-                <EventCard
-                  key={event.id}
-                  event={event}
-                  currentUserId={currentUserId}
-                  onAttendClick={() => {}}
-                  onDelete={() => handleDeleteEvent(event.id, event.user_id)}
-                />
+                <div key={event.id} className="bg-white rounded-2xl shadow-sm border border-gray-100 flex items-center gap-4 px-4 py-3">
+                  {/* emoji / image */}
+                  <div className="w-12 h-12 rounded-[14px] overflow-hidden flex-shrink-0 flex items-center justify-center text-2xl"
+                    style={{ background: 'linear-gradient(135deg,#F97316,#fb923c)' }}>
+                    {event.emoji || '📅'}
+                  </div>
+
+                  {/* info */}
+                  <div className="flex-1 min-w-0">
+                    <p className="font-bold text-gray-900 truncate" style={{ fontFamily: 'Heebo, sans-serif' }}>
+                      {event.title}
+                    </p>
+                    <p className="text-sm text-gray-500 truncate" style={{ fontFamily: 'Rubik, sans-serif' }}>
+                      📍 {event.city} · 👤 {(event as any).users?.display_name || 'לא ידוע'} · 📅 {new Date(event.event_date || '').toLocaleDateString('he-IL')}
+                    </p>
+                  </div>
+
+                  {/* attendees badge */}
+                  <span className="text-xs font-semibold bg-blue-50 text-blue-600 px-2 py-1 rounded-lg flex-shrink-0">
+                    {event.attendees?.length || 0}/{event.max_attendees}
+                  </span>
+
+                  {/* delete button */}
+                  <button
+                    onClick={() => handleDeleteEvent(event.id, event.user_id)}
+                    className="flex-shrink-0 w-9 h-9 rounded-full bg-red-50 hover:bg-red-100 flex items-center justify-center transition-colors active:scale-90"
+                  >
+                    <Trash2 className="w-4 h-4 text-red-500" />
+                  </button>
+                </div>
               ))
             )}
           </div>

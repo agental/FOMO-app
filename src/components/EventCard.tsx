@@ -220,17 +220,11 @@ export function EventCard({ event, currentUserId, onAttendClick, onEdit, onDelet
               }`} />
               <span
                 className={`text-xs font-bold ${
-                  spotsLeft === 0
-                    ? 'text-red-600'
-                    : spotsLeft <= 3
-                    ? 'text-orange-600'
-                    : isAttending
-                    ? 'text-green-600'
-                    : 'text-blue-600'
+                  isAttending ? 'text-green-600' : 'text-blue-600'
                 }`}
                 style={{ fontFamily: 'Rubik, sans-serif' }}
               >
-                {attendeeCount}/{event.max_attendees}
+                {event.max_attendees >= 9999 ? '∞' : `${attendeeCount}/${event.max_attendees}`}
               </span>
             </div>
             <div className="w-full h-1 bg-gray-200 rounded-full mt-1 overflow-hidden">
@@ -244,7 +238,7 @@ export function EventCard({ event, currentUserId, onAttendClick, onEdit, onDelet
                     ? 'bg-green-500'
                     : 'bg-blue-500'
                 }`}
-                style={{ width: `${(attendeeCount / event.max_attendees) * 100}%` }}
+                style={{ width: event.max_attendees >= 9999 ? '0%' : `${(attendeeCount / event.max_attendees) * 100}%` }}
               />
             </div>
           </div>

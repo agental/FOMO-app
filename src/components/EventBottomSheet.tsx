@@ -173,7 +173,7 @@ export function EventBottomSheet({ event, onClose, onViewDetails }: EventBottomS
             {event.max_attendees && (
               <div className="flex items-center gap-3 text-gray-700">
                 <Users className="w-5 h-5 text-blue-500 flex-shrink-0" />
-                <p className="font-semibold">עד {event.max_attendees} משתתפים</p>
+                <p className="font-semibold">{event.max_attendees >= 9999 ? 'ללא הגבלת משתתפים ∞' : `עד ${event.max_attendees} משתתפים`}</p>
               </div>
             )}
           </div>
