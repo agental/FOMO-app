@@ -228,7 +228,7 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
             style={{
               backgroundImage: event.image_url
                 ? `url(${event.image_url})`
-                : 'linear-gradient(135deg, #14B8A6 0%, #0D9488 100%)',
+                : 'linear-gradient(135deg, #F97316 0%, #EA580C 100%)',
               transform: `translateY(${parallaxOffset}px) scale(${1 + scrollY / 2000})`,
               transition: 'transform 0.1s ease-out',
             }}

@@ -1,10 +1,9 @@
-import { useState, useEffect } from 'react';
-import { ArrowRight, LogOut, MessageCircle, Edit2, Search, Check, Camera, MapPin, Globe } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { ArrowRight, LogOut, MessageCircle, Edit2, Search, Check, Camera, MapPin, Globe, Loader2, Heart, Ticket, Plane, CalendarDays, X, Cake } from 'lucide-react';
 import { supabase, type User } from '../lib/supabase';
 import { flagEmoji } from '../utils/flags';
 import { COUNTRIES } from '../utils/countries';
 import { FloatingNavBar } from './FloatingNavBar';
-import { ImageUpload } from './ImageUpload';
 import { CountriesVisitedCard } from './CountriesVisitedCard';
 
 interface ProfileScreenProps {
@@ -40,6 +39,7 @@ function OrangeRing({ value, size = 136 }: { value: number; size?: number }) {
       </defs>
       <circle cx={cx} cy={cx} r={r} fill="none" stroke="rgba(255,255,255,0.07)" strokeWidth={stroke} />
       <circle cx={cx} cy={cx} r={r} fill="none" stroke="url(#rg)" strokeWidth={stroke}
+        className="fomo-animated"
         strokeLinecap="round"
         strokeDasharray={circ}
         strokeDashoffset={circ * (1 - value / 100)}
@@ -64,7 +64,7 @@ function calcCompletion(p: User): number {
   return Math.min(s, 100);
 }
 
-function SectionCard({ label, emoji, children }: { label: string; emoji: string; children: React.ReactNode }) {
+function SectionCard({ label, icon, children }: { label: string; icon: React.ReactNode; children: React.ReactNode }) {
   return (
     <div style={{
       background: '#fff', borderRadius: 22,
@@ -77,13 +77,13 @@ function SectionCard({ label, emoji, children }: { label: string; emoji: string;
           width: 34, height: 34, borderRadius: 11,
           background: 'linear-gradient(135deg, #FFF7ED, #FFEDD5)',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontSize: 16, flexShrink: 0,
+          flexShrink: 0,
           border: '1px solid rgba(249,115,22,0.12)',
         }}>
-          {emoji}
+          {icon}
         </div>
         <span style={{
-          fontSize: 11, fontWeight: 800, color: '#9CA3AF',
+          fontSize: 11, fontWeight: 800, color: '#6B7280',
           textTransform: 'uppercase', letterSpacing: '0.1em',
           fontFamily: 'Heebo, sans-serif',
         }}>{label}</span>
@@ -107,13 +107,46 @@ export default function ProfileScreen({
   const [profile,              setProfile]              = useState<User | null>(null);
   const [eventsCount,          setEventsCount]          = useState(0);
   const [loading,              setLoading]              = useState(true);
-  const [isEditing,            setIsEditing]            = useState(false);
   const [isSelectingCountries, setIsSelectingCountries] = useState(false);
   const [selectedCountries,    setSelectedCountries]    = useState<string[]>([]);
   const [countrySearch,        setCountrySearch]        = useState('');
+  const [uploadingAvatar,      setUploadingAvatar]      = useState(false);
+  const avatarInputRef = useRef<HTMLInputElement>(null);
 
   const targetUserId = viewUserId || currentUserId;
   const isOwnProfile = !viewUserId || viewUserId === currentUserId;
+
+  const handleAvatarSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !currentUserId) return;
+    if (!file.type.startsWith('image/')) { alert('נא להעלות קובץ תמונה בלבד'); return; }
+    if (file.size > 5 * 1024 * 1024) { alert('התמונה גדולה מדי. גודל מקסימלי: 5MB'); return; }
+
+    setUploadingAvatar(true);
+    try {
+      const fileExt = file.name.split('.').pop();
+      const filePath = `avatars/${currentUserId}-${Date.now()}.${fileExt}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from('images')
+        .upload(filePath, file, { cacheControl: '3600', upsert: false });
+      if (uploadError) throw uploadError;
+
+      const { data: { publicUrl } } = supabase.storage.from('images').getPublicUrl(filePath);
+
+      const { error: updateError } = await supabase
+        .from('users').update({ avatar_url: publicUrl }).eq('id', currentUserId);
+      if (updateError) throw updateError;
+
+      setProfile(p => (p ? { ...p, avatar_url: publicUrl } : p));
+    } catch (err: any) {
+      console.error('Avatar upload error:', err);
+      alert(err?.message || 'שגיאה בהעלאת התמונה');
+    } finally {
+      setUploadingAvatar(false);
+      if (avatarInputRef.current) avatarInputRef.current.value = '';
+    }
+  };
 
   useEffect(() => {
     if (targetUserId) { loadProfile(); loadStats(); }
@@ -165,6 +198,17 @@ export default function ProfileScreen({
   /* ═══════════════════════════════════════════════════ */
   return (
     <div style={{ minHeight: '100dvh', background: '#EFEFEF', overflowX: 'hidden' }} dir="rtl">
+      <style>{`
+        @keyframes sp{to{transform:rotate(360deg)}}
+        .fomo-press{transition:transform .12s ease, box-shadow .12s ease, filter .15s ease, background .15s ease; -webkit-tap-highlight-color:transparent; touch-action:manipulation;}
+        .fomo-press:active{transform:scale(.96);}
+        @media (hover:hover){ .fomo-press:hover{filter:brightness(1.04);} }
+        @media (prefers-reduced-motion: reduce){
+          .fomo-press{transition:none;}
+          .fomo-press:active{transform:none;}
+          .fomo-animated{transition:none !important; animation:none !important;}
+        }
+      `}</style>
 
       {/* ══ HERO ══ */}
       <div style={{
@@ -192,51 +236,29 @@ export default function ProfileScreen({
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           padding: '0 18px', marginBottom: 36, position: 'relative',
         }}>
-          <button onClick={onBack} style={{
+          <button onClick={onBack} className="fomo-press" aria-label="חזרה" style={{
             display: 'flex', alignItems: 'center', gap: 6,
-            padding: '9px 16px', borderRadius: 50,
+            minHeight: 44, padding: '0 16px', borderRadius: 50,
             background: 'rgba(255,255,255,0.07)',
             border: '1px solid rgba(255,255,255,0.1)',
             color: 'rgba(255,255,255,0.75)', cursor: 'pointer',
             fontFamily: 'Heebo, sans-serif', fontSize: 14, fontWeight: 600,
-            backdropFilter: 'blur(8px)', transition: 'all 0.15s',
+            backdropFilter: 'blur(8px)',
           }}>
             <ArrowRight size={15} />
             חזרה
           </button>
 
           <div style={{ display: 'flex', gap: 8 }}>
-            {isOwnProfile && isEditing && (
-              <button onClick={() => setIsEditing(false)} style={{
-                padding: '9px 18px', borderRadius: 50,
-                background: 'rgba(249,115,22,0.15)',
-                border: '1px solid rgba(249,115,22,0.3)',
-                color: '#FB923C', cursor: 'pointer',
-                fontFamily: 'Heebo, sans-serif', fontSize: 14, fontWeight: 700,
-                backdropFilter: 'blur(8px)', transition: 'all 0.15s',
-              }}>סיום</button>
-            )}
-            {isOwnProfile && !isEditing && (
-              <button onClick={() => setIsEditing(true)} style={{
-                width: 40, height: 40, borderRadius: '50%',
-                background: 'rgba(255,255,255,0.07)',
-                border: '1px solid rgba(255,255,255,0.1)',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                cursor: 'pointer', color: 'rgba(255,255,255,0.65)',
-                backdropFilter: 'blur(8px)', transition: 'all 0.15s',
-              }}>
-                <Edit2 size={15} />
-              </button>
-            )}
             {isOwnProfile && (
-              <button onClick={handleLogout} style={{
-                width: 40, height: 40, borderRadius: '50%',
+              <button onClick={handleLogout} aria-label="התנתק" className="fomo-press" style={{
+                width: 44, height: 44, borderRadius: '50%',
                 background: 'rgba(239,68,68,0.12)',
                 border: '1px solid rgba(239,68,68,0.18)',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
-                cursor: 'pointer', backdropFilter: 'blur(8px)', transition: 'all 0.15s',
+                cursor: 'pointer', backdropFilter: 'blur(8px)',
               }}>
-                <LogOut size={15} style={{ color: '#F87171' }} />
+                <LogOut size={16} style={{ color: '#F87171' }} />
               </button>
             )}
           </div>
@@ -249,19 +271,24 @@ export default function ProfileScreen({
           <div style={{ position: 'relative', width: 136, height: 136, marginBottom: 22 }}>
             <OrangeRing value={completion} size={136} />
 
-            <div style={{
-              position: 'absolute', inset: 8, borderRadius: '50%', overflow: 'hidden',
-              background: '#1E2030',
-              boxShadow: '0 0 0 2px rgba(255,255,255,0.08), 0 24px 64px rgba(0,0,0,0.7), 0 0 40px rgba(249,115,22,0.15)',
-            }}>
-              {isEditing && isOwnProfile ? (
-                <ImageUpload
-                  currentImageUrl={profile.avatar_url}
-                  onImageChange={url => setProfile({ ...profile, avatar_url: url })}
-                  userId={currentUserId!}
+            <div
+              onClick={isOwnProfile ? () => avatarInputRef.current?.click() : undefined}
+              className={isOwnProfile ? 'fomo-press' : undefined}
+              role={isOwnProfile ? 'button' : undefined}
+              aria-label={isOwnProfile ? 'החלף תמונת פרופיל' : undefined}
+              style={{
+                position: 'absolute', inset: 8, borderRadius: '50%', overflow: 'hidden',
+                background: '#1E2030',
+                cursor: isOwnProfile ? 'pointer' : 'default',
+                boxShadow: '0 0 0 2px rgba(255,255,255,0.08), 0 24px 64px rgba(0,0,0,0.7), 0 0 40px rgba(249,115,22,0.15)',
+              }}>
+              {profile.avatar_url ? (
+                <img
+                  src={profile.avatar_url}
+                  alt={profile.display_name ? `תמונת הפרופיל של ${profile.display_name}` : 'תמונת פרופיל'}
+                  draggable={false}
+                  style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                 />
-              ) : profile.avatar_url ? (
-                <img src={profile.avatar_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
               ) : (
                 <div style={{
                   width: '100%', height: '100%',
@@ -273,17 +300,49 @@ export default function ProfileScreen({
                   </span>
                 </div>
               )}
+
+              {/* uploading overlay */}
+              {uploadingAvatar && (
+                <div style={{
+                  position: 'absolute', inset: 0,
+                  background: 'rgba(0,0,0,0.55)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}>
+                  <Loader2 size={28} style={{ color: 'white', animation: 'sp 0.75s linear infinite' }} />
+                </div>
+              )}
             </div>
 
-            {isEditing && isOwnProfile && (
-              <div style={{
-                position: 'absolute', inset: 8, borderRadius: '50%',
-                background: 'rgba(0,0,0,0.52)',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                pointerEvents: 'none',
-              }}>
-                <Camera size={28} style={{ color: 'white' }} />
-              </div>
+            {/* hidden file input + camera badge — tap to change profile photo */}
+            {isOwnProfile && (
+              <>
+                <input
+                  ref={avatarInputRef}
+                  type="file"
+                  accept="image/*"
+                  onChange={handleAvatarSelect}
+                  style={{ display: 'none' }}
+                />
+                {!uploadingAvatar && (
+                  <button
+                    type="button"
+                    onClick={() => avatarInputRef.current?.click()}
+                    aria-label="החלף תמונת פרופיל"
+                    className="fomo-press"
+                    style={{
+                      position: 'absolute', bottom: 2, right: 2,
+                      width: 40, height: 40, borderRadius: '50%',
+                      background: 'linear-gradient(135deg, #F97316, #EA580C)',
+                      border: '3px solid #0C0C10',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      cursor: 'pointer', padding: 0,
+                      boxShadow: '0 4px 14px rgba(249,115,22,0.5)',
+                    }}
+                  >
+                    <Camera size={18} style={{ color: 'white' }} />
+                  </button>
+                )}
+              </>
             )}
 
             {/* % badge */}
@@ -328,7 +387,10 @@ export default function ProfileScreen({
           {/* Info chips */}
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center', padding: '0 20px' }}>
             {profile.age && (
-              <Chip>🎂&nbsp;{profile.age}</Chip>
+              <Chip>
+                <Cake size={11} style={{ color: '#F97316' }} />
+                &nbsp;{profile.age}
+              </Chip>
             )}
             {profile.current_country && (
               <Chip>
@@ -365,14 +427,14 @@ export default function ProfileScreen({
           marginBottom: 12,
         }}>
           {[
-            { value: eventsCount,                            label: 'אירועים', icon: '🎪' },
-            { value: profile.visited_countries?.length || 0, label: 'מדינות',  icon: '✈️' },
-            { value: memberSince,                             label: 'חבר מאז', icon: '📅' },
+            { value: eventsCount,                            label: 'אירועים', icon: <Ticket size={20} style={{ color: '#F97316' }} /> },
+            { value: profile.visited_countries?.length || 0, label: 'מדינות',  icon: <Plane size={20} style={{ color: '#F97316' }} /> },
+            { value: memberSince,                             label: 'חבר מאז', icon: <CalendarDays size={20} style={{ color: '#F97316' }} /> },
           ].flatMap(({ value, label, icon }, i) => [
             <div key={label} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '20px 6px' }}>
-              <span style={{ fontSize: 22, marginBottom: 5 }}>{icon}</span>
+              <div style={{ height: 26, display: 'flex', alignItems: 'center', marginBottom: 5 }}>{icon}</div>
               <span style={{ fontSize: 17, fontWeight: 900, color: '#111827', fontFamily: 'Heebo, sans-serif', lineHeight: 1 }}>{value}</span>
-              <span style={{ fontSize: 10.5, fontWeight: 700, color: '#9CA3AF', fontFamily: 'Heebo, sans-serif', marginTop: 4 }}>{label}</span>
+              <span style={{ fontSize: 10.5, fontWeight: 700, color: '#6B7280', fontFamily: 'Heebo, sans-serif', marginTop: 4 }}>{label}</span>
             </div>,
             i < 2 ? <div key={`d${i}`} style={{ background: '#F3F4F6' }} /> : null,
           ])}
@@ -383,6 +445,7 @@ export default function ProfileScreen({
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 12 }}>
             <button
               onClick={() => onMessageUser?.(targetUserId!)}
+              className="fomo-press"
               style={{
                 width: '100%', height: 58, borderRadius: 20, border: 'none',
                 background: 'linear-gradient(135deg, #F97316 0%, #EA580C 100%)',
@@ -390,7 +453,6 @@ export default function ProfileScreen({
                 display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9,
                 cursor: 'pointer', fontFamily: 'Heebo, sans-serif',
                 boxShadow: '0 8px 30px rgba(249,115,22,0.4)',
-                transition: 'transform 0.12s, box-shadow 0.12s',
               }}
             >
               <MessageCircle size={20} />
@@ -401,6 +463,7 @@ export default function ProfileScreen({
               <a
                 href={profile.instagram.startsWith('http') ? profile.instagram : `https://instagram.com/${profile.instagram.replace('@', '')}`}
                 target="_blank" rel="noopener noreferrer"
+                className="fomo-press"
                 style={{
                   width: '100%', height: 52, borderRadius: 18,
                   background: 'linear-gradient(135deg, #F43F5E, #C026D3, #F97316)',
@@ -449,14 +512,15 @@ export default function ProfileScreen({
                 <p style={{ margin: 0, fontSize: 14, fontWeight: 800, color: '#111827', fontFamily: 'Heebo, sans-serif' }}>
                   השלם את הפרופיל שלך
                 </p>
-                <p style={{ margin: '3px 0 0', fontSize: 12, color: '#9CA3AF', fontFamily: 'Rubik, sans-serif' }}>
+                <p style={{ margin: '3px 0 0', fontSize: 12, color: '#6B7280', fontFamily: 'Rubik, sans-serif' }}>
                   פרופיל מלא מקבל פי 3 יותר חיבורים
                 </p>
               </div>
             </div>
             {/* Progress bar */}
-            <div style={{ height: 7, background: '#F3F4F6', borderRadius: 99, overflow: 'hidden' }}>
-              <div style={{
+            <div style={{ height: 7, background: '#F3F4F6', borderRadius: 99, overflow: 'hidden' }}
+              role="progressbar" aria-valuenow={completion} aria-valuemin={0} aria-valuemax={100} aria-label="השלמת פרופיל">
+              <div className="fomo-animated" style={{
                 height: '100%', borderRadius: 99,
                 background: 'linear-gradient(90deg, #FB923C, #EA580C)',
                 width: `${completion}%`,
@@ -469,7 +533,7 @@ export default function ProfileScreen({
 
         {/* Languages */}
         {profile.languages && profile.languages.length > 0 && (
-          <SectionCard label="שפות" emoji="💬">
+          <SectionCard label="שפות" icon={<MessageCircle size={16} style={{ color: '#F97316' }} />}>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
               {profile.languages.map((lang: string) => (
                 <span key={lang} style={{
@@ -479,7 +543,7 @@ export default function ProfileScreen({
                   fontFamily: 'Heebo, sans-serif',
                   boxShadow: '0 3px 12px rgba(249,115,22,0.32)',
                 }}>
-                  💬&nbsp;{lang}
+                  {lang}
                 </span>
               ))}
             </div>
@@ -488,7 +552,7 @@ export default function ProfileScreen({
 
         {/* Interests */}
         {profile.interests && profile.interests.length > 0 && (
-          <SectionCard label="תחומי עניין" emoji="❤️">
+          <SectionCard label="תחומי עניין" icon={<Heart size={16} style={{ color: '#F97316' }} />}>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
               {profile.interests.map((interest: string) => (
                 <span key={interest} style={{
@@ -516,12 +580,14 @@ export default function ProfileScreen({
         {isOwnProfile && (
           <button
             onClick={() => setIsSelectingCountries(true)}
+            className="fomo-press"
+            aria-label="ערוך מדינות לטיול"
             style={{
               width: '100%', background: '#fff', borderRadius: 22,
               padding: '18px 18px 20px',
               boxShadow: '0 1px 3px rgba(0,0,0,0.04), 0 4px 20px rgba(0,0,0,0.06)',
               border: 'none', cursor: 'pointer', textAlign: 'right',
-              marginBottom: 12, transition: 'transform 0.12s',
+              marginBottom: 12,
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -536,7 +602,7 @@ export default function ProfileScreen({
                     <Globe size={16} style={{ color: '#F97316' }} />
                   </div>
                   <span style={{
-                    fontSize: 11, fontWeight: 800, color: '#9CA3AF',
+                    fontSize: 11, fontWeight: 800, color: '#6B7280',
                     textTransform: 'uppercase', letterSpacing: '0.1em',
                     fontFamily: 'Heebo, sans-serif',
                   }}>מדינות לטיול</span>
@@ -565,7 +631,7 @@ export default function ProfileScreen({
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 marginRight: 10,
               }}>
-                <Edit2 size={14} style={{ color: '#9CA3AF' }} />
+                <Edit2 size={14} style={{ color: '#6B7280' }} />
               </div>
             </div>
           </button>
@@ -591,13 +657,27 @@ export default function ProfileScreen({
             }}
             onClick={e => e.stopPropagation()}
           >
-            <div style={{ padding: '16px 20px 14px', borderBottom: '1px solid #F3F4F6', flexShrink: 0 }}>
+            <div style={{ padding: '16px 20px 14px', borderBottom: '1px solid #F3F4F6', flexShrink: 0, position: 'relative' }}>
               <div style={{ width: 40, height: 4, borderRadius: 99, background: '#E5E7EB', margin: '0 auto 18px' }} />
+              <button
+                type="button"
+                onClick={() => setIsSelectingCountries(false)}
+                aria-label="סגור"
+                className="fomo-press"
+                style={{
+                  position: 'absolute', top: 14, left: 16,
+                  width: 36, height: 36, borderRadius: '50%',
+                  background: '#F3F4F6', border: 'none', cursor: 'pointer',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}
+              >
+                <X size={18} style={{ color: '#6B7280' }} />
+              </button>
               <h3 style={{ margin: '0 0 14px', fontSize: 19, fontWeight: 900, color: '#111827', fontFamily: 'Heebo, sans-serif' }}>
                 בחר מדינות לטיול
               </h3>
               <div style={{ position: 'relative' }}>
-                <Search size={15} style={{ position: 'absolute', right: 14, top: '50%', transform: 'translateY(-50%)', color: '#9CA3AF' }} />
+                <Search size={15} style={{ position: 'absolute', right: 14, top: '50%', transform: 'translateY(-50%)', color: '#6B7280' }} />
                 <input
                   type="text" value={countrySearch}
                   onChange={e => setCountrySearch(e.target.value)}
@@ -625,12 +705,13 @@ export default function ProfileScreen({
                   return (
                     <button
                       key={code}
+                      aria-pressed={selected}
                       onClick={() => setSelectedCountries(
                         selected ? selectedCountries.filter(x => x !== code) : [...selectedCountries, code]
                       )}
                       style={{
                         display: 'flex', alignItems: 'center', gap: 9,
-                        padding: '11px 12px', borderRadius: 16, textAlign: 'right',
+                        minHeight: 44, padding: '11px 12px', borderRadius: 16, textAlign: 'right',
                         border: selected ? '2px solid #F97316' : '1.5px solid #EBEBEB',
                         background: selected ? '#FFF7ED' : '#FAFAFA',
                         cursor: 'pointer', transition: 'all 0.14s',
@@ -655,13 +736,13 @@ export default function ProfileScreen({
             }}>
               <button
                 onClick={saveCountries}
+                className="fomo-press"
                 style={{
                   width: '100%', height: 58, borderRadius: 20, border: 'none',
                   background: 'linear-gradient(135deg, #F97316, #EA580C)',
                   color: 'white', fontSize: 16, fontWeight: 900, cursor: 'pointer',
                   fontFamily: 'Heebo, sans-serif',
                   boxShadow: '0 8px 28px rgba(249,115,22,0.38)',
-                  transition: 'transform 0.12s, box-shadow 0.12s',
                 }}
               >
                 שמור ({selectedCountries.length} מדינות)

@@ -22,7 +22,7 @@ const EVENT_COLORS = [
   { id: 'pink',   hex: '#EC4899' },
   { id: 'red',    hex: '#EF4444' },
   { id: 'yellow', hex: '#EAB308' },
-  { id: 'teal',   hex: '#14B8A6' },
+  { id: 'teal',   hex: '#F97316' },
 ];
 
 const EVENT_TYPES = [

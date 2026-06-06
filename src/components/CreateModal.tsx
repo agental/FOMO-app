@@ -49,7 +49,7 @@ export function CreateModal({ onSelectEvent, onSelectPost, onSelectLocation, onC
 
           <button
             onClick={onSelectPost}
-            className="w-full p-6 bg-gradient-to-br from-emerald-500 via-teal-500 to-cyan-500 text-white rounded-3xl hover:shadow-2xl transition-all duration-300 transform hover:scale-[1.03] active:scale-[0.97] shadow-xl hover:-translate-y-1 group"
+            className="w-full p-6 bg-gradient-to-br from-emerald-500 via-orange-500 to-cyan-500 text-white rounded-3xl hover:shadow-2xl transition-all duration-300 transform hover:scale-[1.03] active:scale-[0.97] shadow-xl hover:-translate-y-1 group"
           >
             <div className="flex items-center gap-5">
               <div className="w-16 h-16 bg-white/25 backdrop-blur-sm rounded-2xl flex items-center justify-center group-hover:scale-110 transition-transform duration-300">

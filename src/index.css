@@ -62,12 +62,12 @@
   }
 
   *::-webkit-scrollbar-thumb {
-    background: linear-gradient(135deg, #14B8A6 0%, #0D9488 100%);
+    background: linear-gradient(135deg, #F97316 0%, #EA580C 100%);
     border-radius: 10px;
   }
 
   *::-webkit-scrollbar-thumb:hover {
-    background: linear-gradient(135deg, #0D9488 0%, #0F766E 100%);
+    background: linear-gradient(135deg, #EA580C 0%, #C2410C 100%);
   }
 }
 
@@ -234,10 +234,10 @@ h1, h2, h3, h4, h5, h6 {
 
 @keyframes glow-pulse {
   0%, 100% {
-    box-shadow: 0 0 20px rgba(20, 184, 166, 0.3), 0 0 40px rgba(255, 214, 10, 0.2);
+    box-shadow: 0 0 20px rgba(249, 115, 22, 0.3), 0 0 40px rgba(255, 214, 10, 0.2);
   }
   50% {
-    box-shadow: 0 0 30px rgba(20, 184, 166, 0.5), 0 0 60px rgba(255, 214, 10, 0.4);
+    box-shadow: 0 0 30px rgba(249, 115, 22, 0.5), 0 0 60px rgba(255, 214, 10, 0.4);
   }
 }
 

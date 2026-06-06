@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { User, Heart, ArrowRight, ArrowLeft, Check, Camera, Sparkles, CircleUser as UserCircle2, Cake, MapPin } from 'lucide-react';
+import { User, Heart, ArrowRight, ArrowLeft, Check, Camera, Sparkles, CircleUser as UserCircle2, Cake, MapPin, Instagram } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { COUNTRIES } from '../utils/countries';
 import { SUGGESTED_LANGUAGES, SUGGESTED_INTERESTS } from '../utils/suggestions';
@@ -273,24 +273,24 @@ export function CreateProfileWizard({ userId, onComplete, onBack }: CreateProfil
                   <div className="flex items-center w-full">
                     {index > 0 && (
                       <div className={`h-0.5 flex-1 transition-all duration-300 ${
-                        step.id <= currentStep ? 'bg-[#14B8A6]' : 'bg-gray-200'
+                        step.id <= currentStep ? 'bg-[#F97316]' : 'bg-gray-200'
                       }`} />
                     )}
                     <div className={`w-9 h-9 rounded-full flex items-center justify-center transition-all duration-300 ${
                       step.id <= currentStep
-                        ? 'bg-gradient-to-br from-[#14B8A6] to-[#0D9488] text-white shadow-md'
+                        ? 'bg-gradient-to-br from-[#F97316] to-[#EA580C] text-white shadow-md'
                         : 'bg-gray-200 text-gray-400'
-                    } ${step.id === currentStep ? 'ring-4 ring-brand-100' : ''}`}>
+                    } ${step.id === currentStep ? 'ring-4 ring-[#FFEDD5]' : ''}`}>
                       <step.icon className="w-4 h-4" />
                     </div>
                     {index < STEPS.length - 1 && (
                       <div className={`h-0.5 flex-1 transition-all duration-300 ${
-                        step.id < currentStep ? 'bg-[#14B8A6]' : 'bg-gray-200'
+                        step.id < currentStep ? 'bg-[#F97316]' : 'bg-gray-200'
                       }`} />
                     )}
                   </div>
                   <span className={`text-xs font-medium transition-colors ${
-                    step.id === currentStep ? 'text-[#14B8A6]' : 'text-gray-500'
+                    step.id === currentStep ? 'text-[#F97316]' : 'text-gray-500'
                   }`} style={{ fontFamily: 'Rubik, sans-serif' }}>
                     {step.title}
                   </span>
@@ -312,7 +312,7 @@ export function CreateProfileWizard({ userId, onComplete, onBack }: CreateProfil
                 >
                   בוא נבנה את הפרופיל שלך
                 </h1>
-                <Sparkles className="w-6 h-6 text-[#0D9488]" />
+                <Sparkles className="w-6 h-6 text-[#EA580C]" />
               </div>
               <p
                 className="text-base text-[#6B7280] max-w-md mx-auto"
@@ -325,7 +325,7 @@ export function CreateProfileWizard({ userId, onComplete, onBack }: CreateProfil
             <div className="flex flex-col items-center gap-4 mb-8">
               <div className="relative group">
                 {avatarUrl ? (
-                  <div className="w-32 h-32 rounded-full bg-gradient-to-br from-[#14B8A6] to-[#0D9488] p-1 shadow-lg">
+                  <div className="w-32 h-32 rounded-full bg-gradient-to-br from-[#F97316] to-[#EA580C] p-1 shadow-lg">
                     <img
                       src={avatarUrl}
                       alt="Profile"
@@ -333,9 +333,9 @@ export function CreateProfileWizard({ userId, onComplete, onBack }: CreateProfil
                     />
                   </div>
                 ) : (
-                  <div className="w-32 h-32 rounded-full bg-gradient-to-br from-[#14B8A6]/10 to-[#0D9488]/10 p-1 shadow-md border-2 border-dashed border-[#14B8A6]/30">
+                  <div className="w-32 h-32 rounded-full bg-gradient-to-br from-[#F97316]/10 to-[#EA580C]/10 p-1 shadow-md border-2 border-dashed border-[#F97316]/30">
                     <div className="w-full h-full rounded-full bg-white flex items-center justify-center">
-                      <Camera className="w-12 h-12 text-[#14B8A6]/40" />
+                      <Camera className="w-12 h-12 text-[#F97316]/40" />
                     </div>
                   </div>
                 )}
@@ -350,7 +350,8 @@ export function CreateProfileWizard({ userId, onComplete, onBack }: CreateProfil
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
                   disabled={isUploadingImage}
-                  className="absolute -bottom-1 -left-1 w-10 h-10 bg-gradient-to-br from-[#14B8A6] to-[#0D9488] rounded-full flex items-center justify-center shadow-lg hover:shadow-xl transition-all active:scale-95 disabled:opacity-50"
+                  aria-label="העלה תמונת פרופיל"
+                  className="absolute -bottom-1 -left-1 w-11 h-11 bg-gradient-to-br from-[#F97316] to-[#EA580C] rounded-full flex items-center justify-center shadow-lg hover:shadow-xl transition-all active:scale-95 disabled:opacity-50"
                 >
                   <Camera className="w-5 h-5 text-white" />
                 </button>
@@ -369,13 +370,13 @@ export function CreateProfileWizard({ userId, onComplete, onBack }: CreateProfil
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
                   disabled={isUploadingImage}
-                  className="text-sm font-medium text-[#14B8A6] hover:text-[#3D5FD9] transition-colors disabled:opacity-50"
+                  className="text-sm font-medium text-[#F97316] hover:text-[#EA580C] transition-colors disabled:opacity-50"
                   style={{ fontFamily: 'Rubik, sans-serif' }}
                 >
                   {avatarUrl ? 'שנה תמונה' : 'העלה תמונה'}
                 </button>
                 <p
-                  className="text-xs text-[#9CA3AF] mt-1"
+                  className="text-xs text-[#6B7280] mt-1"
                   style={{ fontFamily: 'Rubik, sans-serif' }}
                 >
                   תמונה ברורה תעזור לאנשים אחרים להכיר אותך
@@ -389,7 +390,7 @@ export function CreateProfileWizard({ userId, onComplete, onBack }: CreateProfil
                   className="flex items-center gap-2 text-sm font-semibold text-[#374151] mb-2"
                   style={{ fontFamily: 'Rubik, sans-serif' }}
                 >
-                  <UserCircle2 className="w-4 h-4 text-[#14B8A6]" />
+                  <UserCircle2 className="w-4 h-4 text-[#F97316]" />
                   שם התצוגה
                 </label>
                 <input
@@ -397,12 +398,12 @@ export function CreateProfileWizard({ userId, onComplete, onBack }: CreateProfil
                   value={displayName}
                   onChange={(e) => setDisplayName(e.target.value)}
                   required
-                  className="w-full px-4 py-3.5 rounded-2xl border border-gray-200 focus:ring-2 focus:ring-[#14B8A6]/20 focus:border-[#14B8A6] outline-none transition-all bg-gray-50 focus:bg-white text-[#1F2937]"
+                  className="w-full px-4 py-3.5 rounded-2xl border border-gray-200 focus:ring-2 focus:ring-[#F97316]/20 focus:border-[#F97316] outline-none transition-all bg-gray-50 focus:bg-white text-[#1F2937]"
                   style={{ fontFamily: 'Rubik, sans-serif' }}
                   placeholder="איך אנשים יכירו אותך?"
                 />
                 <p
-                  className="text-xs text-[#9CA3AF] mt-2"
+                  className="text-xs text-[#6B7280] mt-2"
                   style={{ fontFamily: 'Rubik, sans-serif' }}
                 >
                   השם הזה יופיע בפרופיל שלך
@@ -424,20 +425,20 @@ export function CreateProfileWizard({ userId, onComplete, onBack }: CreateProfil
                     }
                   }}
                   rows={4}
-                  className="w-full px-4 py-3.5 rounded-2xl border border-gray-200 focus:ring-2 focus:ring-[#14B8A6]/20 focus:border-[#14B8A6] outline-none transition-all resize-none bg-gray-50 focus:bg-white text-[#1F2937]"
+                  className="w-full px-4 py-3.5 rounded-2xl border border-gray-200 focus:ring-2 focus:ring-[#F97316]/20 focus:border-[#F97316] outline-none transition-all resize-none bg-gray-50 focus:bg-white text-[#1F2937]"
                   style={{ fontFamily: 'Rubik, sans-serif' }}
                   placeholder="ספר בקצרה מי אתה, מה הווייב שלך ומה אתה מחפש..."
                 />
                 <div className="flex justify-between items-center mt-2">
                   <p
-                    className="text-xs text-[#9CA3AF]"
+                    className="text-xs text-[#6B7280]"
                     style={{ fontFamily: 'Rubik, sans-serif' }}
                   >
                     תיאור קצר ומעניין
                   </p>
                   <span
                     className={`text-xs font-medium ${
-                      bio.length >= MAX_BIO_LENGTH ? 'text-[#EF4444]' : 'text-[#9CA3AF]'
+                      bio.length >= MAX_BIO_LENGTH ? 'text-[#EF4444]' : 'text-[#6B7280]'
                     }`}
                     style={{ fontFamily: 'Rubik, sans-serif' }}
                   >
@@ -451,13 +452,13 @@ export function CreateProfileWizard({ userId, onComplete, onBack }: CreateProfil
                   className="flex items-center gap-2 text-sm font-semibold text-[#374151] mb-2"
                   style={{ fontFamily: 'Rubik, sans-serif' }}
                 >
-                  <Cake className="w-4 h-4 text-[#14B8A6]" />
+                  <Cake className="w-4 h-4 text-[#F97316]" />
                   גיל
                 </label>
                 <select
                   value={age}
                   onChange={(e) => setAge(e.target.value)}
-                  className="w-full px-4 py-3.5 rounded-2xl border border-gray-200 focus:ring-2 focus:ring-[#14B8A6]/20 focus:border-[#14B8A6] outline-none transition-all bg-gray-50 focus:bg-white text-[#1F2937]"
+                  className="w-full px-4 py-3.5 rounded-2xl border border-gray-200 focus:ring-2 focus:ring-[#F97316]/20 focus:border-[#F97316] outline-none transition-all bg-gray-50 focus:bg-white text-[#1F2937]"
                   style={{ fontFamily: 'Rubik, sans-serif' }}
                 >
                   <option value="">בן כמה אתה?</option>
@@ -474,23 +475,23 @@ export function CreateProfileWizard({ userId, onComplete, onBack }: CreateProfil
                   className="flex items-center gap-2 text-sm font-semibold text-[#374151] mb-2"
                   style={{ fontFamily: 'Rubik, sans-serif' }}
                 >
-                  <span className="text-lg">📷</span>
+                  <Instagram className="w-4 h-4 text-[#F97316]" />
                   חשבון אינסטגרם
-                  <span className="text-xs text-[#9CA3AF] font-normal">(אופציונלי)</span>
+                  <span className="text-xs text-[#6B7280] font-normal">(אופציונלי)</span>
                 </label>
                 <div className="relative">
-                  <span className="absolute right-4 top-1/2 -translate-y-1/2 text-[#9CA3AF] font-medium">@</span>
+                  <span className="absolute right-4 top-1/2 -translate-y-1/2 text-[#6B7280] font-medium">@</span>
                   <input
                     type="text"
                     value={instagram}
                     onChange={(e) => setInstagram(e.target.value.replace('@', ''))}
-                    className="w-full pr-10 pl-4 py-3.5 rounded-2xl border border-gray-200 focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 outline-none transition-all bg-gray-50 focus:bg-white text-[#1F2937]"
+                    className="w-full pr-10 pl-4 py-3.5 rounded-2xl border border-gray-200 focus:ring-2 focus:ring-[#F97316]/20 focus:border-[#F97316] outline-none transition-all bg-gray-50 focus:bg-white text-[#1F2937]"
                     style={{ fontFamily: 'Rubik, sans-serif' }}
                     placeholder="username_שלך"
                   />
                 </div>
                 <p
-                  className="text-xs text-[#9CA3AF] mt-2"
+                  className="text-xs text-[#6B7280] mt-2"
                   style={{ fontFamily: 'Rubik, sans-serif' }}
                 >
                   משתמשים אחרים יוכלו להתחבר אליך דרך אינסטגרם
@@ -533,7 +534,7 @@ export function CreateProfileWizard({ userId, onComplete, onBack }: CreateProfil
                     onClick={() => toggleInterest(interest)}
                     className={`px-5 py-2.5 rounded-full text-sm font-medium transition-all ${
                       interests.includes(interest)
-                        ? 'bg-gradient-to-r from-[#14B8A6] to-[#0D9488] text-white shadow-md scale-105'
+                        ? 'bg-gradient-to-r from-[#F97316] to-[#EA580C] text-white shadow-md scale-105'
                         : 'bg-gray-100 text-gray-700 hover:bg-gray-200 active:scale-95'
                     }`}
                     style={{ fontFamily: 'Rubik, sans-serif' }}
@@ -554,14 +555,14 @@ export function CreateProfileWizard({ userId, onComplete, onBack }: CreateProfil
                       addCustomInterest();
                     }
                   }}
-                  className="flex-1 px-4 py-2.5 rounded-2xl border border-gray-200 focus:ring-2 focus:ring-[#14B8A6]/20 focus:border-[#14B8A6] outline-none transition-all text-sm bg-gray-50 focus:bg-white"
+                  className="flex-1 px-4 py-2.5 rounded-2xl border border-gray-200 focus:ring-2 focus:ring-[#F97316]/20 focus:border-[#F97316] outline-none transition-all text-sm bg-gray-50 focus:bg-white"
                   style={{ fontFamily: 'Rubik, sans-serif' }}
                   placeholder="הוסף תחום עניין נוסף..."
                 />
                 <button
                   type="button"
                   onClick={addCustomInterest}
-                  className="px-5 py-2.5 bg-gradient-to-r from-[#14B8A6] to-[#0D9488] text-white rounded-2xl hover:shadow-md transition-all text-sm font-medium active:scale-95"
+                  className="px-5 py-2.5 bg-gradient-to-r from-[#F97316] to-[#EA580C] text-white rounded-2xl hover:shadow-md transition-all text-sm font-medium active:scale-95"
                   style={{ fontFamily: 'Rubik, sans-serif' }}
                 >
                   הוסף
@@ -595,12 +596,12 @@ export function CreateProfileWizard({ userId, onComplete, onBack }: CreateProfil
                     className="flex items-center gap-2 text-sm font-semibold text-[#374151]"
                     style={{ fontFamily: 'Rubik, sans-serif' }}
                   >
-                    <MapPin className="w-4 h-4 text-[#14B8A6]" />
+                    <MapPin className="w-4 h-4 text-[#F97316]" />
                     מדינה נוכחית
                   </label>
                   {isDetectingLocation && (
-                    <span className="text-xs text-[#14B8A6] flex items-center gap-1">
-                      <div className="w-3 h-3 border-2 border-[#14B8A6] border-t-transparent rounded-full animate-spin" />
+                    <span className="text-xs text-[#F97316] flex items-center gap-1">
+                      <div className="w-3 h-3 border-2 border-[#F97316] border-t-transparent rounded-full animate-spin" />
                       מזהה מיקום...
                     </span>
                   )}
@@ -609,7 +610,7 @@ export function CreateProfileWizard({ userId, onComplete, onBack }: CreateProfil
                   value={currentCountry}
                   onChange={(e) => setCurrentCountry(e.target.value)}
                   disabled={isDetectingLocation}
-                  className="w-full px-4 py-3.5 rounded-2xl border border-gray-200 focus:ring-2 focus:ring-[#14B8A6]/20 focus:border-[#14B8A6] outline-none transition-all bg-gray-50 focus:bg-white disabled:opacity-50 disabled:cursor-wait"
+                  className="w-full px-4 py-3.5 rounded-2xl border border-gray-200 focus:ring-2 focus:ring-[#F97316]/20 focus:border-[#F97316] outline-none transition-all bg-gray-50 focus:bg-white disabled:opacity-50 disabled:cursor-wait"
                   style={{ fontFamily: 'Rubik, sans-serif' }}
                 >
                   <option value="">בחר מדינה</option>
@@ -646,7 +647,7 @@ export function CreateProfileWizard({ userId, onComplete, onBack }: CreateProfil
                       onClick={() => toggleLanguage(lang)}
                       className={`px-5 py-2.5 rounded-full text-sm font-medium transition-all ${
                         languages.includes(lang)
-                          ? 'bg-gradient-to-r from-[#14B8A6] to-[#0D9488] text-white shadow-md scale-105'
+                          ? 'bg-gradient-to-r from-[#F97316] to-[#EA580C] text-white shadow-md scale-105'
                           : 'bg-gray-100 text-gray-700 hover:bg-gray-200 active:scale-95'
                       }`}
                       style={{ fontFamily: 'Rubik, sans-serif' }}
@@ -667,14 +668,14 @@ export function CreateProfileWizard({ userId, onComplete, onBack }: CreateProfil
                         addCustomLanguage();
                       }
                     }}
-                    className="flex-1 px-4 py-2.5 rounded-2xl border border-gray-200 focus:ring-2 focus:ring-[#14B8A6]/20 focus:border-[#14B8A6] outline-none transition-all text-sm bg-gray-50 focus:bg-white"
+                    className="flex-1 px-4 py-2.5 rounded-2xl border border-gray-200 focus:ring-2 focus:ring-[#F97316]/20 focus:border-[#F97316] outline-none transition-all text-sm bg-gray-50 focus:bg-white"
                     style={{ fontFamily: 'Rubik, sans-serif' }}
                     placeholder="הוסף שפה נוספת..."
                   />
                   <button
                     type="button"
                     onClick={addCustomLanguage}
-                    className="px-5 py-2.5 bg-gradient-to-r from-[#14B8A6] to-[#0D9488] text-white rounded-2xl hover:shadow-md transition-all text-sm font-medium active:scale-95"
+                    className="px-5 py-2.5 bg-gradient-to-r from-[#F97316] to-[#EA580C] text-white rounded-2xl hover:shadow-md transition-all text-sm font-medium active:scale-95"
                     style={{ fontFamily: 'Rubik, sans-serif' }}
                   >
                     הוסף
@@ -712,7 +713,7 @@ export function CreateProfileWizard({ userId, onComplete, onBack }: CreateProfil
             <button
               onClick={handleNext}
               disabled={!canContinue() || loading}
-              className="flex-1 h-14 bg-gradient-to-r from-[#14B8A6] to-[#0D9488] text-white rounded-2xl font-bold shadow-lg hover:shadow-xl transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100 flex items-center justify-center gap-2"
+              className="flex-1 h-14 bg-gradient-to-r from-[#F97316] to-[#EA580C] text-white rounded-2xl font-bold shadow-lg hover:shadow-xl transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100 flex items-center justify-center gap-2"
               style={{ fontFamily: 'Heebo, sans-serif', fontWeight: 700 }}
             >
               {loading ? (
@@ -735,7 +736,7 @@ export function CreateProfileWizard({ userId, onComplete, onBack }: CreateProfil
           </div>
 
           <p
-            className="text-xs text-center text-[#9CA3AF]"
+            className="text-xs text-center text-[#6B7280]"
             style={{ fontFamily: 'Rubik, sans-serif' }}
           >
             🔒 המידע שלך נשמר בצורה מאובטחת
@@ -767,6 +768,11 @@ export function CreateProfileWizard({ userId, onComplete, onBack }: CreateProfil
 
         .animate-spin {
           animation: spin 1s linear infinite;
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+          .animate-slide-in { animation: none; }
+          .transition-all, .transition-colors { transition: none !important; }
         }
       `}</style>
     </div>

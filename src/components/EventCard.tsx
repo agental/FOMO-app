@@ -51,7 +51,7 @@ export function EventCard({ event, currentUserId, onAttendClick, onEdit, onDelet
 
   const getCategoryIcon = (eventType: string | null, customEmoji?: string) => {
     const colorMap: Record<string, { color: string; shadowColor: string }> = {
-      parties: { color: 'from-teal-400 to-teal-600', shadowColor: 'rgba(20, 184, 166, 0.7)' },
+      parties: { color: 'from-orange-400 to-orange-600', shadowColor: 'rgba(249, 115, 22, 0.7)' },
       food: { color: 'from-orange-400 to-orange-600', shadowColor: 'rgba(249, 115, 22, 0.7)' },
       sports: { color: 'from-blue-400 to-blue-600', shadowColor: 'rgba(59, 130, 246, 0.7)' },
       treks: { color: 'from-green-400 to-green-600', shadowColor: 'rgba(34, 197, 94, 0.7)' },

@@ -8,7 +8,7 @@
  */
 export function createLocationPinSVG(
   imageUrl: string,
-  pinColor: string = '#14B8A6',
+  pinColor: string = '#F97316',
   emoji?: string,
 ): HTMLElement {
   // exact Figma canvas
@@ -176,7 +176,7 @@ export const LOCATION_PIN_COLORS = [
   { name: 'Yellow', value: '#EAB308' },
   { name: 'Lime',   value: '#84CC16' },
   { name: 'Green',  value: '#22C55E' },
-  { name: 'Teal',   value: '#14B8A6' },
+  { name: 'Teal',   value: '#F97316' },
   { name: 'Blue',   value: '#3B82F6' },
   { name: 'Sky',    value: '#0EA5E9' },
   { name: 'Pink',   value: '#EC4899' },
