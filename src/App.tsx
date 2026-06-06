@@ -243,6 +243,10 @@ function App() {
       <CreateProfileWizard
         userId={currentUserId!}
         onComplete={() => setCurrentScreen('profileComplete')}
+        onBack={async () => {
+          await supabase.auth.signOut();
+          setCurrentScreen('auth');
+        }}
       />
     );
   }

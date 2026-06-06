@@ -7,6 +7,7 @@ import { SUGGESTED_LANGUAGES, SUGGESTED_INTERESTS } from '../utils/suggestions';
 interface CreateProfileWizardProps {
   userId: string;
   onComplete: () => void;
+  onBack?: () => void;
 }
 
 const STEPS = [
@@ -15,7 +16,7 @@ const STEPS = [
   { id: 3, title: 'סיום', icon: Check },
 ];
 
-export function CreateProfileWizard({ userId, onComplete }: CreateProfileWizardProps) {
+export function CreateProfileWizard({ userId, onComplete, onBack }: CreateProfileWizardProps) {
   const [currentStep, setCurrentStep] = useState(1);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -241,15 +242,28 @@ export function CreateProfileWizard({ userId, onComplete }: CreateProfileWizardP
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-[#FAFBFC] via-[#F8F9FB] to-[#F0F2F7] overflow-x-hidden max-w-full" dir="rtl">
-      <div className="bg-white/80 backdrop-blur-sm shadow-sm sticky top-0 z-10 border-b border-gray-100">
-        <div className="px-6 py-5">
-          <div className="flex items-center justify-between mb-6">
+      <div className="bg-white/80 backdrop-blur-sm shadow-sm sticky top-0 z-10 border-b border-gray-100 safe-area-top">
+        <div className="px-4 pt-4 pb-4">
+          <div className="flex items-center justify-between mb-5">
+            {currentStep === 1 && onBack ? (
+              <button
+                onClick={onBack}
+                className="flex items-center gap-1.5 text-sm font-semibold text-[#6B7280] bg-gray-100 hover:bg-gray-200 active:scale-95 transition-all rounded-2xl px-4 py-2.5 min-h-[44px]"
+                style={{ fontFamily: 'Rubik, sans-serif' }}
+              >
+                <ArrowLeft className="w-4 h-4" />
+                יציאה
+              </button>
+            ) : (
+              <div className="w-[80px]" />
+            )}
             <span
               className="text-sm font-medium text-[#6B7280]"
               style={{ fontFamily: 'Rubik, sans-serif' }}
             >
               שלב {currentStep} מתוך {STEPS.length}
             </span>
+            <div className="w-[80px]" />
           </div>
 
           <div className="flex items-center gap-3 mb-2">
@@ -681,7 +695,7 @@ export function CreateProfileWizard({ userId, onComplete }: CreateProfileWizardP
         )}
       </div>
 
-      <div className="fixed bottom-0 left-0 right-0 p-5 bg-white/95 backdrop-blur-md border-t border-gray-100 shadow-2xl">
+      <div className="fixed bottom-0 left-0 right-0 p-5 pb-safe bg-white/95 backdrop-blur-md border-t border-gray-100 shadow-2xl" style={{ paddingBottom: 'max(20px, env(safe-area-inset-bottom))' }}>
         <div className="flex flex-col gap-3 max-w-md mx-auto">
           <div className="flex gap-3">
             {currentStep > 1 && (

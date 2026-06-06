@@ -35,7 +35,7 @@ export function CountrySelectionScreen({
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-[#F5F7FB] to-[#E8EAF6] flex flex-col overflow-x-hidden max-w-full" dir="rtl">
-      <div className="bg-gradient-to-tr from-[#FF512F] to-[#DD2476] text-white p-6 rounded-b-3xl shadow-lg sticky top-0 z-10">
+      <div className="bg-gradient-to-tr from-[#FF512F] to-[#DD2476] text-white p-6 rounded-b-3xl shadow-lg sticky top-0 z-10 safe-area-top">
         {onBack && (
           <button
             onClick={onBack}
@@ -178,7 +178,7 @@ export function CountrySelectionScreen({
         </div>
       </div>
 
-      <div className="fixed bottom-0 left-0 right-0 p-4 bg-white border-t border-gray-200 shadow-lg">
+      <div className="fixed bottom-0 left-0 right-0 p-4 bg-white border-t border-gray-200 shadow-lg" style={{ paddingBottom: 'max(16px, env(safe-area-inset-bottom))' }}>
         <button
           onClick={onContinue}
           disabled={selectedCountries.size === 0}

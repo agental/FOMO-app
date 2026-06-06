@@ -191,7 +191,7 @@ export function ChatScreen({ conversationId, currentUserId, otherUserId, onBack 
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-brand-50/30 via-white to-brand-50/30 flex flex-col" style={{ fontFamily: 'Rubik, sans-serif' }}>
-      <div className="sticky top-0 z-10 bg-gradient-to-r from-brand-500 to-brand-600 px-6 py-4 shadow-lg">
+      <div className="sticky top-0 z-10 bg-gradient-to-r from-brand-500 to-brand-600 px-6 py-4 shadow-lg safe-area-top">
         <div className="flex items-center gap-4">
           <button
             onClick={onBack}
