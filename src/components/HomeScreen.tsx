@@ -230,9 +230,10 @@ export function HomeScreen({
 
   const activeFilterCount = (selectedInterest ? 1 : 0) + (selectedDateFilter ? 1 : 0);
 
-  const handleApplyFilters = (category: string | null, date: string | null) => {
+  const handleApplyFilters = (category: string | null, date: string | null, search: string) => {
     setSelectedInterest(category);
     setSelectedDateFilter(date);
+    setSearchQuery(search);
   };
 
   const activeCountryData = activeCountry ? COUNTRIES[activeCountry] : null;
@@ -969,6 +970,7 @@ export function HomeScreen({
         visible={showFilterSheet}
         initialCategory={selectedInterest}
         initialDate={selectedDateFilter}
+        initialSearch={searchQuery}
         onApply={handleApplyFilters}
         onClose={() => setShowFilterSheet(false)}
       />
