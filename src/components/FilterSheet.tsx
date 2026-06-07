@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { X, Check } from 'lucide-react';
+import { X, Check, Search } from 'lucide-react';
 
 const CATEGORIES = [
   { id: 'parties',   label: 'מסיבות', emoji: '🎉', color: '#A855F7' },

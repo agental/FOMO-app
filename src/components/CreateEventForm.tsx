@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Calendar, MapPin, Users, Image as ImageIcon, X, Navigation, Plus, Minus, Clock, ChevronLeft, Check } from 'lucide-react';
+import { Calendar, MapPin, Users, Image as ImageIcon, X, Navigation, Plus, Minus, Clock, ChevronLeft, Check, Tag } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '../lib/supabase';
 import { COUNTRIES } from '../utils/countries';
@@ -77,6 +77,8 @@ export function CreateEventForm({ onSuccess, onCancel, currentUserId, userCountr
   const [eventDate, setEventDate] = useState('');
   const [eventTime, setEventTime] = useState('');
   const [capacity,  setCapacity]  = useState(20);
+  const [isPaid,    setIsPaid]    = useState(false);
+  const [ticketPrice, setTicketPrice] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
   const mapContainerRef = useRef<HTMLDivElement>(null);
@@ -150,6 +152,7 @@ export function CreateEventForm({ onSuccess, onCancel, currentUserId, userCountr
         event_date: new Date(`${eventDate}T${eventTime}`).toISOString(),
         event_type: eventType, emoji: selectedEmoji, color: selectedColor,
         attendees: [], max_attendees: capacity, latitude, longitude,
+        price: isPaid && ticketPrice ? Number(ticketPrice) : null,
       });
       if (error) alert(`שגיאה: ${error.message}`);
       else { alert('האירוע נוצר בהצלחה! 🎉'); onSuccess(); }
@@ -496,6 +499,62 @@ export function CreateEventForm({ onSuccess, onCancel, currentUserId, userCountr
                   </div>
                 </div>
 
+                {/* ticket price */}
+                <div className="bg-white rounded-[20px] mb-4 shadow-sm border border-black/[0.05]">
+                  <div className="px-4 py-4">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0" style={{ background: `${accent}18` }}>
+                          <Tag className="w-4 h-4" style={{ color: accent }} />
+                        </div>
+                        <div>
+                          <p className="text-[15px] font-medium text-[#1C1C1E]">מחיר כרטיס</p>
+                          <p className="text-[12px] text-[#8E8E93]">{isPaid && ticketPrice ? `₪${ticketPrice}` : 'חינם'}</p>
+                        </div>
+                      </div>
+                      {/* toggle */}
+                      <button
+                        type="button"
+                        onClick={() => { setIsPaid(p => !p); if (isPaid) setTicketPrice(''); }}
+                        className="relative w-12 h-6 rounded-full transition-colors duration-200 flex-shrink-0"
+                        style={{ background: isPaid ? accent : '#E5E5EA' }}
+                      >
+                        <motion.div
+                          animate={{ x: isPaid ? 24 : 2 }}
+                          transition={{ type: 'spring', damping: 20, stiffness: 300 }}
+                          className="absolute top-1 w-4 h-4 bg-white rounded-full shadow-sm"
+                        />
+                      </button>
+                    </div>
+
+                    <AnimatePresence>
+                      {isPaid && (
+                        <motion.div
+                          initial={{ opacity: 0, height: 0, marginTop: 0 }}
+                          animate={{ opacity: 1, height: 'auto', marginTop: 12 }}
+                          exit={{ opacity: 0, height: 0, marginTop: 0 }}
+                          transition={{ duration: 0.2 }}
+                          className="overflow-hidden"
+                        >
+                          <div className="flex items-center gap-2 bg-[#F2F2F7] rounded-[14px] px-4 py-3">
+                            <span className="text-[22px] font-bold text-[#1C1C1E]">₪</span>
+                            <input
+                              type="number"
+                              inputMode="numeric"
+                              value={ticketPrice}
+                              onChange={e => setTicketPrice(e.target.value)}
+                              placeholder="0"
+                              min="0"
+                              className="flex-1 text-[22px] font-bold text-[#1C1C1E] placeholder-[#C7C7CC] bg-transparent outline-none"
+                            />
+                          </div>
+                          <p className="text-[11px] text-[#8E8E93] mt-2 text-center">המחיר יוצג על כרטיסית האירוע</p>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </div>
+                </div>
+
                 {/* summary card */}
                 <div className="bg-white rounded-[20px] mb-6 shadow-sm border border-black/[0.05] overflow-hidden">
                   <div className="px-4 py-3 border-b border-black/[0.06]">
@@ -507,7 +566,10 @@ export function CreateEventForm({ onSuccess, onCancel, currentUserId, userCountr
                     </div>
                     <div className="flex-1 min-w-0">
                       <p className="text-[16px] font-semibold text-[#1C1C1E] truncate">{title || '...'}</p>
-                      <p className="text-[13px] text-[#8E8E93] truncate">{city ? `📍 ${city}` : '📍 ...'} {eventDate ? `· 📅 ${new Date(eventDate).toLocaleDateString('he-IL')}` : ''}</p>
+                      <p className="text-[13px] text-[#8E8E93] truncate">
+                        {city ? `📍 ${city}` : '📍 ...'} {eventDate ? `· 📅 ${new Date(eventDate).toLocaleDateString('he-IL')}` : ''}
+                        {isPaid && ticketPrice ? ` · 🎟 ₪${ticketPrice}` : ' · 🎟 חינם'}
+                      </p>
                     </div>
                   </div>
                 </div>

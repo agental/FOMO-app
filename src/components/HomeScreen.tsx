@@ -9,6 +9,7 @@ import { CreateModal } from './CreateModal';
 import { MapCreateEventFlow } from './MapCreateEventFlow';
 import { CreateLocationForm } from './CreateLocationForm';
 import { EventDetailsModal } from './EventDetailsModal';
+import { EventCard } from './EventCard';
 import { FloatingNavBar } from './FloatingNavBar';
 import { COUNTRIES } from '../utils/countries';
 import { useEvents } from '../hooks/useEvents';
@@ -68,7 +69,6 @@ export function HomeScreen({
   const [createMode, setCreateMode] = useState<CreateMode>('none');
   const [selectedEvent, setSelectedEvent] = useState<Event | null>(null);
   const [selectedInterest, setSelectedInterest] = useState<string | null>(null);
-  const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [showFilterSheet, setShowFilterSheet] = useState(false);
   const [selectedDateFilter, setSelectedDateFilter] = useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
@@ -128,13 +128,6 @@ export function HomeScreen({
     return () => { supabase.removeChannel(requestsChannel); };
   }, [currentUserId]);
 
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && isSearchOpen) setIsSearchOpen(false);
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isSearchOpen]);
 
   const loadUserCountries = async () => {
     if (!currentUserId) return;
@@ -366,12 +359,6 @@ export function HomeScreen({
               )}
             </button>
             <button
-              onClick={() => setIsSearchOpen(!isSearchOpen)}
-              className="w-10 h-10 rounded-full hover:bg-gray-100 flex items-center justify-center transition-colors active:scale-95"
-            >
-              <Search className="w-5 h-5 text-gray-700" strokeWidth={1.5} />
-            </button>
-            <button
               onClick={() => setShowFilterSheet(true)}
               className="relative w-10 h-10 rounded-full hover:bg-gray-100 flex items-center justify-center transition-colors active:scale-95"
             >
@@ -382,32 +369,6 @@ export function HomeScreen({
             </button>
           </div>
         </div>
-
-        {/* Search bar */}
-        {isSearchOpen && (
-          <div className="px-4 pb-3 pt-2 border-t border-gray-100">
-            <div className="flex items-center gap-3 h-10 px-4 bg-gray-100 rounded-2xl">
-              <Search className="w-4 h-4 text-gray-400 flex-shrink-0" strokeWidth={1.5} />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={e => setSearchQuery(e.target.value)}
-                placeholder="חפש אירועים, פוסטים, מקומות..."
-                autoFocus
-                className="flex-1 bg-transparent text-gray-900 placeholder:text-gray-400 focus:outline-none text-sm"
-                style={{ fontFamily: 'Inter, system-ui, sans-serif' }}
-              />
-              {searchQuery && (
-                <button
-                  onClick={() => setSearchQuery('')}
-                  className="w-5 h-5 bg-gray-300 hover:bg-gray-400 rounded-full flex items-center justify-center flex-shrink-0 transition-colors"
-                >
-                  <span className="text-white text-xs font-bold leading-none">×</span>
-                </button>
-              )}
-            </div>
-          </div>
-        )}
       </header>
 
       {/* ─── Pull-to-refresh indicator ─── */}
@@ -904,77 +865,39 @@ export function HomeScreen({
                           )}
                           <div
                             onClick={() => setSelectedEvent(event)}
-                            style={{
-                              display: 'flex', alignItems: 'center', gap: 14,
-                              padding: '16px 14px', cursor: 'pointer',
-                            }}
+                            style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '16px 14px', cursor: 'pointer' }}
                           >
                             {/* Thumbnail */}
-                            <div style={{ width: 80, height: 80, flexShrink: 0, position: 'relative' }}>
-                              {/* Image */}
-                              <div style={{
-                                width: '100%', height: '100%', borderRadius: 16,
-                                overflow: 'hidden',
-                                background: cat ? `${cat.color}20` : '#F3F4F6',
-                              }}>
-                                {bg ? (
-                                  <img src={bg} alt={event.title} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                                ) : (
-                                  <div style={{
-                                    width: '100%', height: '100%',
-                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                    fontSize: 34,
-                                  }}>
-                                    {event.emoji || cat?.emoji || '📍'}
-                                  </div>
-                                )}
-                              </div>
+                            <div style={{ width: 80, height: 80, flexShrink: 0, borderRadius: 16, overflow: 'hidden', background: cat ? `${cat.color}20` : '#F3F4F6' }}>
+                              {bg ? (
+                                <img src={bg} alt={event.title} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                              ) : (
+                                <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 34 }}>
+                                  {event.emoji || cat?.emoji || '📍'}
+                                </div>
+                              )}
                             </div>
 
                             {/* Text */}
                             <div style={{ flex: 1, minWidth: 0 }}>
-                              <p style={{
-                                fontSize: 15, fontWeight: 800, color: '#111827',
-                                fontFamily: "'Heebo', sans-serif",
-                                margin: '0 0 6px', lineHeight: 1.3,
-                                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                              }}>
+                              <p style={{ fontSize: 15, fontWeight: 800, color: '#111827', fontFamily: "'Heebo', sans-serif", margin: '0 0 6px', lineHeight: 1.3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                 {event.title}
                               </p>
                               <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                                <span style={{
-                                  fontSize: 13, color: '#9CA3AF', fontWeight: 500,
-                                  display: 'flex', alignItems: 'center', gap: 4,
-                                  fontFamily: "'Heebo', sans-serif",
-                                }}>
-                                  <MapPin size={12} strokeWidth={2} />
-                                  {event.city}
+                                <span style={{ fontSize: 13, color: '#9CA3AF', fontWeight: 500, display: 'flex', alignItems: 'center', gap: 4, fontFamily: "'Heebo', sans-serif" }}>
+                                  <MapPin size={12} strokeWidth={2} />{event.city}
                                 </span>
-                                <span style={{
-                                  fontSize: 13, color: '#9CA3AF', fontWeight: 500,
-                                  display: 'flex', alignItems: 'center', gap: 4,
-                                  fontFamily: "'Heebo', sans-serif",
-                                }}>
-                                  <Clock size={12} strokeWidth={2} />
-                                  {time}
+                                <span style={{ fontSize: 13, color: '#9CA3AF', fontWeight: 500, display: 'flex', alignItems: 'center', gap: 4, fontFamily: "'Heebo', sans-serif" }}>
+                                  <Clock size={12} strokeWidth={2} />{time}
                                 </span>
                               </div>
                             </div>
 
                             {/* Attendees badge */}
-                            <div style={{
-                              display: 'flex', flexDirection: 'column',
-                              alignItems: 'center', gap: 3, flexShrink: 0,
-                            }}>
-                              <div style={{
-                                display: 'flex', alignItems: 'center', gap: 3,
-                                background: '#FFF7ED', borderRadius: 20, padding: '5px 9px',
-                              }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, flexShrink: 0 }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 3, background: '#FFF7ED', borderRadius: 20, padding: '5px 9px' }}>
                                 <Users size={11} color="#F97316" strokeWidth={2} />
-                                <span style={{
-                                  fontSize: 12, fontWeight: 700, color: '#F97316',
-                                  fontFamily: "'Heebo', sans-serif",
-                                }}>
+                                <span style={{ fontSize: 12, fontWeight: 700, color: '#F97316', fontFamily: "'Heebo', sans-serif" }}>
                                   {event.attendees.length}
                                 </span>
                               </div>

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { X, MapPin, Lock, Globe, Users, Image as ImageIcon, Upload, ChevronLeft, Check } from 'lucide-react';
+import { X, MapPin, Lock, Globe, Users, Image as ImageIcon, Upload, ChevronLeft, Check, Tag } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import mapboxgl from 'mapbox-gl';
 import { EventService } from '../services/eventService';
@@ -84,6 +84,7 @@ export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initial
   /* step 1 */
   const [eventType,     setEventType]     = useState('parties');
   const [selectedEmoji, setSelectedEmoji] = useState('🎉');
+  const [description,   setDescription]   = useState('');
   const [title,         setTitle]         = useState('');
   const [emojiOpen,     setEmojiOpen]     = useState(false);
 
@@ -102,6 +103,8 @@ export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initial
   /* step 4 */
   const [maxAttendees,  setMaxAttendees]  = useState(20);
   const [noLimit,       setNoLimit]       = useState(false);
+  const [isPaid,        setIsPaid]        = useState(false);
+  const [ticketPrice,   setTicketPrice]   = useState('');
   const [imageUrl,      setImageUrl]      = useState('');
   const [imageFile,     setImageFile]     = useState<File|null>(null);
   const [imagePreview,  setImagePreview]  = useState('');
@@ -209,7 +212,7 @@ export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initial
         finalImage = imageUrl;
       }
       const created = await EventService.createEvent({
-        user_id: userId, title, description: title,
+        user_id: userId, title, description: description || title,
         emoji: selectedEmoji, event_type: eventType,
         latitude, longitude,
         city: detectedCity || locationName || 'Unknown',
@@ -218,6 +221,7 @@ export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initial
         event_date: new Date(`${selectedDay}T${selectedTime}`).toISOString(),
         is_private: isPrivate, max_attendees: noLimit ? 9999 : maxAttendees,
         image_url: finalImage || undefined,
+        price: isPaid && ticketPrice ? Number(ticketPrice) : null,
       });
       if (!created) throw new Error();
       onSuccess(created);
@@ -228,8 +232,9 @@ export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initial
 
   const handleClose = () => {
     mapRef.current?.remove(); mapRef.current = null;
-    setStep(1); setTitle(''); setSelectedEmoji('🎉'); setEventType('parties');
+    setStep(1); setTitle(''); setDescription(''); setSelectedEmoji('🎉'); setEventType('parties');
     setSelectedDay(''); setSelectedTime('20:00'); setIsPrivate(false); setMaxAttendees(20);
+    setIsPaid(false); setTicketPrice('');
     setImageUrl(''); setImageFile(null); setImagePreview(''); setLocationName('');
     setDetectedCountry(null); setLatitude(initialLocation?.latitude||null); setLongitude(initialLocation?.longitude||null);
     onClose();
@@ -397,6 +402,23 @@ export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initial
                     {title && <p className="text-[11px] text-[#C7C7CC] mt-1 text-left">{title.length}/60</p>}
                   </div>
                 </div>
+
+                {/* description input */}
+                <div className="bg-white rounded-[20px] shadow-sm border border-black/[0.05] overflow-hidden">
+                  <div className="px-4 py-4">
+                    <p className="text-[11px] font-semibold text-[#8E8E93] uppercase tracking-wider mb-2">תיאור האירוע</p>
+                    <textarea
+                      value={description}
+                      onChange={e => setDescription(e.target.value)}
+                      maxLength={300}
+                      rows={3}
+                      placeholder="ספר על האירוע — מה יהיה, למי מתאים, מה להביא..."
+                      className="w-full text-[15px] text-[#1C1C1E] placeholder-[#D1D1D6] bg-transparent outline-none resize-none leading-relaxed"
+                      style={{ fontFamily: 'Heebo, sans-serif' }}
+                    />
+                    {description && <p className="text-[11px] text-[#C7C7CC] mt-1 text-left">{description.length}/300</p>}
+                  </div>
+                </div>
               </motion.div>
             )}
 
@@ -553,6 +575,57 @@ export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initial
                             </motion.button>
                           ))}
                         </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+
+                {/* ticket price */}
+                <div className="bg-white rounded-[20px] p-4 shadow-sm border border-black/[0.05]">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0" style={{ background: `${accent}18` }}>
+                        <Tag className="w-4 h-4" style={{ color: accent }} />
+                      </div>
+                      <div>
+                        <p className="text-[15px] font-semibold text-[#1C1C1E]">מחיר כרטיס</p>
+                        <p className="text-[11px] text-[#8E8E93]">{isPaid && ticketPrice ? `₪${ticketPrice}` : 'חינם'}</p>
+                      </div>
+                    </div>
+                    <div dir="ltr" className="relative w-[50px] h-[30px] rounded-full flex-shrink-0 overflow-hidden transition-colors duration-200 cursor-pointer"
+                      style={{ background: isPaid ? accent : '#D1D1D6' }}
+                      onClick={() => { setIsPaid(v => !v); if (isPaid) setTicketPrice(''); }}>
+                      <motion.div
+                        animate={{ x: isPaid ? 22 : 2 }}
+                        transition={{ type: 'spring', damping: 22, stiffness: 320 }}
+                        className="absolute top-[3px] left-0 w-[24px] h-[24px] bg-white rounded-full"
+                        style={{ boxShadow: '0 1px 4px rgba(0,0,0,0.25)' }}
+                      />
+                    </div>
+                  </div>
+
+                  <AnimatePresence>
+                    {isPaid && (
+                      <motion.div
+                        initial={{ opacity: 0, height: 0, marginTop: 0 }}
+                        animate={{ opacity: 1, height: 'auto', marginTop: 12 }}
+                        exit={{ opacity: 0, height: 0, marginTop: 0 }}
+                        transition={{ duration: 0.2 }}
+                        className="overflow-hidden"
+                      >
+                        <div className="flex items-center gap-2 bg-[#F2F2F7] rounded-[14px] px-4 py-3">
+                          <span className="text-[22px] font-bold text-[#1C1C1E]">₪</span>
+                          <input
+                            type="number"
+                            inputMode="numeric"
+                            value={ticketPrice}
+                            onChange={e => setTicketPrice(e.target.value)}
+                            placeholder="0"
+                            min="0"
+                            className="flex-1 text-[22px] font-bold text-[#1C1C1E] placeholder-[#C7C7CC] bg-transparent outline-none"
+                          />
+                        </div>
+                        <p className="text-[11px] text-[#8E8E93] mt-2 text-center">המחיר יוצג על כרטיסית האירוע</p>
                       </motion.div>
                     )}
                   </AnimatePresence>
