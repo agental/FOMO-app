@@ -44,7 +44,7 @@ const eventTypeLabels: Record<string, string> = {
 function generateColorFromId(id: string, index: number): string {
   const colors = [
     'bg-gradient-to-br from-blue-400 to-blue-600',
-    'bg-gradient-to-br from-teal-400 to-teal-600',
+    'bg-gradient-to-br from-orange-400 to-orange-600',
     'bg-gradient-to-br from-amber-400 to-amber-600',
     'bg-gradient-to-br from-green-400 to-green-600',
     'bg-gradient-to-br from-yellow-400 to-yellow-600',

@@ -198,6 +198,13 @@ export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initial
         setUploadingImage(true);
         finalImage = await EventService.uploadEventImage(userId, imageFile).catch(() => null);
         setUploadingImage(false);
+        // If the user picked an image but the upload failed, stop and let them retry
+        // instead of silently creating the event without a picture.
+        if (!finalImage) {
+          alert('שגיאה בהעלאת התמונה. נסה שוב או בחר תמונה אחרת.');
+          setSubmitting(false);
+          return;
+        }
       } else if (imageUrl) {
         finalImage = imageUrl;
       }

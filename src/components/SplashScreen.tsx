@@ -166,7 +166,7 @@ export function SplashScreen({ onComplete }: { onComplete: () => void }) {
       <div style={{
         position: 'absolute', bottom: '-15%', left: '-10%', pointerEvents: 'none',
         width: '55vw', height: '55vw', borderRadius: '50%',
-        background: 'radial-gradient(circle, rgba(0,200,190,0.07) 0%, transparent 65%)',
+        background: 'radial-gradient(circle, rgba(249,115,22,0.05) 0%, transparent 65%)',
       }} />
       <div style={{
         position: 'absolute', top: '-12%', right: '-10%', pointerEvents: 'none',

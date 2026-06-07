@@ -404,7 +404,7 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
                       style={{
                         background: isExpanded
                           ? 'linear-gradient(135deg, #F97316, #EA580C)'
-                          : 'linear-gradient(135deg, #14B8A6, #0D9488)',
+                          : 'linear-gradient(135deg, #F97316, #EA580C)',
                         animation: isExpanded ? 'country-ring-pulse 1.4s ease-in-out infinite' : 'none',
                         transition: 'background 0.25s',
                       }}
@@ -600,7 +600,7 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
                       {isUnread ? (
                         <div
                           className="w-[52px] h-[52px] rounded-full p-[2px] flex items-center justify-center"
-                          style={{ background: 'linear-gradient(135deg, #14B8A6, #0D9488)' }}
+                          style={{ background: 'linear-gradient(135deg, #F97316, #EA580C)' }}
                         >
                           <div className="w-full h-full bg-white rounded-full overflow-hidden flex items-center justify-center">
                             <UserAvatar
@@ -624,7 +624,7 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
                       {isUnread && (
                         <div
                           className="absolute -bottom-0.5 -left-0.5 min-w-[20px] h-5 px-1 rounded-full flex items-center justify-center border-2 border-[#F8F9FB]"
-                          style={{ background: 'linear-gradient(135deg, #14B8A6, #0D9488)' }}
+                          style={{ background: 'linear-gradient(135deg, #F97316, #EA580C)' }}
                         >
                           <span className="text-[10px] font-bold text-white leading-none">
                             {conversation.unread_count > 9 ? '9+' : conversation.unread_count}
