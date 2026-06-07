@@ -29,7 +29,7 @@ interface MapScreenProps {
   selectedCountries?: string[];
   onBack?: () => void;
   onNavigateToHome?: () => void;
-  onNavigateToSettings?: () => void;
+  onNavigateToMyEvents?: () => void;
   onNavigateToMessages?: () => void;
   onNavigateToUserProfile?: (userId: string) => void;
   onMessageUser?: (userId: string) => void;
@@ -52,7 +52,7 @@ export function MapScreen({
   selectedCountries = [],
   onBack,
   onNavigateToHome,
-  onNavigateToSettings,
+  onNavigateToMyEvents,
   onNavigateToMessages,
   onNavigateToUserProfile,
 }: MapScreenProps) {
@@ -722,7 +722,7 @@ export function MapScreen({
         onMapClick={() => {}}
         onCreateClick={() => setShowCreateActionSheet(true)}
         onChatClick={onNavigateToMessages}
-        onSettingsClick={onNavigateToSettings}
+        onMyEventsClick={onNavigateToMyEvents}
       />
 
       {/* ── Bottom sheets & modals ── */}

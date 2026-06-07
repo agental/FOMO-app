@@ -29,7 +29,7 @@ type RequestsScreenProps = {
   onMapClick?: () => void;
   onCreateClick?: () => void;
   onMessagesClick?: () => void;
-  onSettingsClick?: () => void;
+  onMyEventsClick?: () => void;
 };
 
 type MeetupPendingRequest = {
@@ -40,7 +40,7 @@ type MeetupPendingRequest = {
   profile: { id: string; display_name: string; avatar_url: string | null };
 };
 
-export function RequestsScreen({ currentUserId, onBack, onHomeClick, onMapClick, onCreateClick, onMessagesClick, onSettingsClick }: RequestsScreenProps) {
+export function RequestsScreen({ currentUserId, onBack, onHomeClick, onMapClick, onCreateClick, onMessagesClick, onMyEventsClick }: RequestsScreenProps) {
   const [joinRequests, setJoinRequests] = useState<JoinRequest[]>([]);
   const [meetupRequests, setMeetupRequests] = useState<MeetupPendingRequest[]>([]);
   const [loading, setLoading] = useState(true);
@@ -387,7 +387,7 @@ export function RequestsScreen({ currentUserId, onBack, onHomeClick, onMapClick,
         onMapClick={onMapClick}
         onCreateClick={onCreateClick}
         onChatClick={onMessagesClick}
-        onSettingsClick={onSettingsClick}
+        onMyEventsClick={onMyEventsClick}
       />
     </div>
   );

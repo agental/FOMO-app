@@ -28,6 +28,31 @@ export default {
           800: '#92400E',
           900: '#78350F',
         },
+        /* ── Semantic layer (mirrors the CSS tokens in index.css) ── */
+        primary: {
+          DEFAULT: '#F97316',
+          dark:    '#EA580C',
+          darker:  '#C2410C',
+          tint:    '#FFF7ED',
+        },
+        surface: {
+          DEFAULT: '#FFFFFF',
+          app:     '#F8FAFB',
+          dark:    '#0C0C10',
+        },
+        content: {
+          DEFAULT:   '#0A122A',
+          heading:   '#111827',
+          secondary: '#374151',
+          muted:     '#6B7280',
+        },
+        success: '#10B981',
+        danger:  '#EF4444',
+        warning: '#F59E0B',
+      },
+      fontFamily: {
+        heading: ['Heebo', 'sans-serif'],
+        body: ['Rubik', 'Heebo', 'sans-serif'],
       },
     },
   },

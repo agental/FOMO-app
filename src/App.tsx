@@ -13,10 +13,11 @@ import { MessagesScreen } from './components/MessagesScreen';
 import { RequestsScreen } from './components/RequestsScreen';
 import { ChatScreen } from './components/ChatScreen';
 import { SettingsScreen } from './components/SettingsScreen';
+import { MyEventsScreen } from './components/MyEventsScreen';
 import { supabase } from './lib/supabase';
 
 function App() {
-  type Screen = 'auth' | 'onboarding' | 'createProfile' | 'profileComplete' | 'country' | 'home' | 'profile' | 'map' | 'admin' | 'userProfile' | 'messages' | 'requests' | 'chat' | 'settings';
+  type Screen = 'auth' | 'onboarding' | 'createProfile' | 'profileComplete' | 'country' | 'home' | 'profile' | 'map' | 'admin' | 'userProfile' | 'messages' | 'requests' | 'chat' | 'settings' | 'myEvents';
   const [splashDone, setSplashDone] = useState(false);
   const [currentScreen, setCurrentScreen] = useState<Screen>('auth');
   const [authChecked, setAuthChecked] = useState(false);
@@ -273,6 +274,26 @@ function App() {
         onBack={() => setCurrentScreen('home')}
         currentUserId={currentUserId}
         onNavigateToMap={() => setCurrentScreen('map')}
+        onNavigateToMyEvents={() => setCurrentScreen('myEvents')}
+        onNavigateToSettings={() => setCurrentScreen('settings')}
+        onNavigateToMessages={() => setCurrentScreen('messages')}
+      />
+    );
+  }
+
+  if (currentScreen === 'myEvents') {
+    return (
+      <MyEventsScreen
+        currentUserId={currentUserId!}
+        onBack={() => setCurrentScreen('home')}
+        onHomeClick={() => setCurrentScreen('home')}
+        onMapClick={() => setCurrentScreen('map')}
+        onCreateClick={() => setCurrentScreen('home')}
+        onMessagesClick={() => setCurrentScreen('messages')}
+        onNavigateToUserProfile={(userId: string) => {
+          setViewingUserId(userId);
+          setCurrentScreen('userProfile');
+        }}
       />
     );
   }
@@ -284,7 +305,7 @@ function App() {
         selectedCountries={Array.from(selectedCountries)}
         onBack={() => setCurrentScreen('home')}
         onNavigateToHome={() => setCurrentScreen('home')}
-        onNavigateToSettings={() => setCurrentScreen('settings')}
+        onNavigateToMyEvents={() => setCurrentScreen('myEvents')}
         onNavigateToMessages={() => setCurrentScreen('messages')}
         onNavigateToUserProfile={(userId: string) => {
           setViewingUserId(userId);
@@ -329,7 +350,7 @@ function App() {
         onHomeClick={() => setCurrentScreen('home')}
         onMapClick={() => setCurrentScreen('map')}
         onCreateClick={() => {}}
-        onSettingsClick={() => setCurrentScreen('settings')}
+        onMyEventsClick={() => setCurrentScreen('myEvents')}
       />
     );
   }
@@ -343,7 +364,7 @@ function App() {
         onMapClick={() => setCurrentScreen('map')}
         onCreateClick={() => {}}
         onMessagesClick={() => setCurrentScreen('messages')}
-        onSettingsClick={() => setCurrentScreen('settings')}
+        onMyEventsClick={() => setCurrentScreen('myEvents')}
       />
     );
   }
@@ -356,6 +377,7 @@ function App() {
         onNavigateToHome={() => setCurrentScreen('home')}
         onNavigateToMap={() => setCurrentScreen('map')}
         onNavigateToMessages={() => setCurrentScreen('messages')}
+        onNavigateToMyEvents={() => setCurrentScreen('myEvents')}
         onSignOut={() => setCurrentScreen('auth')}
       />
     );
@@ -379,7 +401,7 @@ function App() {
       onNavigateToAdmin={() => setCurrentScreen('admin')}
       onNavigateToMessages={() => setCurrentScreen('messages')}
       onNavigateToRequests={() => setCurrentScreen('requests')}
-      onNavigateToSettings={() => setCurrentScreen('settings')}
+      onNavigateToMyEvents={() => setCurrentScreen('myEvents')}
       onNavigateToCountrySelection={navigateToCountrySelection}
       onNavigateToUserProfile={(userId: string) => {
         setViewingUserId(userId);

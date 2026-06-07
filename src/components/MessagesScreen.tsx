@@ -131,7 +131,7 @@ type MessagesScreenProps = {
   onHomeClick?: () => void;
   onMapClick?: () => void;
   onCreateClick?: () => void;
-  onSettingsClick?: () => void;
+  onMyEventsClick?: () => void;
 };
 
 const DEMO_COUNTRIES = ['TH', 'JP', 'IT', 'FR', 'US', 'GR'];
@@ -148,7 +148,7 @@ type GroupChat = {
   unreadCount: number;
 };
 
-export function MessagesScreen({ currentUserId, onBack, onConversationClick, onHomeClick, onMapClick, onCreateClick, onSettingsClick }: MessagesScreenProps) {
+export function MessagesScreen({ currentUserId, onBack, onConversationClick, onHomeClick, onMapClick, onCreateClick, onMyEventsClick }: MessagesScreenProps) {
   const [conversations,   setConversations]   = useState<Conversation[]>([]);
   const [groupChats,      setGroupChats]      = useState<GroupChat[]>([]);
   const [loading,         setLoading]         = useState(true);
@@ -677,7 +677,7 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
         onMapClick={onMapClick}
         onCreateClick={onCreateClick}
         onChatClick={onBack}
-        onSettingsClick={onSettingsClick}
+        onMyEventsClick={onMyEventsClick}
       />
 
       {/* City group chat overlay */}

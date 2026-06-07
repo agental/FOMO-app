@@ -9,6 +9,7 @@ interface SettingsScreenProps {
   onNavigateToHome?: () => void;
   onNavigateToMap?: () => void;
   onNavigateToMessages?: () => void;
+  onNavigateToMyEvents?: () => void;
   onSignOut?: () => void;
 }
 
@@ -26,6 +27,7 @@ export function SettingsScreen({
   onNavigateToHome,
   onNavigateToMap,
   onNavigateToMessages,
+  onNavigateToMyEvents,
   onSignOut,
 }: SettingsScreenProps) {
   const [signingOut, setSigningOut] = useState(false);
@@ -176,7 +178,7 @@ export function SettingsScreen({
         onHomeClick={onNavigateToHome}
         onMapClick={onNavigateToMap}
         onChatClick={onNavigateToMessages}
-        onSettingsClick={() => {}}
+        onMyEventsClick={onNavigateToMyEvents}
       />
     </div>
   );

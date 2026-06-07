@@ -28,7 +28,7 @@ interface HomeScreenProps {
   onNavigateToUserProfile?: (userId: string) => void;
   onMessageUser?: (userId: string) => void;
   onNavigateToCountrySelection?: () => void;
-  onNavigateToSettings?: () => void;
+  onNavigateToMyEvents?: () => void;
   initialCountries?: string[];
   currentUserId?: string | null;
 }
@@ -56,7 +56,7 @@ export function HomeScreen({
   onNavigateToRequests,
   onNavigateToUserProfile,
   onNavigateToCountrySelection,
-  onNavigateToSettings,
+  onNavigateToMyEvents,
   initialCountries,
   currentUserId: propUserId,
 }: HomeScreenProps = {}) {
@@ -1001,7 +1001,7 @@ export function HomeScreen({
         onMapClick={onNavigateToMap}
         onCreateClick={() => setCreateMode('select')}
         onChatClick={onNavigateToMessages}
-        onSettingsClick={onNavigateToSettings}
+        onMyEventsClick={onNavigateToMyEvents}
       />
 
       {/* ─── Modals ─────────────────────────────────── */}

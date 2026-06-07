@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
-import { ArrowRight, LogOut, MessageCircle, Edit2, Search, Check, Camera, MapPin, Globe, Loader2, Heart, Ticket, Plane, CalendarDays, X, Cake } from 'lucide-react';
+import { ArrowRight, LogOut, MessageCircle, Edit2, Search, Check, Camera, MapPin, Globe, Loader2, Heart, Ticket, X, Cake, Settings, ChevronLeft, Plus } from 'lucide-react';
 import { supabase, type User } from '../lib/supabase';
 import { flagEmoji } from '../utils/flags';
 import { COUNTRIES } from '../utils/countries';
+import { SUGGESTED_LANGUAGES, SUGGESTED_INTERESTS } from '../utils/suggestions';
 import { FloatingNavBar } from './FloatingNavBar';
 import { CountriesVisitedCard } from './CountriesVisitedCard';
 
@@ -10,6 +11,9 @@ interface ProfileScreenProps {
   onBack: () => void;
   currentUserId?: string | null;
   onNavigateToMap?: () => void;
+  onNavigateToMessages?: () => void;
+  onNavigateToMyEvents?: () => void;
+  onNavigateToSettings?: () => void;
   viewUserId?: string;
   onMessageUser?: (otherUserId: string) => void;
 }
@@ -64,29 +68,47 @@ function calcCompletion(p: User): number {
   return Math.min(s, 100);
 }
 
-function SectionCard({ label, icon, children }: { label: string; icon: React.ReactNode; children: React.ReactNode }) {
+function SectionCard({ label, icon, children, noMargin, onEdit }: { label: string; icon: React.ReactNode; children: React.ReactNode; noMargin?: boolean; onEdit?: () => void }) {
   return (
     <div style={{
-      background: '#fff', borderRadius: 22,
+      background: 'var(--color-surface)', borderRadius: 'var(--radius-lg)',
       padding: '18px 18px 20px',
-      boxShadow: '0 1px 3px rgba(0,0,0,0.04), 0 4px 20px rgba(0,0,0,0.06)',
-      marginBottom: 12,
+      boxShadow: 'var(--shadow-card)',
+      marginBottom: noMargin ? 0 : 12,
+      height: noMargin ? '100%' : undefined,
     }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
-        <div style={{
-          width: 34, height: 34, borderRadius: 11,
-          background: 'linear-gradient(135deg, #FFF7ED, #FFEDD5)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          flexShrink: 0,
-          border: '1px solid rgba(249,115,22,0.12)',
-        }}>
-          {icon}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+          <div style={{
+            width: 34, height: 34, borderRadius: 11,
+            background: 'linear-gradient(135deg, #FFF7ED, #FFEDD5)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            flexShrink: 0,
+            border: '1px solid rgba(249,115,22,0.12)',
+          }}>
+            {icon}
+          </div>
+          <span style={{
+            fontSize: 11, fontWeight: 800, color: 'var(--color-text-muted)',
+            textTransform: 'uppercase', letterSpacing: '0.1em',
+            fontFamily: 'Heebo, sans-serif',
+          }}>{label}</span>
         </div>
-        <span style={{
-          fontSize: 11, fontWeight: 800, color: '#6B7280',
-          textTransform: 'uppercase', letterSpacing: '0.1em',
-          fontFamily: 'Heebo, sans-serif',
-        }}>{label}</span>
+        {onEdit && (
+          <button
+            type="button"
+            onClick={onEdit}
+            aria-label={`עריכת ${label}`}
+            className="fomo-press"
+            style={{
+              width: 32, height: 32, borderRadius: 10, flexShrink: 0,
+              background: '#F9FAFB', border: '1.5px solid var(--color-border)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
+            }}
+          >
+            <Edit2 size={13} style={{ color: 'var(--color-text-muted)' }} />
+          </button>
+        )}
       </div>
       {children}
     </div>
@@ -102,7 +124,7 @@ const INTEREST_EMOJI: Record<string, string> = {
 };
 
 export default function ProfileScreen({
-  onBack, currentUserId, onNavigateToMap, viewUserId, onMessageUser,
+  onBack, currentUserId, onNavigateToMap, onNavigateToMessages, onNavigateToMyEvents, onNavigateToSettings, viewUserId, onMessageUser,
 }: ProfileScreenProps) {
   const [profile,              setProfile]              = useState<User | null>(null);
   const [eventsCount,          setEventsCount]          = useState(0);
@@ -111,6 +133,9 @@ export default function ProfileScreen({
   const [selectedCountries,    setSelectedCountries]    = useState<string[]>([]);
   const [countrySearch,        setCountrySearch]        = useState('');
   const [uploadingAvatar,      setUploadingAvatar]      = useState(false);
+  const [editField,            setEditField]            = useState<'languages' | 'interests' | null>(null);
+  const [editValues,           setEditValues]           = useState<string[]>([]);
+  const [editCustom,           setEditCustom]           = useState('');
   const avatarInputRef = useRef<HTMLInputElement>(null);
 
   const targetUserId = viewUserId || currentUserId;
@@ -178,6 +203,25 @@ export default function ProfileScreen({
     setIsSelectingCountries(false);
   };
 
+  /* ── Section editor (languages / interests) ── */
+  const openEditor = (field: 'languages' | 'interests') => {
+    setEditField(field);
+    setEditValues((field === 'languages' ? profile?.languages : profile?.interests) || []);
+    setEditCustom('');
+  };
+  const toggleEditValue = (v: string) =>
+    setEditValues(prev => (prev.includes(v) ? prev.filter(x => x !== v) : [...prev, v]));
+  const addEditCustom = () => {
+    const v = editCustom.trim();
+    if (v && !editValues.includes(v)) { setEditValues(prev => [...prev, v]); setEditCustom(''); }
+  };
+  const saveEditor = async () => {
+    if (!currentUserId || !editField) return;
+    await supabase.from('users').update({ [editField]: editValues }).eq('id', currentUserId);
+    setProfile(p => (p ? { ...p, [editField]: editValues } : p));
+    setEditField(null);
+  };
+
   /* ── loading ── */
   if (loading) return (
     <div style={{ minHeight: '100dvh', background: '#0C0C10', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -193,7 +237,6 @@ export default function ProfileScreen({
   );
 
   const completion  = calcCompletion(profile);
-  const memberSince = new Date(profile.created_at).toLocaleDateString('he-IL', { year: 'numeric', month: 'short' });
 
   /* ═══════════════════════════════════════════════════ */
   return (
@@ -213,7 +256,12 @@ export default function ProfileScreen({
       {/* ══ HERO ══ */}
       <div style={{
         position: 'relative', overflow: 'hidden',
-        background: '#0C0C10',
+        background: `
+          radial-gradient(120% 80% at 82% -10%, rgba(249,115,22,0.20), transparent 52%),
+          radial-gradient(110% 70% at 0% 18%, rgba(234,88,12,0.12), transparent 56%),
+          radial-gradient(90% 60% at 50% 120%, rgba(251,146,60,0.10), transparent 60%),
+          #0A0A0E
+        `,
         paddingTop: 'max(16px, env(safe-area-inset-top))',
         paddingBottom: 52,
       }}>
@@ -250,6 +298,17 @@ export default function ProfileScreen({
           </button>
 
           <div style={{ display: 'flex', gap: 8 }}>
+            {isOwnProfile && (
+              <button onClick={onNavigateToSettings} aria-label="הגדרות" className="fomo-press" style={{
+                width: 44, height: 44, borderRadius: '50%',
+                background: 'rgba(255,255,255,0.07)',
+                border: '1px solid rgba(255,255,255,0.1)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                cursor: 'pointer', backdropFilter: 'blur(8px)',
+              }}>
+                <Settings size={16} style={{ color: 'rgba(255,255,255,0.75)' }} />
+              </button>
+            )}
             {isOwnProfile && (
               <button onClick={handleLogout} aria-label="התנתק" className="fomo-press" style={{
                 width: 44, height: 44, borderRadius: '50%',
@@ -417,27 +476,31 @@ export default function ProfileScreen({
         position: 'relative',
       }}>
 
-        {/* Stats strip */}
-        <div style={{
-          background: '#fff',
-          borderRadius: 22,
-          display: 'grid', gridTemplateColumns: '1fr 1px 1fr 1px 1fr',
-          overflow: 'hidden',
-          boxShadow: '0 1px 3px rgba(0,0,0,0.04), 0 6px 24px rgba(0,0,0,0.07)',
-          marginBottom: 12,
-        }}>
-          {[
-            { value: eventsCount,                            label: 'אירועים', icon: <Ticket size={20} style={{ color: '#F97316' }} /> },
-            { value: profile.visited_countries?.length || 0, label: 'מדינות',  icon: <Plane size={20} style={{ color: '#F97316' }} /> },
-            { value: memberSince,                             label: 'חבר מאז', icon: <CalendarDays size={20} style={{ color: '#F97316' }} /> },
-          ].flatMap(({ value, label, icon }, i) => [
-            <div key={label} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '20px 6px' }}>
-              <div style={{ height: 26, display: 'flex', alignItems: 'center', marginBottom: 5 }}>{icon}</div>
-              <span style={{ fontSize: 17, fontWeight: 900, color: '#111827', fontFamily: 'Heebo, sans-serif', lineHeight: 1 }}>{value}</span>
-              <span style={{ fontSize: 10.5, fontWeight: 700, color: '#6B7280', fontFamily: 'Heebo, sans-serif', marginTop: 4 }}>{label}</span>
-            </div>,
-            i < 2 ? <div key={`d${i}`} style={{ background: '#F3F4F6' }} /> : null,
-          ])}
+        {/* Events — full-width tile, taps through to My Events */}
+        <div
+          onClick={isOwnProfile ? onNavigateToMyEvents : undefined}
+          role={isOwnProfile ? 'button' : undefined}
+          aria-label={isOwnProfile ? 'האירועים שלי' : undefined}
+          className={`animate-card-entrance fomo-animated${isOwnProfile ? ' fomo-press' : ''}`}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 12,
+            background: 'var(--color-surface)', borderRadius: 'var(--radius-lg)',
+            padding: '14px 16px', marginBottom: 12, boxShadow: 'var(--shadow-card)',
+            cursor: isOwnProfile ? 'pointer' : 'default',
+          }}
+        >
+          <div style={{
+            width: 44, height: 44, borderRadius: 14, flexShrink: 0,
+            background: 'var(--color-primary-tint)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+            <Ticket size={22} style={{ color: 'var(--color-primary)' }} />
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 20, fontWeight: 900, color: 'var(--color-text-heading)', fontFamily: 'Heebo, sans-serif', lineHeight: 1 }}>{eventsCount}</div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--color-text-muted)', fontFamily: 'Heebo, sans-serif', marginTop: 4 }}>אירועים</div>
+          </div>
+          {isOwnProfile && <ChevronLeft size={18} style={{ color: 'var(--color-primary)', opacity: 0.6, flexShrink: 0 }} />}
         </div>
 
         {/* Action buttons — viewing other user */}
@@ -493,10 +556,10 @@ export default function ProfileScreen({
 
         {/* Profile completion */}
         {isOwnProfile && completion < 100 && (
-          <div style={{
-            background: '#fff', borderRadius: 22, padding: '18px 18px 20px',
-            marginBottom: 12,
-            boxShadow: '0 1px 3px rgba(0,0,0,0.04), 0 4px 20px rgba(0,0,0,0.06)',
+          <div className="animate-card-entrance fomo-animated" style={{
+            background: 'var(--color-surface)', borderRadius: 'var(--radius-lg)', padding: '18px 18px 20px',
+            marginBottom: 12, animationDelay: '60ms',
+            boxShadow: 'var(--shadow-card)',
             border: '1.5px solid rgba(249,115,22,0.15)',
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 14 }}>
@@ -531,61 +594,95 @@ export default function ProfileScreen({
           </div>
         )}
 
-        {/* Languages */}
-        {profile.languages && profile.languages.length > 0 && (
-          <SectionCard label="שפות" icon={<MessageCircle size={16} style={{ color: '#F97316' }} />}>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-              {profile.languages.map((lang: string) => (
-                <span key={lang} style={{
-                  padding: '8px 16px', borderRadius: 30,
-                  background: 'linear-gradient(135deg, #F97316, #EA580C)',
-                  color: 'white', fontSize: 13, fontWeight: 700,
-                  fontFamily: 'Heebo, sans-serif',
-                  boxShadow: '0 3px 12px rgba(249,115,22,0.32)',
-                }}>
-                  {lang}
-                </span>
-              ))}
-            </div>
-          </SectionCard>
-        )}
+        {/* Languages + Interests — bento pair (editable) */}
+        {(() => {
+          const showLang = isOwnProfile || (profile.languages?.length ?? 0) > 0;
+          const showInterests = isOwnProfile || (profile.interests?.length ?? 0) > 0;
+          if (!showLang && !showInterests) return null;
 
-        {/* Interests */}
-        {profile.interests && profile.interests.length > 0 && (
-          <SectionCard label="תחומי עניין" icon={<Heart size={16} style={{ color: '#F97316' }} />}>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-              {profile.interests.map((interest: string) => (
-                <span key={interest} style={{
-                  padding: '8px 14px', borderRadius: 30,
-                  background: '#F9FAFB', border: '1.5px solid #EBEBEB',
-                  color: '#374151', fontSize: 13, fontWeight: 700,
-                  fontFamily: 'Heebo, sans-serif', cursor: 'default',
-                }}>
-                  {INTEREST_EMOJI[interest] || '✨'}&nbsp;{interest}
-                </span>
-              ))}
+          const addPrompt = (field: 'languages' | 'interests', text: string) => (
+            <button onClick={() => openEditor(field)} className="fomo-press" style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6,
+              padding: '8px 14px', borderRadius: 30, cursor: 'pointer',
+              background: 'transparent', border: '1.5px dashed var(--color-border)',
+              color: 'var(--color-text-muted)', fontSize: 13, fontWeight: 700, fontFamily: 'Heebo, sans-serif',
+            }}>
+              <Plus size={14} /> {text}
+            </button>
+          );
+
+          return (
+            <div
+              className="animate-card-entrance fomo-animated"
+              style={{
+                display: 'grid',
+                gridTemplateColumns: (showLang && showInterests) ? '1fr 1fr' : '1fr',
+                gap: 12, marginBottom: 12, alignItems: 'stretch',
+                animationDelay: '120ms',
+              }}
+            >
+              {showLang && (
+                <SectionCard noMargin label="שפות" icon={<MessageCircle size={16} style={{ color: 'var(--color-primary)' }} />} onEdit={isOwnProfile ? () => openEditor('languages') : undefined}>
+                  {profile.languages && profile.languages.length > 0 ? (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                      {profile.languages.map((lang: string) => (
+                        <span key={lang} style={{
+                          padding: '8px 16px', borderRadius: 30,
+                          background: 'var(--gradient-primary)',
+                          color: 'white', fontSize: 13, fontWeight: 700,
+                          fontFamily: 'Heebo, sans-serif',
+                          boxShadow: '0 3px 12px rgba(249,115,22,0.32)',
+                        }}>
+                          {lang}
+                        </span>
+                      ))}
+                    </div>
+                  ) : addPrompt('languages', 'הוסף שפות')}
+                </SectionCard>
+              )}
+
+              {showInterests && (
+                <SectionCard noMargin label="תחומי עניין" icon={<Heart size={16} style={{ color: 'var(--color-primary)' }} />} onEdit={isOwnProfile ? () => openEditor('interests') : undefined}>
+                  {profile.interests && profile.interests.length > 0 ? (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                      {profile.interests.map((interest: string) => (
+                        <span key={interest} style={{
+                          padding: '8px 14px', borderRadius: 30,
+                          background: '#F9FAFB', border: '1.5px solid var(--color-border)',
+                          color: 'var(--color-text-secondary)', fontSize: 13, fontWeight: 700,
+                          fontFamily: 'Heebo, sans-serif', cursor: 'default',
+                        }}>
+                          {INTEREST_EMOJI[interest] || '✨'}&nbsp;{interest}
+                        </span>
+                      ))}
+                    </div>
+                  ) : addPrompt('interests', 'הוסף תחומי עניין')}
+                </SectionCard>
+              )}
             </div>
-          </SectionCard>
-        )}
+          );
+        })()}
 
         {/* Countries Visited — full interactive card */}
-        <CountriesVisitedCard
-          userId={targetUserId!}
-          visitedCodes={profile.visited_countries || []}
-          isOwnProfile={isOwnProfile}
-          onUpdate={(codes) => setProfile(p => p ? { ...p, visited_countries: codes } : p)}
-        />
+        <div className="animate-card-entrance fomo-animated" style={{ animationDelay: '160ms' }}>
+          <CountriesVisitedCard
+            userId={targetUserId!}
+            visitedCodes={profile.visited_countries || []}
+            isOwnProfile={isOwnProfile}
+            onUpdate={(codes) => setProfile(p => p ? { ...p, visited_countries: codes } : p)}
+          />
+        </div>
 
         {/* Travel destinations — own profile, editable */}
         {isOwnProfile && (
           <button
             onClick={() => setIsSelectingCountries(true)}
-            className="fomo-press"
+            className="fomo-press animate-card-entrance fomo-animated"
             aria-label="ערוך מדינות לטיול"
             style={{
-              width: '100%', background: '#fff', borderRadius: 22,
-              padding: '18px 18px 20px',
-              boxShadow: '0 1px 3px rgba(0,0,0,0.04), 0 4px 20px rgba(0,0,0,0.06)',
+              width: '100%', background: 'var(--color-surface)', borderRadius: 'var(--radius-lg)',
+              padding: '18px 18px 20px', animationDelay: '200ms',
+              boxShadow: 'var(--shadow-card)',
               border: 'none', cursor: 'pointer', textAlign: 'right',
               marginBottom: 12,
             }}
@@ -752,11 +849,80 @@ export default function ProfileScreen({
         </div>
       )}
 
+      {/* ══ SECTION EDITOR (languages / interests) ══ */}
+      {editField && (
+        <div
+          style={{ position: 'fixed', inset: 0, zIndex: 60, background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'flex-end' }}
+          onClick={() => setEditField(null)}
+        >
+          <div
+            dir="rtl"
+            onClick={e => e.stopPropagation()}
+            style={{ background: '#fff', width: '100%', borderRadius: '28px 28px 0 0', maxHeight: '88dvh', display: 'flex', flexDirection: 'column', boxShadow: '0 -20px 60px rgba(0,0,0,0.25)' }}
+          >
+            <div style={{ padding: '16px 20px 14px', borderBottom: '1px solid var(--color-divider)', flexShrink: 0, position: 'relative' }}>
+              <div style={{ width: 40, height: 4, borderRadius: 99, background: '#E5E7EB', margin: '0 auto 18px' }} />
+              <button type="button" onClick={() => setEditField(null)} aria-label="סגור" className="fomo-press" style={{ position: 'absolute', top: 14, left: 16, width: 36, height: 36, borderRadius: '50%', background: '#F3F4F6', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <X size={18} style={{ color: '#6B7280' }} />
+              </button>
+              <h3 style={{ margin: 0, fontSize: 19, fontWeight: 900, color: 'var(--color-text-heading)', fontFamily: 'Heebo, sans-serif' }}>
+                {editField === 'languages' ? 'עריכת שפות' : 'עריכת תחומי עניין'}
+              </h3>
+            </div>
+
+            <div style={{ flex: 1, overflowY: 'auto', padding: '16px 18px' }}>
+              {editValues.length > 0 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 16 }}>
+                  {editValues.map(v => (
+                    <button key={v} onClick={() => toggleEditValue(v)} className="fomo-press" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 14px', borderRadius: 30, border: 'none', cursor: 'pointer', background: 'var(--gradient-primary)', color: '#fff', fontSize: 13, fontWeight: 700, fontFamily: 'Heebo, sans-serif' }}>
+                      {v} <X size={13} />
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              <div style={{ display: 'flex', gap: 8, marginBottom: 18 }}>
+                <input
+                  type="text" value={editCustom}
+                  onChange={e => setEditCustom(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addEditCustom(); } }}
+                  placeholder={editField === 'languages' ? 'הוסף שפה...' : 'הוסף תחום עניין...'}
+                  style={{ flex: 1, height: 44, borderRadius: 14, background: '#F3F4F6', border: 'none', outline: 'none', padding: '0 16px', fontSize: 14, fontFamily: 'Heebo, sans-serif', boxSizing: 'border-box' }}
+                />
+                <button onClick={addEditCustom} className="fomo-press" style={{ padding: '0 18px', height: 44, borderRadius: 14, border: 'none', cursor: 'pointer', background: 'var(--gradient-primary)', color: '#fff', fontSize: 14, fontWeight: 800, fontFamily: 'Heebo, sans-serif' }}>
+                  הוסף
+                </button>
+              </div>
+
+              <p style={{ margin: '0 0 10px', fontSize: 11, fontWeight: 800, color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.1em', fontFamily: 'Heebo, sans-serif' }}>הצעות</p>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                {(editField === 'languages' ? SUGGESTED_LANGUAGES : SUGGESTED_INTERESTS).map(s => {
+                  const sel = editValues.includes(s);
+                  return (
+                    <button key={s} onClick={() => toggleEditValue(s)} className="fomo-press" style={{ padding: '8px 14px', borderRadius: 30, cursor: 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'Heebo, sans-serif', border: sel ? '1.5px solid var(--color-primary)' : '1.5px solid var(--color-border)', background: sel ? 'var(--color-primary-tint)' : '#FAFAFA', color: sel ? 'var(--color-primary-dark)' : 'var(--color-text-secondary)', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                      {sel && <Check size={13} />} {s}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div style={{ padding: '14px 16px', paddingBottom: 'max(14px, env(safe-area-inset-bottom))', borderTop: '1px solid var(--color-divider)', flexShrink: 0 }}>
+              <button onClick={saveEditor} className="fomo-press" style={{ width: '100%', height: 56, borderRadius: 18, border: 'none', cursor: 'pointer', background: 'var(--gradient-primary)', color: '#fff', fontSize: 16, fontWeight: 900, fontFamily: 'Heebo, sans-serif', boxShadow: 'var(--shadow-primary)' }}>
+                שמור ({editValues.length})
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <FloatingNavBar
         activeTab="home"
         currentUserId={currentUserId}
         onHomeClick={onBack}
         onMapClick={onNavigateToMap}
+        onChatClick={onNavigateToMessages}
+        onMyEventsClick={onNavigateToMyEvents}
       />
     </div>
   );
