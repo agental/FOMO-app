@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Search, Check, ArrowRight } from 'lucide-react';
+import { useState, useMemo } from 'react';
+import { Search, ChevronRight } from 'lucide-react';
 import { COUNTRIES } from '../utils/countries';
 import { CONTINENTS, getContinentForCountry } from '../utils/continents';
 
@@ -10,6 +10,145 @@ interface CountrySelectionScreenProps {
   onBack?: () => void;
 }
 
+const ACCENT = '#FF6B35';
+const POPULAR = ['IL', 'TH', 'IN', 'US', 'ES', 'IT', 'GR', 'TR', 'JP', 'FR', 'DE', 'GB'];
+
+const CONTINENT_ORDER: Array<keyof typeof CONTINENTS> = ['asia', 'europe', 'americas', 'africa', 'oceania'];
+
+function CountryCircle({
+  code,
+  flag,
+  name,
+  selected,
+  onToggle,
+}: {
+  code: string;
+  flag: string;
+  name: string;
+  selected: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      onClick={onToggle}
+      className="flex flex-col items-center gap-1.5 active:scale-90 transition-transform flex-shrink-0"
+      style={{ width: 72 }}
+    >
+      {/* ring + circle */}
+      <div style={{ position: 'relative' }}>
+        <div
+          style={{
+            padding: 3,
+            borderRadius: '50%',
+            background: selected
+              ? `linear-gradient(135deg, ${ACCENT}, #FF8C00)`
+              : 'transparent',
+            border: selected ? 'none' : '2.5px solid #E5E5E5',
+          }}
+        >
+          <div
+            style={{
+              width: 58,
+              height: 58,
+              borderRadius: '50%',
+              background: selected ? 'white' : '#F5F5F5',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: 28,
+              lineHeight: 1,
+              border: selected ? '2px solid white' : 'none',
+            }}
+          >
+            {flag}
+          </div>
+        </div>
+        {selected && (
+          <div
+            style={{
+              position: 'absolute',
+              bottom: 0,
+              left: 0,
+              width: 20,
+              height: 20,
+              borderRadius: '50%',
+              background: ACCENT,
+              border: '2px solid white',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
+              <path d="M2 6l3 3 5-5" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          </div>
+        )}
+      </div>
+      <span
+        style={{
+          fontSize: 11,
+          fontFamily: 'Heebo, sans-serif',
+          fontWeight: selected ? 700 : 500,
+          color: selected ? ACCENT : '#3D3D3D',
+          textAlign: 'center',
+          lineHeight: 1.3,
+          maxWidth: 68,
+          display: '-webkit-box',
+          WebkitLineClamp: 2,
+          WebkitBoxOrient: 'vertical',
+          overflow: 'hidden',
+        }}
+      >
+        {name}
+      </span>
+    </button>
+  );
+}
+
+function ContinentRow({
+  title,
+  codes,
+  selectedCountries,
+  onToggle,
+}: {
+  title: string;
+  codes: string[];
+  selectedCountries: Set<string>;
+  onToggle: (code: string) => void;
+}) {
+  if (codes.length === 0) return null;
+  return (
+    <div className="mb-6">
+      <p
+        className="px-5 mb-3 text-[14px] font-black"
+        style={{ fontFamily: 'Heebo, sans-serif', color: '#1C1C1E' }}
+      >
+        {title}
+      </p>
+      <div
+        className="flex gap-4 overflow-x-auto hide-scrollbar px-5"
+        style={{ paddingBottom: 4 }}
+      >
+        {codes.map(code => {
+          const country = COUNTRIES[code];
+          if (!country) return null;
+          return (
+            <CountryCircle
+              key={code}
+              code={code}
+              flag={country.flag}
+              name={country.name}
+              selected={selectedCountries.has(code)}
+              onToggle={() => onToggle(code)}
+            />
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export function CountrySelectionScreen({
   selectedCountries,
   onToggleCountry,
@@ -17,186 +156,165 @@ export function CountrySelectionScreen({
   onBack,
 }: CountrySelectionScreenProps) {
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedContinent, setSelectedContinent] = useState<keyof typeof CONTINENTS>('all');
 
-  const filteredCountries = Object.entries(COUNTRIES).filter(([code, country]) => {
-    const matchesSearch =
-      searchQuery === '' ||
-      country.name.includes(searchQuery) ||
-      code.toLowerCase().includes(searchQuery.toLowerCase());
+  // Group countries by continent
+  const byContinent = useMemo(() => {
+    const groups: Partial<Record<keyof typeof CONTINENTS, string[]>> = {};
+    for (const continent of CONTINENT_ORDER) groups[continent] = [];
+    Object.keys(COUNTRIES).forEach(code => {
+      const c = getContinentForCountry(code);
+      if (groups[c]) groups[c]!.push(code);
+    });
+    return groups;
+  }, []);
 
-    const matchesContinent =
-      selectedContinent === 'all' || getContinentForCountry(code) === selectedContinent;
+  // Search results
+  const filtered = useMemo(() => {
+    if (searchQuery === '') return null;
+    return Object.entries(COUNTRIES)
+      .filter(([code, country]) =>
+        country.name.includes(searchQuery) ||
+        code.toLowerCase().includes(searchQuery.toLowerCase())
+      )
+      .map(([code]) => code);
+  }, [searchQuery]);
 
-    return matchesSearch && matchesContinent;
-  });
-
-  const popularCountries = ['IL', 'TH', 'IN', 'US', 'ES', 'IT', 'GR', 'TR'];
+  const showSections = filtered === null;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-[#F5F7FB] to-[#E8EAF6] flex flex-col overflow-x-hidden max-w-full" dir="rtl">
-      <div className="bg-gradient-to-tr from-[#FF512F] to-[#DD2476] text-white p-6 rounded-b-3xl shadow-lg sticky top-0 z-10">
+    <div
+      className="min-h-screen flex flex-col overflow-x-hidden max-w-full"
+      dir="rtl"
+      style={{ background: '#FFFFFF' }}
+    >
+      {/* ── Header ── */}
+      <div
+        className="sticky top-0 z-10 px-5 pb-4 bg-white"
+        style={{
+          paddingTop: 'max(20px, env(safe-area-inset-top))',
+          borderBottom: '1px solid rgba(0,0,0,0.06)',
+        }}
+      >
         {onBack && (
           <button
             onClick={onBack}
-            className="flex items-center gap-1 text-white/80 hover:text-white text-sm font-medium mb-4 active:scale-95 transition-all"
-            style={{ fontFamily: 'Rubik, sans-serif' }}
+            className="flex items-center gap-1 mb-4 active:opacity-60 transition-opacity"
+            style={{ color: 'rgba(0,0,0,0.35)', fontFamily: 'Heebo, sans-serif', fontSize: 14 }}
           >
-            <ArrowRight className="w-4 h-4" />
+            <ChevronRight className="w-4 h-4" />
             חזרה
           </button>
         )}
+
         <h2
-          className="text-3xl font-bold mb-2 text-center"
-          style={{ fontFamily: 'Heebo, sans-serif', fontWeight: 700 }}
+          className="text-[26px] font-black text-center mb-1"
+          style={{ fontFamily: 'Heebo, sans-serif', color: '#1C1C1E' }}
         >
           באילו מדינות אתם מטיילים?
         </h2>
-        <p className="text-white/90 text-sm text-center mb-4" style={{ fontFamily: 'Rubik, sans-serif' }}>
+        <p className="text-center mb-5" style={{ color: 'rgba(0,0,0,0.38)', fontSize: 13, fontFamily: 'Heebo, sans-serif' }}>
           בחרו את המדינות שבהן תרצו להכיר מטיילים אחרים
         </p>
 
-        <div className="relative">
-          <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+        {/* Search */}
+        <div className="relative mb-4">
+          <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4" style={{ color: 'rgba(0,0,0,0.3)' }} />
           <input
             type="text"
             value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
+            onChange={e => setSearchQuery(e.target.value)}
             placeholder="חיפוש מדינה..."
-            className="w-full bg-white rounded-full h-10 pr-10 pl-4 text-sm text-[#0A122A] placeholder:text-gray-400 focus:ring-2 focus:ring-white/50 focus:outline-none transition-all"
-            style={{ fontFamily: 'Rubik, sans-serif' }}
+            className="w-full h-11 pr-10 pl-4 text-sm outline-none"
+            style={{
+              background: '#F5F5F5',
+              borderRadius: 14,
+              color: '#1C1C1E',
+              fontFamily: 'Heebo, sans-serif',
+              border: '1px solid rgba(0,0,0,0.07)',
+            }}
           />
         </div>
 
-        <div className="flex gap-2 mt-4 overflow-x-auto pb-2 hide-scrollbar">
-          {Object.entries(CONTINENTS).map(([key, continent]) => (
-            <button
-              key={key}
-              onClick={() => setSelectedContinent(key as keyof typeof CONTINENTS)}
-              className={`px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap transition-all ${
-                selectedContinent === key
-                  ? 'bg-white text-[#DD2476] shadow-md'
-                  : 'bg-white/20 text-white hover:bg-white/30'
-              }`}
-              style={{ fontFamily: 'Rubik, sans-serif' }}
-            >
-              <span className="ml-1">{continent.emoji}</span>
-              {continent.name}
-            </button>
-          ))}
-        </div>
       </div>
 
-      <div className="flex-1 p-4 pb-24 overflow-y-auto">
-        {searchQuery === '' && selectedContinent === 'all' && (
-          <div className="mb-6">
-            <h3
-              className="text-lg font-bold text-[#0A122A] mb-3"
-              style={{ fontFamily: 'Heebo, sans-serif', fontWeight: 700 }}
-            >
-              🔥 מדינות פופולריות
-            </h3>
-            <div className="grid grid-cols-2 gap-3">
-              {popularCountries.map((code) => {
-                const country = COUNTRIES[code];
-                if (!country) return null;
-                const isSelected = selectedCountries.has(code);
-                return (
-                  <button
-                    key={code}
-                    onClick={() => onToggleCountry(code)}
-                    className={`relative flex items-center gap-3 p-4 rounded-xl transition-all border-2 ${
-                      isSelected
-                        ? 'bg-gradient-to-r from-blue-50 to-cyan-50 border-[#3B82F6] shadow-md scale-105'
-                        : 'bg-white border-gray-200 hover:border-gray-300 hover:shadow-md'
-                    }`}
-                  >
-                    <span className="text-3xl">{country.flag}</span>
-                    <span
-                      className={`text-sm font-medium flex-1 text-right ${
-                        isSelected ? 'text-[#1E40AF]' : 'text-gray-700'
-                      }`}
-                      style={{ fontFamily: 'Rubik, sans-serif' }}
-                    >
-                      {country.name}
-                    </span>
-                    {isSelected && (
-                      <div className="absolute top-2 left-2 w-6 h-6 bg-blue-600 rounded-full flex items-center justify-center">
-                        <Check className="w-4 h-4 text-white" />
-                      </div>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        )}
+      {/* ── Content ── */}
+      <div className="flex-1 pt-5 pb-28 overflow-y-auto">
 
-        <div>
-          {searchQuery === '' && selectedContinent === 'all' && (
-            <h3
-              className="text-lg font-bold text-[#0A122A] mb-3"
-              style={{ fontFamily: 'Heebo, sans-serif', fontWeight: 700 }}
-            >
-              כל המדינות
-            </h3>
-          )}
-          <div className="grid grid-cols-2 gap-3">
-            {filteredCountries.map(([code, country]) => {
-              if (searchQuery === '' && selectedContinent === 'all' && popularCountries.includes(code)) {
-                return null;
-              }
-              const isSelected = selectedCountries.has(code);
+        {showSections ? (
+          <>
+            {/* Popular */}
+            <ContinentRow
+              title="🔥 פופולריות"
+              codes={POPULAR}
+              selectedCountries={selectedCountries}
+              onToggle={onToggleCountry}
+            />
+
+            {/* Per continent */}
+            {CONTINENT_ORDER.map(key => (
+              <ContinentRow
+                key={key}
+                title={`${CONTINENTS[key].emoji} ${CONTINENTS[key].name}`}
+                codes={byContinent[key] || []}
+                selectedCountries={selectedCountries}
+                onToggle={onToggleCountry}
+              />
+            ))}
+          </>
+        ) : (
+          /* Search / filter result — wrap grid of circles */
+          <div className="flex flex-wrap gap-x-2 gap-y-5 px-5">
+            {filtered!.map(code => {
+              const country = COUNTRIES[code];
+              if (!country) return null;
               return (
-                <button
+                <CountryCircle
                   key={code}
-                  onClick={() => onToggleCountry(code)}
-                  className={`relative flex items-center gap-3 p-3 rounded-xl transition-all border-2 ${
-                    isSelected
-                      ? 'bg-gradient-to-r from-blue-50 to-cyan-50 border-[#3B82F6] shadow-md'
-                      : 'bg-white border-gray-200 hover:border-gray-300'
-                  }`}
-                >
-                  <span className="text-2xl">{country.flag}</span>
-                  <span
-                    className={`text-sm font-medium flex-1 text-right ${
-                      isSelected ? 'text-[#1E40AF]' : 'text-gray-700'
-                    }`}
-                    style={{ fontFamily: 'Rubik, sans-serif' }}
-                  >
-                    {country.name}
-                  </span>
-                  {isSelected && (
-                    <div className="w-5 h-5 bg-blue-600 rounded-full flex items-center justify-center flex-shrink-0">
-                      <Check className="w-3 h-3 text-white" />
-                    </div>
-                  )}
-                </button>
+                  code={code}
+                  flag={country.flag}
+                  name={country.name}
+                  selected={selectedCountries.has(code)}
+                  onToggle={() => onToggleCountry(code)}
+                />
               );
             })}
+            {filtered!.length === 0 && (
+              <p className="w-full text-center py-10" style={{ color: 'rgba(0,0,0,0.35)', fontFamily: 'Heebo, sans-serif' }}>
+                לא נמצאו מדינות
+              </p>
+            )}
           </div>
-        </div>
+        )}
       </div>
 
-      <div className="fixed bottom-0 left-0 right-0 p-4 bg-white border-t border-gray-200 shadow-lg">
+      {/* ── Bottom button ── */}
+      <div
+        className="fixed bottom-0 left-0 right-0 px-5"
+        style={{
+          paddingTop: 14,
+          paddingBottom: 'max(20px, env(safe-area-inset-bottom))',
+          background: 'linear-gradient(to top, #ffffff 65%, transparent)',
+        }}
+      >
         <button
           onClick={onContinue}
           disabled={selectedCountries.size === 0}
-          className="w-full bg-gradient-to-r from-blue-600 to-blue-500 text-white rounded-2xl h-12 font-bold shadow-lg hover:shadow-xl transition-all active:scale-98 disabled:opacity-50 disabled:cursor-not-allowed"
-          style={{ fontFamily: 'Heebo, sans-serif', fontWeight: 700 }}
+          className="w-full text-white font-black text-[17px] active:scale-[0.97] transition-transform disabled:opacity-40"
+          style={{
+            fontFamily: 'Heebo, sans-serif',
+            height: 56,
+            borderRadius: 28,
+            background: `linear-gradient(135deg, ${ACCENT}, #FF8C00)`,
+            boxShadow: selectedCountries.size > 0 ? `0 8px 24px ${ACCENT}55` : 'none',
+          }}
         >
-          המשך ({selectedCountries.size} מדינות נבחרו)
+          המשך {selectedCountries.size > 0 ? `(${selectedCountries.size} נבחרו)` : ''}
         </button>
       </div>
 
       <style>{`
-        .hide-scrollbar::-webkit-scrollbar {
-          display: none;
-        }
-        .hide-scrollbar {
-          -ms-overflow-style: none;
-          scrollbar-width: none;
-        }
+        .hide-scrollbar::-webkit-scrollbar { display: none; }
+        .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
       `}</style>
     </div>
   );

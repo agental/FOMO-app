@@ -77,7 +77,7 @@ export function FloatingNavBar({
     }
   };
   return (
-    <div className="fixed bottom-0 left-0 right-0 z-20 pointer-events-none">
+    <div className="fixed bottom-0 left-0 right-0 z-20 pointer-events-none" style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
       <div className="flex justify-center pb-5 px-6">
         <div className="bg-white rounded-full pointer-events-auto border border-gray-200/80" style={{ boxShadow: '0 12px 40px rgba(0, 0, 0, 0.1), 0 4px 15px rgba(0, 0, 0, 0.08)' }}>
           <div className="flex items-center justify-center gap-1 px-4 py-2 relative">

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { X, Check } from 'lucide-react';
+import { X, Check, Search } from 'lucide-react';
 
 const CATEGORIES = [
   { id: 'parties',   label: 'מסיבות', emoji: '🎉', color: '#A855F7' },
@@ -19,13 +19,15 @@ interface FilterSheetProps {
   visible: boolean;
   initialCategory: string | null;
   initialDate: string | null;
-  onApply: (category: string | null, date: string | null) => void;
+  initialSearch?: string;
+  onApply: (category: string | null, date: string | null, search: string) => void;
   onClose: () => void;
 }
 
-export function FilterSheet({ visible, initialCategory, initialDate, onApply, onClose }: FilterSheetProps) {
+export function FilterSheet({ visible, initialCategory, initialDate, initialSearch = '', onApply, onClose }: FilterSheetProps) {
   const [category, setCategory] = useState<string | null>(initialCategory);
   const [date,     setDate]     = useState<string | null>(initialDate);
+  const [search,   setSearch]   = useState(initialSearch);
   const [mounted,  setMounted]  = useState(false);
 
   // Drag state
@@ -39,26 +41,28 @@ export function FilterSheet({ visible, initialCategory, initialDate, onApply, on
     if (visible) {
       setCategory(initialCategory);
       setDate(initialDate);
+      setSearch(initialSearch);
       setDragY(0);
       requestAnimationFrame(() => setMounted(true));
     } else {
       setMounted(false);
     }
-  }, [visible, initialCategory, initialDate]);
+  }, [visible, initialCategory, initialDate, initialSearch]);
 
   if (!visible) return null;
 
   const handleApply = () => {
-    onApply(category, date);
+    onApply(category, date, search);
     onClose();
   };
 
   const handleClear = () => {
     setCategory(null);
     setDate(null);
+    setSearch('');
   };
 
-  const activeCount = (category ? 1 : 0) + (date ? 1 : 0);
+  const activeCount = (category ? 1 : 0) + (date ? 1 : 0) + (search ? 1 : 0);
 
   /* ── drag handlers ── */
   const onPointerDown = (e: React.PointerEvent) => {
@@ -165,6 +169,41 @@ export function FilterSheet({ visible, initialCategory, initialDate, onApply, on
               נקה הכל
             </button>
           )}
+        </div>
+
+        {/* ── Search section ── */}
+        <div style={{ padding: '0 20px 20px' }}>
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 10,
+            background: '#F5F5F5', borderRadius: 16,
+            padding: '0 14px', height: 46,
+            border: search ? '1.5px solid #F97316' : '1.5px solid transparent',
+          }}>
+            <Search size={16} color={search ? '#F97316' : '#9CA3AF'} strokeWidth={2} />
+            <input
+              type="text"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="חפש אירועים, מקומות..."
+              style={{
+                flex: 1, background: 'transparent', border: 'none', outline: 'none',
+                fontSize: 14, fontFamily: "'Heebo', sans-serif", color: '#111827',
+                textAlign: 'right',
+              }}
+            />
+            {search && (
+              <button
+                onClick={() => setSearch('')}
+                style={{
+                  width: 18, height: 18, borderRadius: '50%', background: '#D1D5DB',
+                  border: 'none', cursor: 'pointer', display: 'flex',
+                  alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+                }}
+              >
+                <X size={11} color="#fff" strokeWidth={3} />
+              </button>
+            )}
+          </div>
         </div>
 
         {/* ── Category section ── */}

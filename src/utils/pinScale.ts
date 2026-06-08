@@ -1,10 +1,9 @@
 export type PinType = 'event' | 'meetup' | 'place' | 'admin' | 'yeshiva';
 
 // Base scale per pin type — preserves visual hierarchy at every zoom level
-// 'admin' is tuned so that the 36×41 admin pin renders at the same visual
-// size as the 44×54 event pin (44/36 ≈ 1.22).
+// Both event and admin pins are now 36×41, so they share the same base scale.
 const BASE_SCALE: Record<PinType, number> = {
-  event:   1.00,
+  event:   1.22,
   admin:   1.22,
   meetup:  0.88,
   place:   0.75,

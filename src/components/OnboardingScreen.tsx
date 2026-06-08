@@ -118,7 +118,7 @@ export function OnboardingScreen({ onComplete }: OnboardingScreenProps) {
         </div>
       </div>
 
-      <div className="fixed bottom-0 left-0 right-0 p-6 bg-white border-t border-gray-200 shadow-lg">
+      <div className="fixed bottom-0 left-0 right-0 p-6 bg-white border-t border-gray-200 shadow-lg" style={{ paddingBottom: 'max(24px, env(safe-area-inset-bottom))' }}>
         <button
           onClick={handleNext}
           className={`w-full h-14 bg-gradient-to-r ${currentSlideData.gradient} text-white rounded-2xl font-bold shadow-lg hover:shadow-xl transition-all active:scale-98 flex items-center justify-center gap-2`}

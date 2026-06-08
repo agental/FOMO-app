@@ -21,6 +21,7 @@ export interface Event {
   is_private: boolean;
   max_attendees: number;
   attendees: string[];
+  price?: number | null;
   created_at: string;
   users?: EventUser;
   distance?: number;
@@ -41,6 +42,7 @@ export interface CreateEventData {
   event_date: string;
   is_private: boolean;
   max_attendees: number;
+  price?: number | null;
 }
 
 export interface EventFilters {

@@ -339,7 +339,7 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
   return (
     <div className="min-h-screen bg-[#F8F9FB] flex flex-col" style={{ fontFamily: 'Rubik, sans-serif' }} dir="rtl">
       {/* Header */}
-      <div className="sticky top-0 z-20 bg-white/95 backdrop-blur-sm border-b border-gray-100/80 px-4 pt-4 pb-3">
+      <div className="sticky top-0 z-20 bg-white/95 backdrop-blur-sm border-b border-gray-100/80 px-4 pt-4 pb-3 safe-area-top">
         <h1 className="text-[22px] font-bold text-[#111] mb-4" style={{ fontFamily: 'Heebo, sans-serif' }}>
           הודעות
         </h1>

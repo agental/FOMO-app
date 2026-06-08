@@ -5,6 +5,10 @@ export default {
   server: {
     host: true,
     allowedHosts: true,
+    hmr: {
+      timeout: 120000,
+      overlay: false,
+    },
   },
   optimizeDeps: {
     exclude: ['lucide-react'],

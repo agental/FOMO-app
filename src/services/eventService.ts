@@ -20,6 +20,7 @@ export class EventService {
       is_private: data.is_private,
       max_attendees: data.max_attendees,
       attendees: [],
+      ...(data.price != null ? { price: data.price } : {}),
     };
 
     try {
@@ -212,14 +213,50 @@ export class EventService {
 
   static async uploadEventImage(userId: string, file: File): Promise<string | null> {
     try {
-      const ext = file.name.split('.').pop();
-      const path = `events/${userId}/${Date.now()}.${ext}`;
+      // Read file fully into memory first — fixes iCloud/HEIC photos that arrive lazily
+      const buffer = await new Promise<ArrayBuffer>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload  = () => resolve(reader.result as ArrayBuffer);
+        reader.onerror = () => reject(reader.error);
+        reader.readAsArrayBuffer(file);
+      });
+
+      // Determine mime type — HEIC from iCloud often has empty type
+      let mimeType = file.type;
+      if (!mimeType || mimeType === 'application/octet-stream') {
+        // Detect by magic bytes
+        const bytes = new Uint8Array(buffer.slice(0, 12));
+        const hex = Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+        if (hex.startsWith('ffd8ff'))                       mimeType = 'image/jpeg';
+        else if (hex.startsWith('89504e47'))                mimeType = 'image/png';
+        else if (hex.startsWith('47494638'))                mimeType = 'image/gif';
+        else if (hex.startsWith('52494646') && hex.slice(16, 24) === '57454250') mimeType = 'image/webp';
+        else                                                mimeType = 'image/jpeg'; // fallback for HEIC etc.
+      }
+
+      // Use jpg extension for HEIC since browsers can't display heic anyway
+      const isHeic = file.type === 'image/heic' || file.type === 'image/heif' ||
+                     file.name.toLowerCase().endsWith('.heic') || file.name.toLowerCase().endsWith('.heif');
+      const ext = isHeic ? 'jpg' : (file.name.split('.').pop() || mimeType.split('/')[1] || 'jpg');
+      const uploadMime = isHeic ? 'image/jpeg' : mimeType;
+
+      const fileName = `event-${userId}-${Date.now()}.${ext}`;
+      const path = `avatars/${fileName}`;
+
+      const blob = new Blob([buffer], { type: uploadMime });
 
       const { error } = await supabase.storage
         .from('images')
-        .upload(path, file);
+        .upload(path, blob, {
+          contentType: uploadMime,
+          cacheControl: '3600',
+          upsert: false,
+        });
 
-      if (error) throw error;
+      if (error) {
+        console.error('[uploadEventImage] Supabase error:', JSON.stringify(error));
+        throw error;
+      }
 
       const { data: urlData } = supabase.storage
         .from('images')

@@ -37,6 +37,17 @@ function App() {
     };
   }, []);
 
+  // Refresh session silently when the user returns to the app after being in background
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        supabase.auth.getSession().catch(() => {});
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => document.removeEventListener('visibilitychange', handleVisibility);
+  }, []);
+
   useEffect(() => {
     // onAuthStateChange fires INITIAL_SESSION once on startup with the current
     // session — this covers normal loads, refreshes, and OAuth redirects.
@@ -244,6 +255,10 @@ function App() {
       <CreateProfileWizard
         userId={currentUserId!}
         onComplete={() => setCurrentScreen('profileComplete')}
+        onBack={async () => {
+          await supabase.auth.signOut();
+          setCurrentScreen('auth');
+        }}
       />
     );
   }
