@@ -73,6 +73,7 @@ export function MapScreen({
   /* data */
   const [chabadHouses,    setChabadHouses]    = useState<ChabadHouse[]>([]);
   const [adminLocations,  setAdminLocations]  = useState<AdminLocation[]>([]);
+  const [posts,           setPosts]           = useState<any[]>([]);
   const [meetups,         setMeetups]         = useState<Meetup[]>([]);
 
   /* selected items / sheets */
@@ -100,6 +101,7 @@ export function MapScreen({
   const markersRef               = useRef<mapboxgl.Marker[]>([]);
   const chabadMarkersRef         = useRef<mapboxgl.Marker[]>([]);
   const adminLocationMarkersRef  = useRef<mapboxgl.Marker[]>([]);
+  const postMarkersRef           = useRef<mapboxgl.Marker[]>([]);
   const meetupMarkersRef         = useRef<mapboxgl.Marker[]>([]);
   const eventElsRef              = useRef<HTMLDivElement[]>([]);
   const chabadElsRef             = useRef<HTMLDivElement[]>([]);
@@ -126,6 +128,16 @@ export function MapScreen({
       .order('created_at', { ascending: false });
     if (e) { console.error('loadAdminLocations:', e); return; }
     if (data) setAdminLocations(data);
+  };
+
+  const loadPosts = async () => {
+    const { data, error: e } = await supabase
+      .from('posts')
+      .select('*')
+      .not('latitude', 'is', null)
+      .order('created_at', { ascending: false });
+    if (e) { console.error('loadPosts:', e); return; }
+    if (data) setPosts(data);
   };
 
   const loadMeetups = async () => {
@@ -159,16 +171,18 @@ export function MapScreen({
         userLocation: { latitude: location.latitude, longitude: location.longitude },
       });
       loadAdminLocations();
+      loadPosts();
       loadMeetups();
     }
   }, [location, selectedCountries, searchQuery]);
 
-  /* Realtime: admin locations */
+  /* Realtime: admin locations + recommendations */
   useEffect(() => {
     const ch = supabase
       .channel('admin-locations-sync')
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'admin_locations' }, () => loadAdminLocations())
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'admin_locations' }, () => loadAdminLocations())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'posts' }, () => loadPosts())
       .subscribe();
     return () => { supabase.removeChannel(ch); };
   }, []);
@@ -267,11 +281,11 @@ export function MapScreen({
   }, [mapFilter, markersRef.current.length]);
 
   useEffect(() => {
-    [...chabadMarkersRef.current, ...adminLocationMarkersRef.current].forEach(m => {
+    [...chabadMarkersRef.current, ...adminLocationMarkersRef.current, ...postMarkersRef.current].forEach(m => {
       const el = (m as any)._element as HTMLElement;
       if (el) el.style.display = showPlaces ? '' : 'none';
     });
-  }, [mapFilter, chabadMarkersRef.current.length, adminLocationMarkersRef.current.length]);
+  }, [mapFilter, chabadMarkersRef.current.length, adminLocationMarkersRef.current.length, postMarkersRef.current.length]);
 
   useEffect(() => {
     meetupMarkersRef.current.forEach(m => {
@@ -379,6 +393,40 @@ export function MapScreen({
     });
   }, [adminLocations]);
 
+  /* ── Recommendation (post) pins ── */
+  useEffect(() => {
+    if (!mapInstanceRef.current || posts.length === 0) return;
+    postMarkersRef.current.forEach(m => m.remove());
+    postMarkersRef.current = [];
+
+    const esc = (s: string) => (s || '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] || c));
+
+    posts.forEach(rec => {
+      if (rec.latitude == null || rec.longitude == null) return;
+      const svg = createLocationPinSVG(rec.image_url || '', '#F97316', '⭐');
+      const scaleWrapper = document.createElement('div');
+      scaleWrapper.style.cssText = `line-height:0;transform-origin:center bottom;transition:transform 0.15s ease;transform:scale(${getPinScale('admin', mapInstanceRef.current!.getZoom())});${showPlaces ? '' : 'display:none;'}`;
+      scaleWrapper.appendChild(svg);
+      const el = document.createElement('div');
+      el.style.cssText = 'cursor:pointer;line-height:0;user-select:none;';
+      el.appendChild(scaleWrapper);
+      const marker = new mapboxgl.Marker({ element: el, anchor: 'bottom' })
+        .setLngLat([rec.longitude, rec.latitude])
+        .addTo(mapInstanceRef.current!);
+      el.addEventListener('click', () => {
+        new mapboxgl.Popup({ offset: 34, closeButton: true, maxWidth: '240px' })
+          .setLngLat([rec.longitude, rec.latitude])
+          .setHTML(`<div dir="rtl" style="font-family:Heebo,sans-serif;text-align:right">
+            <div style="font-weight:800;font-size:14px;color:#111827">⭐ ${esc(rec.place_name || 'המלצה')}</div>
+            <div style="font-size:12px;color:#6B7280;margin-top:4px;line-height:1.4">${esc(rec.content || '')}</div>
+            ${rec.city ? `<div style="font-size:11px;color:#9CA3AF;margin-top:5px">📍 ${esc(rec.city)}</div>` : ''}
+          </div>`)
+          .addTo(mapInstanceRef.current!);
+      });
+      postMarkersRef.current.push(marker);
+    });
+  }, [posts, mapReady]);
+
   /* ── Meetup pins ── */
   useEffect(() => {
     if (!mapInstanceRef.current) return;
@@ -416,11 +464,17 @@ export function MapScreen({
   };
 
   const handleCreateSuccess = async (createdItem?: Record<string, any>) => {
-    if (!createdItem || !location) return;
+    if (!createdItem) return;
     const isEvent = 'event_type' in createdItem || 'event_date' in createdItem;
     if (isEvent) {
-      addEvent(createdItem as Event);
+      const ev = createdItem as Event;
+      addEvent(ev);
       await refreshEvents();
+      // make sure the events layer is visible, then fly to the new pin so it's seen
+      setMapFilter(f => (f === 'meetups' || f === 'places') ? 'all' : f);
+      if (ev.latitude && ev.longitude && mapInstanceRef.current) {
+        mapInstanceRef.current.flyTo({ center: [ev.longitude, ev.latitude], zoom: 14, essential: true });
+      }
     }
     await loadAdminLocations();
     await loadMeetups();

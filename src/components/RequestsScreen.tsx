@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { UserPlus, Check, X, Calendar, ArrowRight, Clock } from 'lucide-react';
+import { UserPlus, Check, X, Calendar, ArrowRight, Clock, ChevronLeft } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { UserAvatar } from './UserAvatar';
 import { FloatingNavBar } from './FloatingNavBar';
@@ -30,6 +30,7 @@ type RequestsScreenProps = {
   onCreateClick?: () => void;
   onMessagesClick?: () => void;
   onMyEventsClick?: () => void;
+  onNavigateToUserProfile?: (userId: string) => void;
 };
 
 type MeetupPendingRequest = {
@@ -40,7 +41,7 @@ type MeetupPendingRequest = {
   profile: { id: string; display_name: string; avatar_url: string | null };
 };
 
-export function RequestsScreen({ currentUserId, onBack, onHomeClick, onMapClick, onCreateClick, onMessagesClick, onMyEventsClick }: RequestsScreenProps) {
+export function RequestsScreen({ currentUserId, onBack, onHomeClick, onMapClick, onCreateClick, onMessagesClick, onMyEventsClick, onNavigateToUserProfile }: RequestsScreenProps) {
   const [joinRequests, setJoinRequests] = useState<JoinRequest[]>([]);
   const [meetupRequests, setMeetupRequests] = useState<MeetupPendingRequest[]>([]);
   const [loading, setLoading] = useState(true);
@@ -188,11 +189,14 @@ export function RequestsScreen({ currentUserId, onBack, onHomeClick, onMapClick,
 
       const { data: event } = await supabase
         .from('events')
-        .select('attendees')
+        .select('attendees, price')
         .eq('id', request.event_id)
         .maybeSingle();
 
-      if (event) {
+      // Free event → approval also adds the attendee.
+      // Paid event → approval only; the user is added once they pay.
+      const isPaid = !!((event as any)?.price && (event as any).price > 0);
+      if (event && !isPaid) {
         const updatedAttendees = [...(event.attendees || []), request.user_id];
         await supabase
           .from('events')
@@ -306,6 +310,7 @@ export function RequestsScreen({ currentUserId, onBack, onHomeClick, onMapClick,
                       meetupLabel={`${req.meetupEmoji} ${req.meetupText}`}
                       onApprove={() => handleApproveMeetup(req.meetupId, req.userId)}
                       onReject={() => handleRejectMeetup(req.meetupId, req.userId)}
+                      onProfileClick={() => onNavigateToUserProfile?.(req.userId)}
                     />
                   ))}
                 </div>
@@ -327,16 +332,32 @@ export function RequestsScreen({ currentUserId, onBack, onHomeClick, onMapClick,
                     >
                       <div className="p-4">
                         <div className="flex items-start gap-3 mb-4">
-                          <UserAvatar
-                            userId={request.user.id}
-                            displayName={request.user.display_name}
-                            avatarUrl={request.user.avatar_url}
-                            size="small"
-                          />
+                          <button
+                            type="button"
+                            onClick={() => onNavigateToUserProfile?.(request.user.id)}
+                            aria-label={`פרופיל של ${request.user.display_name}`}
+                            className="flex-shrink-0 active:scale-95 transition-transform"
+                            style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}
+                          >
+                            <UserAvatar
+                              userId={request.user.id}
+                              displayName={request.user.display_name}
+                              avatarUrl={request.user.avatar_url}
+                              size="small"
+                            />
+                          </button>
                           <div className="flex-1 min-w-0">
-                            <p className="font-bold text-gray-900 text-sm mb-0.5" style={{ fontFamily: 'Heebo, sans-serif' }}>
-                              {request.user.display_name}
-                            </p>
+                            <button
+                              type="button"
+                              onClick={() => onNavigateToUserProfile?.(request.user.id)}
+                              className="flex items-center gap-1 active:opacity-70 mb-0.5"
+                              style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}
+                            >
+                              <span className="font-bold text-gray-900 text-sm" style={{ fontFamily: 'Heebo, sans-serif' }}>
+                                {request.user.display_name}
+                              </span>
+                              <ChevronLeft className="w-4 h-4 text-gray-400" strokeWidth={2.5} />
+                            </button>
                             <div className="flex items-center gap-1.5 mb-2.5">
                               <Clock className="w-3 h-3 text-gray-400 flex-shrink-0" strokeWidth={2} />
                               <span className="text-[11px] text-gray-500 font-medium" style={{ fontFamily: 'Rubik, sans-serif' }}>

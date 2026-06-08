@@ -193,7 +193,16 @@ export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initial
   };
 
   const handleSubmit = async () => {
-    if (!selectedDay || !selectedTime || !latitude || !longitude) return;
+    if (!selectedDay || !selectedTime || !latitude || !longitude) {
+      alert('חסרים פרטים — ודא שבחרת מיקום, תאריך ושעה.');
+      return;
+    }
+    // The map only shows future events, so block past dates with a clear message
+    // instead of "creating" an event that silently never appears.
+    if (new Date(`${selectedDay}T${selectedTime}`).getTime() < Date.now()) {
+      alert('מועד האירוע כבר עבר — בחר תאריך ושעה עתידיים.');
+      return;
+    }
     setSubmitting(true);
     try {
       let finalImage: string|null = null;

@@ -25,6 +25,7 @@ function App() {
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [selectedCountries, setSelectedCountries] = useState<Set<string>>(new Set());
   const [viewingUserId, setViewingUserId] = useState<string | null>(null);
+  const [profileBackScreen, setProfileBackScreen] = useState<Screen>('home');
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
   const [chatOtherUserId, setChatOtherUserId] = useState<string | null>(null);
 
@@ -36,6 +37,11 @@ function App() {
       document.documentElement.style.overflowX = '';
     };
   }, []);
+
+  // Remember the screen the user came from, so a viewed profile can return there
+  useEffect(() => {
+    if (currentScreen !== 'userProfile') setProfileBackScreen(currentScreen);
+  }, [currentScreen]);
 
   // Refresh session silently when the user returns to the app after being in background
   useEffect(() => {
@@ -343,7 +349,7 @@ function App() {
   if (currentScreen === 'userProfile' && viewingUserId) {
     return (
       <ProfileScreen
-        onBack={() => setCurrentScreen('home')}
+        onBack={() => setCurrentScreen(profileBackScreen)}
         currentUserId={currentUserId}
         onNavigateToMap={() => setCurrentScreen('map')}
         viewUserId={viewingUserId}
@@ -380,6 +386,10 @@ function App() {
         onCreateClick={() => {}}
         onMessagesClick={() => setCurrentScreen('messages')}
         onMyEventsClick={() => setCurrentScreen('myEvents')}
+        onNavigateToUserProfile={(userId: string) => {
+          setViewingUserId(userId);
+          setCurrentScreen('userProfile');
+        }}
       />
     );
   }
