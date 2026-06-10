@@ -78,9 +78,9 @@ export function SplashScreen({ onComplete }: { onComplete: () => void }) {
 
       ctx.clearRect(0, 0, W, H);
 
-      /* ── Central dot (fades out when text assembles) ── */
+      /* ── Central dot (fades out fast as soon as assemble begins) ── */
       const dotIn   = Math.min(1, t * 5);
-      const dotOut  = ph === 'assemble' ? Math.max(0, 1 - (t - 1.5) * 4)
+      const dotOut  = ph === 'assemble' ? Math.max(0, 1 - (t - 1.5) * 12)
                     : ph === 'hold' || ph === 'exit' ? 0
                     : 1;
       const dotAlpha = dotIn * dotOut;
@@ -220,13 +220,14 @@ export function SplashScreen({ onComplete }: { onComplete: () => void }) {
             >{ch}</span>
           ))}
 
-          {/* "." — born from the canvas dot, overshoots then settles */}
+          {/* "." — hidden until canvas dot is gone */}
           <span
             style={{
               display: 'inline-block',
               color: '#F97316',
               letterSpacing: 0,
-              animation: isText ? 'dotBorn 1.7s 0.30s ease-out both' : 'none',
+              opacity: isText ? undefined : 0,
+              animation: isText ? 'dotBorn 1.7s 0.55s ease-out both' : 'none',
             }}
           >.</span>
         </h1>

@@ -80,9 +80,12 @@ export function HomeScreen({
   const [locationsLoaded, setLocationsLoaded] = useState(false);
   const [pullY, setPullY] = useState(0);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isReturning, setIsReturning] = useState(false);
   const touchStartY = useRef(0);
   const isPulling = useRef(false);
   const scrollBodyRef = useRef<HTMLDivElement>(null);
+  const dotRef = useRef<HTMLSpanElement>(null);
+  const dotOriginY = useRef(32);
   const PULL_THRESHOLD = 80;
 
   const { events, refreshEvents, updateFilters } = useEvents({
@@ -156,6 +159,10 @@ export function HomeScreen({
     if (window.scrollY > 0) return;
     touchStartY.current = e.touches[0].clientY;
     isPulling.current = true;
+    if (dotRef.current) {
+      const r = dotRef.current.getBoundingClientRect();
+      dotOriginY.current = r.top + r.height / 2;
+    }
   };
 
   const handleTouchMove = (e: React.TouchEvent) => {
@@ -177,6 +184,8 @@ export function HomeScreen({
       setPullY(0);
       await refreshEvents();
       setIsRefreshing(false);
+      setIsReturning(true);
+      setTimeout(() => setIsReturning(false), 500);
     } else {
       setPullY(0);
     }
@@ -341,7 +350,7 @@ export function HomeScreen({
               className="text-[22px] font-black text-gray-900"
               style={{ fontFamily: 'Inter, system-ui, sans-serif', letterSpacing: '-0.04em' }}
             >
-              <span dir="ltr">FOMO<span style={{ color: '#F97316' }}>.</span></span>
+              <span dir="ltr">FOMO<span ref={dotRef} style={{ color: '#F97316', opacity: (pullY > 0 || isRefreshing) ? 0 : 1, transition: 'opacity 0.45s ease' }}>.</span></span>
             </span>
           </div>
 
@@ -372,67 +381,86 @@ export function HomeScreen({
         </div>
       </header>
 
-      {/* ─── Pull-to-refresh indicator ─── */}
-      {(pullY > 0 || isRefreshing) && (() => {
-        const progress = isRefreshing ? 1 : Math.min(pullY / PULL_THRESHOLD, 1);
-        const r = 14;
-        const cx = 22, cy = 22;
-        const circumference = 2 * Math.PI * r;
+      {/* ─── Pull-to-refresh: FOMO dot animation ─── */}
+      {(pullY > 0 || isRefreshing || isReturning) && (() => {
+        const ORBIT_R  = 22;
+        const DOT_SIZE = 9;
+        const originY  = dotOriginY.current;
+        const refreshY = originY + 72;
 
-        // Plane position: starts at top (12 o'clock), moves clockwise
-        const angleRad = -Math.PI / 2 + progress * 2 * Math.PI;
-        const px = cx + r * Math.cos(angleRad);
-        const py = cy + r * Math.sin(angleRad);
-        // Tangent direction for clockwise motion (plane nose points in direction of travel)
-        const rotDeg = progress * 360;
+        let topY: number;
+        let opacity: number;
+        let trans: string;
+
+        if (isReturning) {
+          topY    = originY + 30;       // stops near logo, never ON it
+          opacity = 0;                  // fades out on the way back
+          trans   = 'top 0.5s cubic-bezier(0.22,1,0.36,1), opacity 0.38s ease';
+        } else if (isRefreshing) {
+          topY    = refreshY;
+          opacity = 1;
+          trans   = 'none';
+        } else {
+          const p = Math.min(pullY / PULL_THRESHOLD, 1);
+          topY    = originY + (refreshY - originY) * p;
+          opacity = Math.min(p * 2.5, 1);
+          trans   = 'none';
+        }
 
         return (
-          <div style={{
-            position: 'fixed',
-            top: 'calc(4rem + env(safe-area-inset-top) + 12px)',
-            left: '50%',
-            transform: `translateX(-50%) translateY(${isRefreshing ? 0 : Math.min(pullY * 0.35, 24)}px)`,
-            transition: pullY === 0 ? 'transform 0.3s ease' : 'none',
-            zIndex: 100,
-            width: 44, height: 44,
-            borderRadius: '50%',
-            background: 'white',
-            boxShadow: '0 4px 20px rgba(0,0,0,0.12)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            opacity: isRefreshing ? 1 : Math.min(progress * 1.5, 1),
-          }}>
-            <svg width="44" height="44" viewBox="0 0 44 44">
-              <style>{`@keyframes orbitPlane { to { transform: rotate(360deg); } }`}</style>
+          <>
+            <style>{`
+              @keyframes fomoWrapSpin {
+                from { transform: rotate(0deg); }
+                to   { transform: rotate(360deg); }
+              }
+            `}</style>
 
-              <g style={isRefreshing ? { animation: 'orbitPlane 1s linear infinite', transformOrigin: '22px 22px' } : {}}>
-                {/* Dashed track */}
-                <circle cx={cx} cy={cy} r={r} fill="none" stroke="#E5E7EB" strokeWidth="1.5" strokeDasharray="2 3" />
-
-                {/* Orange arc that fills as you pull */}
-                <circle
-                  cx={cx} cy={cy} r={r}
-                  fill="none" stroke="#F97316" strokeWidth="2.5"
-                  strokeLinecap="round"
-                  strokeDasharray={`${progress * circumference} ${circumference}`}
-                  transform={`rotate(-90 ${cx} ${cy})`}
-                />
-
-                {/* Airplane — nose points right at rotation=0, which is the clockwise tangent at 12 o'clock */}
-                <g transform={`translate(${px} ${py}) rotate(${rotDeg})`}>
-                  {/* Fuselage */}
-                  <path d="M3.5,0 L-1.5,-1 L-1,0 L-1.5,1 Z" fill="#1F2937" />
-                  {/* Wings */}
-                  <path d="M0.5,-0.5 L0,-3 L-1.2,-3 L-1.2,-0.5 Z" fill="#1F2937" />
-                  <path d="M0.5,0.5 L0,3 L-1.2,3 L-1.2,0.5 Z" fill="#1F2937" />
-                  {/* Tail fins */}
-                  <path d="M-1.2,-0.4 L-2.2,-1.4 L-2.6,-1.2 L-1.5,0 Z" fill="#1F2937" />
-                  <path d="M-1.2,0.4 L-2.2,1.4 L-2.6,1.2 L-1.5,0 Z" fill="#1F2937" />
-                </g>
-              </g>
-            </svg>
-          </div>
+            <div style={{
+              position: 'fixed',
+              left: '50%',
+              top: topY,
+              opacity,
+              zIndex: 98,
+              transition: trans,
+            }}>
+              {isRefreshing ? (
+                /* ── Circular orbit: pivot at (0,0), dot offset by ORBIT_R ── */
+                <div style={{ position: 'relative', width: 0, height: 0 }}>
+                  <div style={{
+                    position: 'absolute',
+                    animation: 'fomoWrapSpin 1.2s linear infinite',
+                    transformOrigin: '0 0',
+                  }}>
+                    <div style={{
+                      position: 'absolute',
+                      width: DOT_SIZE,
+                      height: DOT_SIZE,
+                      borderRadius: '50%',
+                      background: '#F97316',
+                      boxShadow: '0 0 14px rgba(249,115,22,0.95), 0 0 30px rgba(249,115,22,0.5)',
+                      left: ORBIT_R - DOT_SIZE / 2,
+                      top: -DOT_SIZE / 2,
+                    }} />
+                  </div>
+                </div>
+              ) : (
+                /* ── Falling / returning ── */
+                <div style={{
+                  position: 'absolute',
+                  transform: 'translate(-50%, -50%)',
+                  width: DOT_SIZE,
+                  height: DOT_SIZE,
+                  borderRadius: '50%',
+                  background: '#F97316',
+                  boxShadow: '0 0 12px rgba(249,115,22,0.8)',
+                }} />
+              )}
+            </div>
+          </>
         );
       })()}
+
 
       {/* ─── Scroll body ─────────────────────────────── */}
       <div
