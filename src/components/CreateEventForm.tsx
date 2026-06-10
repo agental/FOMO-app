@@ -26,18 +26,16 @@ const EVENT_COLORS = [
 ];
 
 const EVENT_TYPES = [
-  { id: 'parties',   label: 'מסיבות', emoji: '🎉' },
-  { id: 'treks',     label: 'טרקים',  emoji: '🏕️' },
-  { id: 'food',      label: 'אוכל',   emoji: '🍔' },
-  { id: 'sports',    label: 'ספורט',  emoji: '🏄' },
-  { id: 'workshops', label: 'סדנאות', emoji: '🧘' },
+  { id: 'parties',   label: 'מסיבות',   emoji: '🎉' },
+  { id: 'treks',     label: 'טרקים',    emoji: '🏕️' },
+  { id: 'sports',    label: 'אטרקציות', emoji: '🎡' },
+  { id: 'workshops', label: 'סדנאות',   emoji: '🧘' },
 ];
 
 const EMOJI_OPTIONS: Record<string, string[]> = {
   parties:   ['🎉', '🥳', '🎊', '🪩', '🍾', '🎈', '🎵', '💃'],
   treks:     ['🏕️', '⛺', '🥾', '🏔️', '🌲', '🌄', '🗻', '🧗'],
-  food:      ['🍔', '🍕', '🍜', '🍣', '🥗', '🍰', '☕', '🍺'],
-  sports:    ['🏄', '⚽', '🏀', '🎾', '🏊', '🚴', '🧘', '💪'],
+  sports:    ['🎡', '🎢', '🎠', '🗼', '🏛️', '🎭', '🎪', '🖼️'],
   workshops: ['🧘', '🎨', '📚', '💡', '🎸', '📷', '✍️', '🧠'],
 };
 

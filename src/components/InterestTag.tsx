@@ -6,7 +6,7 @@ const interestIcons: Record<string, string> = {
   'parties': '🎉',
   'treks': '🏕️',
   'food': '🍔',
-  'sports': '🏄',
+  'sports': '🎡',
   'workshops': '🧘',
   'foodie': '🍜',
   'cocktails': '🍹',

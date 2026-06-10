@@ -1,14 +1,16 @@
 import { useState, useEffect } from 'react';
-import { Home, Map, Plus, MessageCircle, Settings } from 'lucide-react';
+import { Home, Map, Plus, MessageCircle, CalendarCheck } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 
 type NavBarProps = {
-  activeTab?: 'home' | 'map' | 'chat' | 'settings';
+  activeTab?: 'home' | 'map' | 'chat' | 'myEvents' | 'settings';
   currentUserId?: string | null;
   onHomeClick?: () => void;
   onMapClick?: () => void;
   onCreateClick?: () => void;
   onChatClick?: () => void;
+  onMyEventsClick?: () => void;
+  /** @deprecated Settings moved to the profile page; kept so existing callers don't break. */
   onSettingsClick?: () => void;
 };
 
@@ -19,7 +21,7 @@ export function FloatingNavBar({
   onMapClick,
   onCreateClick,
   onChatClick,
-  onSettingsClick,
+  onMyEventsClick,
 }: NavBarProps) {
   const [unreadCount, setUnreadCount] = useState(0);
 
@@ -139,16 +141,16 @@ export function FloatingNavBar({
             </button>
 
             <button
-              onClick={onSettingsClick}
+              onClick={onMyEventsClick}
               className="p-1.5 transition-all active:scale-95"
-              aria-label="הגדרות"
+              aria-label="האירועים שלי"
             >
               <div className={`w-9 h-9 flex items-center justify-center rounded-full transition-all duration-300 ${
-                activeTab === 'settings'
+                activeTab === 'myEvents'
                   ? 'scale-110'
                   : 'hover:bg-gray-50'
               }`}>
-                <Settings className="w-4.5 h-4.5" strokeWidth={2} style={{ color: activeTab === 'settings' ? '#FF9F43' : '#9ca3af' }} />
+                <CalendarCheck className="w-4.5 h-4.5" strokeWidth={2} style={{ color: activeTab === 'myEvents' ? '#FF9F43' : '#9ca3af' }} />
               </div>
             </button>
           </div>

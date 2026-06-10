@@ -4,6 +4,70 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ============================================================
+   FOMO — DESIGN TOKENS  (single source of truth)
+   Layer 1 Primitive  →  Layer 2 Semantic  →  Layer 3 Component
+   Brand colour is ORANGE (mirrored in tailwind.config.js `brand`).
+   Use var(--token) in inline styles / CSS, or the matching
+   Tailwind classes (bg-primary, text-content-muted, …).
+   ============================================================ */
+:root {
+  /* ── Layer 1 · Primitive (raw values) ── */
+  --orange-50: #FFF7ED;  --orange-100: #FFEDD5; --orange-200: #FED7AA;
+  --orange-400: #FB923C; --orange-500: #F97316; --orange-700: #EA580C; --orange-800: #C2410C;
+  --gray-50: #F8FAFB;  --gray-100: #F3F4F6; --gray-200: #EBEBEB; --gray-400: #9CA3AF;
+  --gray-500: #6B7280; --gray-700: #374151; --gray-900: #111827; --ink-900: #0A122A;
+  --white: #FFFFFF;    --near-black: #0C0C10;
+  --green-500: #10B981; --red-500: #EF4444; --amber-500: #F59E0B;
+
+  /* ── Layer 2 · Semantic (purpose aliases) ── */
+  --color-primary:        var(--orange-500);
+  --color-primary-dark:   var(--orange-700);
+  --color-primary-darker: var(--orange-800);
+  --color-primary-tint:   var(--orange-50);
+  --gradient-primary:     linear-gradient(135deg, var(--orange-500), var(--orange-700));
+
+  --color-surface:        var(--white);
+  --color-surface-app:    var(--gray-50);
+  --color-surface-dark:   var(--near-black);
+
+  --color-text:           var(--ink-900);
+  --color-text-heading:   var(--gray-900);
+  --color-text-secondary: var(--gray-700);
+  --color-text-muted:     var(--gray-500);     /* meets WCAG AA on white */
+
+  --color-border:         var(--gray-200);
+  --color-divider:        var(--gray-100);
+
+  --color-success:        var(--green-500);
+  --color-danger:         var(--red-500);
+  --color-warning:        var(--amber-500);
+
+  --font-heading: 'Heebo', sans-serif;
+  --font-body:    'Rubik', 'Heebo', sans-serif;
+
+  /* spacing — 4/8 rhythm */
+  --space-1: 4px;  --space-2: 8px;  --space-3: 12px; --space-4: 16px;
+  --space-5: 20px; --space-6: 24px; --space-8: 32px; --space-12: 48px;
+
+  /* radius */
+  --radius-sm: 11px; --radius-md: 16px; --radius-lg: 22px; --radius-pill: 9999px;
+
+  /* elevation */
+  --shadow-card:    0 4px 20px rgba(0,0,0,0.06);
+  --shadow-pop:     0 12px 40px rgba(0,0,0,0.1), 0 4px 15px rgba(0,0,0,0.08);
+  --shadow-primary: 0 8px 30px rgba(249,115,22,0.4);
+
+  /* ── Layer 3 · Component (component-specific) ── */
+  --btn-primary-bg: var(--gradient-primary);
+  --btn-primary-fg: var(--white);
+  --card-bg:        var(--color-surface);
+  --card-radius:    var(--radius-lg);
+  --card-shadow:    var(--shadow-card);
+  --nav-active:     var(--color-primary);
+  --nav-idle:       var(--gray-400);
+}
+
 @layer utilities {
   .safe-area-top {
     padding-top: env(safe-area-inset-top);

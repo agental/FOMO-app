@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { Search, Plus, MapPin, Shield, Bell, Calendar, Users, SlidersHorizontal, Clock, Star } from 'lucide-react';
+import { Plus, MapPin, Shield, Bell, Calendar, Users, Clock, Star, ChevronDown, Check, X, Search } from 'lucide-react';
 import { FilterSheet } from './FilterSheet';
 import { HeaderProfileAvatar } from './HeaderProfileAvatar';
 import { supabase } from '../lib/supabase';
@@ -8,8 +8,8 @@ import { eventCategories } from '../utils/eventCategories';
 import { CreateModal } from './CreateModal';
 import { MapCreateEventFlow } from './MapCreateEventFlow';
 import { CreateLocationForm } from './CreateLocationForm';
+import { CreatePostForm } from './CreatePostForm';
 import { EventDetailsModal } from './EventDetailsModal';
-import { EventCard } from './EventCard';
 import { FloatingNavBar } from './FloatingNavBar';
 import { COUNTRIES } from '../utils/countries';
 import { useEvents } from '../hooks/useEvents';
@@ -18,7 +18,7 @@ import type { AdminLocation } from '../lib/supabase';
 
 type FeedMode = 'events' | 'locations';
 
-type CreateMode = 'none' | 'select' | 'event' | 'location';
+type CreateMode = 'none' | 'select' | 'event' | 'location' | 'post';
 
 interface HomeScreenProps {
   onNavigateToProfile?: () => void;
@@ -29,7 +29,8 @@ interface HomeScreenProps {
   onNavigateToUserProfile?: (userId: string) => void;
   onMessageUser?: (userId: string) => void;
   onNavigateToCountrySelection?: () => void;
-  onNavigateToSettings?: () => void;
+  onNavigateToMyEvents?: () => void;
+  onOpenMapAt?: (lat: number, lng: number) => void;
   initialCountries?: string[];
   currentUserId?: string | null;
 }
@@ -57,7 +58,8 @@ export function HomeScreen({
   onNavigateToRequests,
   onNavigateToUserProfile,
   onNavigateToCountrySelection,
-  onNavigateToSettings,
+  onNavigateToMyEvents,
+  onOpenMapAt,
   initialCountries,
   currentUserId: propUserId,
 }: HomeScreenProps = {}) {
@@ -70,6 +72,8 @@ export function HomeScreen({
   const [selectedEvent, setSelectedEvent] = useState<Event | null>(null);
   const [selectedInterest, setSelectedInterest] = useState<string | null>(null);
   const [showFilterSheet, setShowFilterSheet] = useState(false);
+  const [showCountryPicker, setShowCountryPicker] = useState(false);
+  const [showSearch, setShowSearch] = useState(false);
   const [selectedDateFilter, setSelectedDateFilter] = useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [pendingRequestsCount, setPendingRequestsCount] = useState(0);
@@ -77,6 +81,10 @@ export function HomeScreen({
   const [userAvatarUrl, setUserAvatarUrl] = useState<string | null>(null);
   const [feedMode, setFeedMode] = useState<FeedMode>('events');
   const [adminLocations, setAdminLocations] = useState<AdminLocation[]>([]);
+  const [recommendations, setRecommendations] = useState<any[]>([]);
+  const [selectedRec, setSelectedRec] = useState<any | null>(null);
+  const [recRating, setRecRating] = useState<{ avg: number | null; count: number; mine: number }>({ avg: null, count: 0, mine: 0 });
+  const [ratingBump, setRatingBump] = useState(0);
   const [locationsLoaded, setLocationsLoaded] = useState(false);
   const [pullY, setPullY] = useState(0);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -89,27 +97,19 @@ export function HomeScreen({
   const PULL_THRESHOLD = 80;
 
   const { events, refreshEvents, updateFilters } = useEvents({
-    countries: activeCountry ? [activeCountry] : [],
+    countries: activeCountry ? [activeCountry] : selectedCountries,
     eventType: selectedInterest || undefined,
   });
 
-  // Set default active country once selectedCountries is loaded
+  // Re-fetch events whenever the country scope or filters change.
+  // activeCountry === null → show events from ALL of the user's travel countries.
   useEffect(() => {
-    if (selectedCountries.length > 0 && !activeCountry) {
-      setActiveCountry(selectedCountries[0]);
-    }
-  }, [selectedCountries]);
-
-  // Re-fetch events whenever the active country or interest filter changes
-  useEffect(() => {
-    if (activeCountry) {
-      updateFilters({
-        countries: [activeCountry],
-        eventType: selectedInterest || undefined,
-        searchQuery: searchQuery || undefined,
-      });
-    }
-  }, [activeCountry, selectedInterest, searchQuery]);
+    updateFilters({
+      countries: activeCountry ? [activeCountry] : selectedCountries,
+      eventType: selectedInterest || undefined,
+      searchQuery: searchQuery || undefined,
+    });
+  }, [activeCountry, selectedInterest, searchQuery, selectedCountries]);
 
   useEffect(() => {
     if (initialCountries && initialCountries.length > 0) {
@@ -205,9 +205,53 @@ export function HomeScreen({
     }
   };
 
+  const loadRecRatings = async (postId: string) => {
+    setRecRating({ avg: null, count: 0, mine: 0 });
+    try {
+      const { data, error } = await supabase.from('post_ratings').select('rating, user_id').eq('post_id', postId);
+      if (error || !data) return;
+      const count = data.length;
+      const avg = count ? data.reduce((s, r) => s + (r.rating || 0), 0) / count : null;
+      const mine = (currentUserId && data.find(r => r.user_id === currentUserId)?.rating) || 0;
+      setRecRating({ avg, count, mine });
+    } catch { /* post_ratings table may not exist yet */ }
+  };
+
+  const rateRec = async (rating: number) => {
+    if (!currentUserId || !selectedRec) return;
+    setRecRating(prev => ({ ...prev, mine: rating }));
+    setRatingBump(b => b + 1);
+    try {
+      const { error } = await supabase.from('post_ratings').upsert(
+        { post_id: selectedRec.id, user_id: currentUserId, rating },
+        { onConflict: 'post_id,user_id' },
+      );
+      if (error) { console.error('rate error:', error.message); return; }
+      loadRecRatings(selectedRec.id);
+    } catch (err) { console.error('rate error:', err); }
+  };
+
+  useEffect(() => {
+    if (selectedRec?.id) loadRecRatings(selectedRec.id);
+  }, [selectedRec?.id]);
+
+  const loadRecommendations = async () => {
+    try {
+      const { data } = await supabase
+        .from('posts')
+        .select('*, users(display_name, avatar_url)')
+        .order('created_at', { ascending: false })
+        .limit(50);
+      setRecommendations(data || []);
+    } catch (err) {
+      console.error('Error loading recommendations:', err);
+    }
+  };
+
   useEffect(() => {
     if (feedMode === 'locations' && !locationsLoaded) {
       loadAdminLocations();
+      loadRecommendations();
     }
   }, [feedMode]);
 
@@ -237,7 +281,6 @@ export function HomeScreen({
 
 
 
-  const activeFilterCount = (selectedInterest ? 1 : 0) + (selectedDateFilter ? 1 : 0);
 
   const handleApplyFilters = (category: string | null, date: string | null, search: string) => {
     setSelectedInterest(category);
@@ -249,7 +292,7 @@ export function HomeScreen({
 
   // Apply date filter to events pool
   const dateFilteredEvents = useMemo(() => {
-    if (!selectedDateFilter) return events;
+    if (!selectedDateFilter || selectedDateFilter === 'all') return events;
     const now = new Date();
     const todayStr = now.toDateString();
     const tom = new Date(now); tom.setDate(now.getDate() + 1);
@@ -260,6 +303,12 @@ export function HomeScreen({
       if (selectedDateFilter === 'today')    return d.toDateString() === todayStr;
       if (selectedDateFilter === 'tomorrow') return d.toDateString() === tomorrowStr;
       if (selectedDateFilter === 'week')     return d >= now && d <= weekEnd;
+      if (selectedDateFilter === 'weekend') {
+        const day = d.getDay(); // 5 = Fri, 6 = Sat (Israeli weekend)
+        return d >= now && d <= weekEnd && (day === 5 || day === 6);
+      }
+      if (selectedDateFilter === 'month')
+        return d >= now && d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
       return true;
     });
   }, [events, selectedDateFilter]);
@@ -369,13 +418,12 @@ export function HomeScreen({
               )}
             </button>
             <button
-              onClick={() => setShowFilterSheet(true)}
-              className="relative w-10 h-10 rounded-full hover:bg-gray-100 flex items-center justify-center transition-colors active:scale-95"
+              onClick={() => setShowSearch(s => !s)}
+              aria-label="חיפוש"
+              aria-pressed={showSearch}
+              className="w-10 h-10 rounded-full hover:bg-gray-100 flex items-center justify-center transition-colors active:scale-95"
             >
-              <SlidersHorizontal className="w-5 h-5 text-gray-700" strokeWidth={1.5} />
-              {activeFilterCount > 0 && (
-                <span className="absolute -top-0.5 -right-0.5 w-4 h-4 bg-orange-500 rounded-full border-2 border-white" />
-              )}
+              <Search className="w-5 h-5 text-gray-700" strokeWidth={1.8} />
             </button>
           </div>
         </div>
@@ -553,65 +601,143 @@ export function HomeScreen({
           </div>
         </div>
 
-        {/* ─── Country Stories ──────────────────────── */}
-        {selectedCountries.length > 0 && (
+        {/* ─── Search (toggled from header) ─────────────── */}
+        {showSearch && (
+          <div className="px-4 pb-3 animate-slide-down">
+            <div className="relative">
+              <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+              <input
+                autoFocus
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="חיפוש אירועים, מקומות..."
+                aria-label="חיפוש"
+                className="w-full h-11 pr-10 pl-10 text-sm rounded-2xl outline-none bg-gray-100 focus:bg-white focus:ring-2 focus:ring-orange-200 transition"
+                style={{ fontFamily: 'Heebo, sans-serif' }}
+              />
+              <button
+                onClick={() => { setSearchQuery(''); setShowSearch(false); }}
+                aria-label="סגור חיפוש"
+                className="absolute left-2.5 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full flex items-center justify-center hover:bg-gray-200 active:scale-90 transition"
+              >
+                <X className="w-4 h-4 text-gray-500" />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ─── Countries row (circles) ──────────────────── */}
+        <div
+          className="flex gap-4 overflow-x-auto scrollbar-hide px-4 pb-3"
+          style={{ WebkitOverflowScrolling: 'touch' } as React.CSSProperties}
+        >
+          {selectedCountries.map((code) => {
+            const c = COUNTRIES[code];
+            if (!c) return null;
+            const active = activeCountry === code;
+            return (
+              <button
+                key={code}
+                onClick={() => setActiveCountry(active ? null : code)}
+                aria-pressed={active}
+                className="flex-shrink-0 flex flex-col items-center gap-1.5 active:scale-90 transition-transform"
+              >
+                <div
+                  className="rounded-full p-[2.5px] transition-all duration-200"
+                  style={active
+                    ? { background: 'linear-gradient(135deg, #FF9F43, #FF7E1D)', boxShadow: '0 0 0 1px rgba(255,126,29,0.25)' }
+                    : { background: 'transparent', boxShadow: 'inset 0 0 0 2px #e5e7eb' }}
+                >
+                  <div className="w-[60px] h-[60px] rounded-full bg-white flex items-center justify-center overflow-hidden">
+                    <span className="text-[30px] leading-none select-none">{c.flag}</span>
+                  </div>
+                </div>
+                <span
+                  className={`text-[11px] font-bold max-w-[68px] truncate text-center leading-tight transition-colors ${active ? 'text-orange-500' : 'text-gray-600'}`}
+                  style={{ fontFamily: 'Heebo, sans-serif' }}
+                >
+                  {c.name}
+                </span>
+              </button>
+            );
+          })}
+
+          {/* Add / edit countries — sits at the left end of the row */}
+          <button
+            onClick={() => { if (onNavigateToCountrySelection) onNavigateToCountrySelection(); else setShowCountryPicker(true); }}
+            aria-label="הוסף או ערוך מדינות"
+            className="flex-shrink-0 flex flex-col items-center gap-1.5 active:scale-90 transition-transform"
+          >
+            <div
+              className="w-[60px] h-[60px] rounded-full flex items-center justify-center"
+              style={{ border: '2px dashed #D1D5DB', background: '#FAFAFA' }}
+            >
+              <Plus className="w-6 h-6 text-gray-400" strokeWidth={2.2} />
+            </div>
+            <span className="text-[11px] font-bold text-gray-500" style={{ fontFamily: 'Heebo, sans-serif' }}>הוסף</span>
+          </button>
+        </div>
+
+        {/* ─── Category filter (pills) ──────────────────── */}
+        <div
+          className="flex gap-2.5 overflow-x-auto scrollbar-hide px-4 pb-2 mb-1"
+          style={{ WebkitOverflowScrolling: 'touch' } as React.CSSProperties}
+        >
+          {Object.entries(eventCategories).map(([key, c]) => {
+            const isActive = selectedInterest === key;
+            return (
+              <button
+                key={key}
+                onClick={() => {
+                  setSelectedInterest(prev => (prev === key ? null : key));
+                  setSelectedDateFilter(null);
+                }}
+                aria-pressed={isActive}
+                className="flex-shrink-0 flex items-center gap-1.5 px-3.5 h-10 rounded-full transition-all active:scale-95"
+                style={isActive
+                  ? { background: 'linear-gradient(135deg, #F97316, #EA580C)', color: '#fff', boxShadow: '0 6px 16px rgba(249,115,22,0.30)' }
+                  : { background: '#fff', color: '#4B5563', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}
+              >
+                <span className="text-[16px] leading-none select-none">{c.emoji}</span>
+                <span className="text-[13px] font-bold whitespace-nowrap" style={{ fontFamily: 'Heebo, sans-serif' }}>{c.label}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* ─── Date quick-chips (slide in once a category is picked) ── */}
+        {selectedInterest && (
           <div
-            className="flex gap-4 overflow-x-auto scrollbar-hide px-4 pb-3 mb-1"
+            key={selectedInterest}
+            className="flex gap-2 overflow-x-auto scrollbar-hide px-4 pb-3 mb-1 animate-slide-down"
             style={{ WebkitOverflowScrolling: 'touch' } as React.CSSProperties}
           >
-            {selectedCountries.map(code => {
-              const country = COUNTRIES[code];
-              if (!country) return null;
-              const isActive = activeCountry === code;
+            {[
+              { v: 'all',     label: 'הכל' },
+              { v: 'today',   label: 'היום' },
+              { v: 'weekend', label: 'סוף השבוע' },
+              { v: 'week',    label: 'השבוע' },
+              { v: 'month',   label: 'החודש' },
+            ].map(chip => {
+              const active = (selectedDateFilter || 'all') === chip.v;
               return (
                 <button
-                  key={code}
-                  onClick={() => setActiveCountry(code)}
-                  className="flex-shrink-0 flex flex-col items-center gap-1.5 active:scale-90 transition-transform duration-150"
+                  key={chip.v}
+                  onClick={() => setSelectedDateFilter(chip.v === 'all' ? null : chip.v)}
+                  aria-pressed={active}
+                  className="flex-shrink-0 px-4 py-2 rounded-full text-[13px] font-bold transition-all active:scale-95"
+                  style={{
+                    fontFamily: 'Heebo, sans-serif',
+                    background: active ? 'linear-gradient(135deg, #F97316, #EA580C)' : '#F3F4F6',
+                    color: active ? '#fff' : '#6B7280',
+                    boxShadow: active ? '0 4px 14px rgba(249,115,22,0.3)' : 'none',
+                  }}
                 >
-                  {/* Ring + circle */}
-                  <div
-                    className="rounded-full p-[2.5px] transition-all duration-200"
-                    style={
-                      isActive
-                        ? { background: 'linear-gradient(135deg, #FF9F43, #FF7E1D)', boxShadow: '0 0 0 1px rgba(255,126,29,0.25)' }
-                        : { background: 'transparent', boxShadow: 'inset 0 0 0 2px #e5e7eb' }
-                    }
-                  >
-                    <div className="w-[60px] h-[60px] rounded-full bg-white flex items-center justify-center overflow-hidden">
-                      <span className="text-[30px] leading-none select-none">{country.flag}</span>
-                    </div>
-                  </div>
-                  {/* Label */}
-                  <span
-                    className={`text-[11px] font-bold max-w-[68px] truncate text-center leading-tight transition-colors duration-200 ${
-                      isActive ? 'text-orange-500' : 'text-gray-500'
-                    }`}
-                    style={{ fontFamily: 'Heebo, sans-serif' }}
-                  >
-                    {country.name}
-                  </span>
+                  {chip.label}
                 </button>
               );
             })}
-
-            {/* Add country shortcut */}
-            <button
-              onClick={onNavigateToCountrySelection ?? onNavigateToProfile}
-              className="flex-shrink-0 flex flex-col items-center gap-1.5 active:scale-90 transition-transform duration-150"
-            >
-              <div
-                className="w-[65px] h-[65px] rounded-full flex items-center justify-center border-2 border-dashed border-gray-300 bg-gray-50 hover:border-gray-400 transition-colors"
-              >
-                <Plus className="w-5 h-5 text-gray-400" strokeWidth={2.5} />
-              </div>
-              <span
-                className="text-[11px] font-bold text-gray-400 text-center leading-tight"
-                style={{ fontFamily: 'Heebo, sans-serif' }}
-              >
-                הוסף
-              </span>
-            </button>
           </div>
         )}
 
@@ -620,7 +746,40 @@ export function HomeScreen({
 
         {/* ════════════════ LOCATIONS FEED ════════════════ */}
         {feedMode === 'locations' ? (
-          !locationsLoaded ? (
+          <>
+          {recommendations.length > 0 && (
+            <div style={{ margin: '4px 16px 12px' }}>
+              <p className="px-1 mb-2" style={{ fontSize: 13, fontWeight: 900, color: '#374151', fontFamily: 'Heebo, sans-serif' }}>המלצות מהקהילה</p>
+              <div style={{ display: 'grid', gap: 10 }}>
+                {recommendations.map(rec => {
+                  const tag = rec.tags?.[0];
+                  const place = [rec.city, rec.country ? COUNTRIES[rec.country]?.name : null].filter(Boolean).join(', ');
+                  return (
+                    <div key={rec.id} onClick={() => setSelectedRec(rec)} className="active:scale-[0.99] transition-transform" style={{ display: 'flex', gap: 12, padding: 12, background: '#fff', borderRadius: 18, boxShadow: 'var(--shadow-card)', cursor: 'pointer' }}>
+                      <div style={{ width: 72, height: 72, borderRadius: 14, flexShrink: 0, overflow: 'hidden', background: '#FFF7ED', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        {rec.image_url
+                          ? <img src={rec.image_url} alt={rec.place_name || ''} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                          : <Star className="w-7 h-7" style={{ color: '#F97316' }} strokeWidth={2} />}
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
+                          <p style={{ fontSize: 15, fontWeight: 800, color: '#111827', fontFamily: "'Heebo', sans-serif", margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{rec.place_name || 'המלצה'}</p>
+                          {tag && <span style={{ fontSize: 10, fontWeight: 700, color: '#EA580C', background: '#FFF7ED', borderRadius: 20, padding: '2px 7px', flexShrink: 0, fontFamily: "'Heebo', sans-serif" }}>{tag}</span>}
+                        </div>
+                        <p style={{ fontSize: 12.5, color: '#6B7280', fontFamily: "'Rubik', sans-serif", margin: '0 0 4px', lineHeight: 1.4, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{rec.content}</p>
+                        {place && (
+                          <span style={{ fontSize: 11.5, color: '#9CA3AF', fontWeight: 500, display: 'flex', alignItems: 'center', gap: 4, fontFamily: "'Heebo', sans-serif" }}>
+                            <MapPin size={11} strokeWidth={2} /> {place}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+          {!locationsLoaded ? (
             <div className="px-4 space-y-4 pt-2">
               {[1, 2, 3].map(i => (
                 <div key={i} className="animate-pulse">
@@ -628,7 +787,7 @@ export function HomeScreen({
                 </div>
               ))}
             </div>
-          ) : adminLocations.length === 0 ? (
+          ) : (adminLocations.length === 0 && recommendations.length === 0) ? (
             <div className="flex flex-col items-center px-6 pt-20 pb-12 text-center animate-fade-in">
               <div className="text-6xl mb-5">📍</div>
               <h3 className="text-xl font-black text-gray-900 mb-2" style={{ fontFamily: 'Heebo, sans-serif' }}>
@@ -638,7 +797,7 @@ export function HomeScreen({
                 המנהל טרם הוסיף מקומות מומלצים
               </p>
             </div>
-          ) : (
+          ) : adminLocations.length > 0 ? (
             <div style={{ margin: '4px 16px 0', background: '#FFFFFF', borderRadius: 20, overflow: 'hidden', boxShadow: '0 2px 16px rgba(0,0,0,0.06)' }}>
               {adminLocations.map((loc, idx) => {
                 const img = loc.place_photo_url || loc.image_url;
@@ -701,7 +860,8 @@ export function HomeScreen({
                 );
               })}
             </div>
-          )
+          ) : null}
+          </>
 
         /* ════════════════ EVENTS FEED ════════════════ */
         ) : (
@@ -953,14 +1113,14 @@ export function HomeScreen({
         onMapClick={onNavigateToMap}
         onCreateClick={() => setCreateMode('select')}
         onChatClick={onNavigateToMessages}
-        onSettingsClick={onNavigateToSettings}
+        onMyEventsClick={onNavigateToMyEvents}
       />
 
       {/* ─── Modals ─────────────────────────────────── */}
       {createMode === 'select' && (
         <CreateModal
           onSelectEvent={() => setCreateMode('event')}
-          onSelectPost={() => setCreateMode('none')}
+          onSelectPost={() => setCreateMode('post')}
           onSelectLocation={() => setCreateMode('location')}
           onClose={() => setCreateMode('none')}
           isAdmin={isAdmin}
@@ -985,6 +1145,115 @@ export function HomeScreen({
         />
       )}
 
+      {createMode === 'post' && currentUserId && (
+        <CreatePostForm
+          onSuccess={() => { setCreateMode('none'); setFeedMode('locations'); loadRecommendations(); }}
+          onCancel={() => setCreateMode('none')}
+          currentUserId={currentUserId}
+          defaultCountry={activeCountry || selectedCountries[0] || undefined}
+        />
+      )}
+
+      {/* Recommendation details */}
+      {selectedRec && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-end justify-center animate-fade-in" dir="rtl" onClick={() => setSelectedRec(null)}>
+          <div className="bg-white w-full max-w-md rounded-t-[28px] animate-slide-up overflow-hidden" onClick={(e) => e.stopPropagation()} style={{ paddingBottom: 'max(20px, env(safe-area-inset-bottom))' }}>
+            {selectedRec.image_url ? (
+              <div style={{ position: 'relative', height: 200 }}>
+                <img src={selectedRec.image_url} alt={selectedRec.place_name || ''} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                <button onClick={() => setSelectedRec(null)} aria-label="סגור" style={{ position: 'absolute', top: 14, left: 14, width: 36, height: 36, borderRadius: '50%', background: 'rgba(0,0,0,0.45)', backdropFilter: 'blur(4px)', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
+                  <X className="w-5 h-5 text-white" />
+                </button>
+              </div>
+            ) : (
+              <div className="relative pt-3">
+                <div className="w-10 h-1 rounded-full bg-gray-200 mx-auto" />
+                <button onClick={() => setSelectedRec(null)} aria-label="סגור" className="absolute top-2 left-4 w-9 h-9 flex items-center justify-center rounded-full hover:bg-gray-100">
+                  <X className="w-5 h-5 text-gray-500" />
+                </button>
+              </div>
+            )}
+
+            <div className="px-6 pt-4">
+              <div className="flex items-center gap-2 mb-2">
+                <Star className="w-5 h-5 flex-shrink-0" style={{ color: '#F97316' }} fill="#F97316" />
+                <h2 className="text-2xl font-black text-gray-900" style={{ fontFamily: 'Heebo, sans-serif' }}>{selectedRec.place_name || 'המלצה'}</h2>
+              </div>
+              {selectedRec.tags?.[0] && (
+                <span style={{ display: 'inline-block', fontSize: 12, fontWeight: 700, color: '#EA580C', background: '#FFF7ED', borderRadius: 20, padding: '3px 12px', fontFamily: 'Heebo, sans-serif' }}>{selectedRec.tags[0]}</span>
+              )}
+              <p className="text-[15px] text-gray-600 leading-relaxed mt-3" style={{ fontFamily: 'Rubik, sans-serif' }}>{selectedRec.content}</p>
+              {(selectedRec.city || selectedRec.country) && (
+                <div className="flex items-center gap-2 mt-4 text-[14px] font-semibold" style={{ color: '#6B7280', fontFamily: 'Rubik, sans-serif' }}>
+                  <MapPin className="w-4 h-4" style={{ color: '#F97316' }} />
+                  {[selectedRec.city, selectedRec.country ? COUNTRIES[selectedRec.country]?.name : null].filter(Boolean).join(', ')}
+                </div>
+              )}
+              {selectedRec.users?.display_name && (
+                <p className="text-[13px] text-gray-400 mt-2" style={{ fontFamily: 'Rubik, sans-serif' }}>הומלץ על ידי {selectedRec.users.display_name}</p>
+              )}
+            </div>
+
+            {/* דירוג אופציונלי עם אנימציה */}
+            <div className="px-6 pt-5">
+              <style>{`
+                @keyframes recStarPop { 0% { transform: scale(0.5); } 55% { transform: scale(1.28); } 100% { transform: scale(1); } }
+                @media (prefers-reduced-motion: reduce) { .rec-star { animation: none !important; } }
+              `}</style>
+              <div className="rounded-2xl border border-gray-100 px-4 py-3.5" style={{ background: '#FAFAFA' }}>
+                <div className="flex items-center justify-between">
+                  <span className="text-[14px] font-black text-gray-700" style={{ fontFamily: 'Heebo, sans-serif' }}>
+                    {recRating.mine > 0 ? 'הדירוג שלך' : 'דרגו את המקום'}
+                  </span>
+                  {recRating.avg != null && recRating.count > 0 && (
+                    <span className="flex items-center gap-1 text-[13px] font-bold text-gray-400" style={{ fontFamily: 'Rubik, sans-serif' }}>
+                      <Star className="w-3.5 h-3.5" style={{ color: '#F97316' }} fill="#F97316" />
+                      {recRating.avg.toFixed(1)} · {recRating.count}
+                    </span>
+                  )}
+                </div>
+                <div key={ratingBump} className="flex gap-2 mt-2.5" style={{ direction: 'ltr', justifyContent: 'flex-end' }}>
+                  {[1, 2, 3, 4, 5].map((n) => {
+                    const filled = n <= recRating.mine;
+                    return (
+                      <button
+                        key={n}
+                        type="button"
+                        onClick={() => rateRec(n)}
+                        aria-label={`דרג ${n} מתוך 5`}
+                        className="rec-star"
+                        style={{ background: 'none', border: 'none', padding: 2, cursor: currentUserId ? 'pointer' : 'default', lineHeight: 0, animation: filled ? `recStarPop 0.42s cubic-bezier(0.34,1.56,0.64,1) ${(n - 1) * 70}ms both` : 'none' }}
+                      >
+                        <Star className="w-9 h-9" strokeWidth={2} style={{ color: filled ? '#F97316' : '#D1D5DB', fill: filled ? '#F97316' : 'none', transition: 'color 0.18s, fill 0.18s' }} />
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="text-[11.5px] mt-2" style={{ color: recRating.mine > 0 ? '#16A34A' : '#9CA3AF', fontFamily: 'Rubik, sans-serif', transition: 'color 0.2s' }}>
+                  {!currentUserId ? 'התחברו כדי לדרג' : recRating.mine > 0 ? 'תודה על הדירוג! 🎉' : 'אופציונלי — לא חובה לדרג'}
+                </p>
+              </div>
+            </div>
+
+            <div className="px-5 pt-5">
+              {selectedRec.latitude != null && selectedRec.longitude != null && onOpenMapAt ? (
+                <button
+                  onClick={() => { const r = selectedRec; setSelectedRec(null); onOpenMapAt(r.latitude, r.longitude); }}
+                  className="w-full h-14 rounded-2xl font-black text-white active:scale-[0.98] transition flex items-center justify-center gap-2"
+                  style={{ background: 'linear-gradient(135deg, #F97316, #EA580C)', boxShadow: '0 8px 24px rgba(249,115,22,0.35)', fontFamily: 'Heebo, sans-serif' }}
+                >
+                  <MapPin className="w-5 h-5" /> פתח במפה
+                </button>
+              ) : (
+                <div className="text-center text-[13px] text-gray-400 py-2" style={{ fontFamily: 'Rubik, sans-serif' }}>
+                  למקום זה לא צורף מיקום מדויק
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {selectedEvent && (
         <EventDetailsModal
           event={selectedEvent}
@@ -1002,6 +1271,69 @@ export function HomeScreen({
         onApply={handleApplyFilters}
         onClose={() => setShowFilterSheet(false)}
       />
+
+      {/* ── Country picker ── */}
+      {showCountryPicker && (
+        <div
+          className="fixed inset-0 z-50 flex items-end"
+          style={{ background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(6px)' }}
+          onClick={() => setShowCountryPicker(false)}
+          dir="rtl"
+        >
+          <div
+            className="w-full bg-white"
+            style={{ borderRadius: '24px 24px 0 0', maxHeight: '80dvh', boxShadow: '0 -16px 50px rgba(0,0,0,0.25)', animation: 'slide-up 0.3s ease-out' }}
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="relative px-5 pt-3 pb-3" style={{ borderBottom: '1px solid #F3F4F6' }}>
+              <div className="w-10 h-1 rounded-full bg-gray-200 mx-auto mb-4" />
+              <h3 className="text-[18px] font-black text-gray-900 text-center" style={{ fontFamily: 'Heebo, sans-serif' }}>בחר מדינה</h3>
+              <button onClick={() => setShowCountryPicker(false)} aria-label="סגור" className="absolute left-4 top-3 w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center active:scale-95">
+                <X className="w-5 h-5 text-gray-500" />
+              </button>
+            </div>
+
+            <div className="overflow-y-auto px-4 py-3" style={{ maxHeight: 'calc(80dvh - 130px)' }}>
+              <button
+                onClick={() => { setActiveCountry(null); setShowCountryPicker(false); }}
+                className="w-full flex items-center gap-3 px-3 py-3 rounded-2xl active:scale-[0.98] transition-all mb-1"
+                style={{ background: !activeCountry ? '#FFF7ED' : 'transparent', border: !activeCountry ? '1.5px solid #FDBA74' : '1.5px solid transparent' }}
+              >
+                <span className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center text-[18px]">🌍</span>
+                <span className="flex-1 text-right text-[15px] font-bold text-gray-900" style={{ fontFamily: 'Heebo, sans-serif' }}>כל המדינות שלי</span>
+                {!activeCountry && <Check className="w-5 h-5 text-orange-500" strokeWidth={2.5} />}
+              </button>
+
+              {selectedCountries.map(code => {
+                const c = COUNTRIES[code]; if (!c) return null;
+                const sel = activeCountry === code;
+                return (
+                  <button
+                    key={code}
+                    onClick={() => { setActiveCountry(code); setShowCountryPicker(false); }}
+                    className="w-full flex items-center gap-3 px-3 py-3 rounded-2xl active:scale-[0.98] transition-all mb-1"
+                    style={{ background: sel ? '#FFF7ED' : 'transparent', border: sel ? '1.5px solid #FDBA74' : '1.5px solid transparent' }}
+                  >
+                    <span className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center text-[18px]">{c.flag}</span>
+                    <span className="flex-1 text-right text-[15px] font-bold text-gray-900" style={{ fontFamily: 'Heebo, sans-serif' }}>{c.name}</span>
+                    {sel && <Check className="w-5 h-5 text-orange-500" strokeWidth={2.5} />}
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="px-4 pt-2" style={{ paddingBottom: 'max(20px, env(safe-area-inset-bottom))' }}>
+              <button
+                onClick={() => { setShowCountryPicker(false); (onNavigateToCountrySelection ?? onNavigateToProfile)?.(); }}
+                className="w-full flex items-center justify-center gap-2 py-3 rounded-2xl active:scale-95 transition-all"
+                style={{ background: '#F3F4F6', color: '#6B7280', fontSize: 14, fontWeight: 700, fontFamily: 'Heebo, sans-serif' }}
+              >
+                <Plus className="w-4 h-4" strokeWidth={2.5} /> ערוך מדינות
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

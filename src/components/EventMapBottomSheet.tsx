@@ -29,7 +29,7 @@ const eventTypeEmojis: Record<string, string> = {
   parties: '🎉',
   treks: '🏕️',
   food: '🍔',
-  sports: '🏄',
+  sports: '🎡',
   workshops: '🧘',
 };
 
@@ -37,7 +37,7 @@ const eventTypeLabels: Record<string, string> = {
   parties: 'מסיבות וחיי לילה',
   treks: 'טרקים והרפתקאות',
   food: 'אוכל וקולינריה',
-  sports: 'ספורט ופעילות',
+  sports: 'אטרקציות ופעילויות',
   workshops: 'סדנאות ולמידה',
 };
 

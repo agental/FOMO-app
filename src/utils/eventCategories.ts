@@ -10,15 +10,10 @@ export const eventCategories: Record<string, EventCategoryConfig> = {
     label: 'מסיבות',
     emoji: '🎉',
   },
-  food: {
-    color: '#F97316',   // orange
-    label: 'אוכל',
-    emoji: '🍔',
-  },
   sports: {
     color: '#0EA5E9',   // sky blue
-    label: 'ספורט',
-    emoji: '🏄',
+    label: 'אטרקציות',
+    emoji: '🎡',
   },
   treks: {
     color: '#22C55E',   // green

@@ -10,7 +10,8 @@ interface CountrySelectionScreenProps {
   onBack?: () => void;
 }
 
-const ACCENT = '#FF6B35';
+const ACCENT = '#F97316';
+const ACCENT_DARK = '#EA580C';
 const POPULAR = ['IL', 'TH', 'IN', 'US', 'ES', 'IT', 'GR', 'TR', 'JP', 'FR', 'DE', 'GB'];
 
 const CONTINENT_ORDER: Array<keyof typeof CONTINENTS> = ['asia', 'europe', 'americas', 'africa', 'oceania'];
@@ -31,6 +32,8 @@ function CountryCircle({
   return (
     <button
       onClick={onToggle}
+      aria-pressed={selected}
+      aria-label={`${name}${selected ? ' (נבחרה)' : ''}`}
       className="flex flex-col items-center gap-1.5 active:scale-90 transition-transform flex-shrink-0"
       style={{ width: 72 }}
     >
@@ -41,7 +44,7 @@ function CountryCircle({
             padding: 3,
             borderRadius: '50%',
             background: selected
-              ? `linear-gradient(135deg, ${ACCENT}, #FF8C00)`
+              ? `linear-gradient(135deg, ${ACCENT}, ${ACCENT_DARK})`
               : 'transparent',
             border: selected ? 'none' : '2.5px solid #E5E5E5',
           }}
@@ -224,6 +227,7 @@ export function CountrySelectionScreen({
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
             placeholder="חיפוש מדינה..."
+            aria-label="חיפוש מדינה"
             className="w-full h-11 pr-10 pl-4 text-sm outline-none"
             style={{
               background: '#F5F5F5',
@@ -304,7 +308,7 @@ export function CountrySelectionScreen({
             fontFamily: 'Heebo, sans-serif',
             height: 56,
             borderRadius: 28,
-            background: `linear-gradient(135deg, ${ACCENT}, #FF8C00)`,
+            background: `linear-gradient(135deg, ${ACCENT}, ${ACCENT_DARK})`,
             boxShadow: selectedCountries.size > 0 ? `0 8px 24px ${ACCENT}55` : 'none',
           }}
         >
