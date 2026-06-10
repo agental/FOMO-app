@@ -30,6 +30,7 @@ export function CreatePostForm({ onSuccess, onCancel, currentUserId, defaultCoun
   const [city, setCity] = useState('');
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState('');
+  const [rating, setRating] = useState(0);
   const [latitude, setLatitude] = useState<number | null>(null);
   const [longitude, setLongitude] = useState<number | null>(null);
   const [showMap, setShowMap] = useState(false);
@@ -97,7 +98,7 @@ export function CreatePostForm({ onSuccess, onCancel, currentUserId, defaultCoun
         imageUrl = await uploadImage(imageFile);
         if (!imageUrl) { alert('שגיאה בהעלאת התמונה. נסו שוב או בלי תמונה.'); setSubmitting(false); return; }
       }
-      const { error } = await supabase.from('posts').insert({
+      const { data: newPost, error } = await supabase.from('posts').insert({
         user_id: currentUserId,
         content: content.trim(),
         place_name: placeName.trim(),
@@ -106,8 +107,13 @@ export function CreatePostForm({ onSuccess, onCancel, currentUserId, defaultCoun
         city: city.trim() || null,
         latitude, longitude,
         tags: category ? [category] : [],
-      });
+      }).select('id').single();
       if (error) throw error;
+      // דירוג אופציונלי של היוצר — נשמר ב-post_ratings (לא חוסם אם הטבלה חסרה)
+      if (newPost?.id && rating > 0) {
+        const { error: rErr } = await supabase.from('post_ratings').insert({ post_id: newPost.id, user_id: currentUserId, rating });
+        if (rErr) console.error('post rating insert:', rErr.message);
+      }
       onSuccess();
     } catch (err: any) {
       console.error('Create post error:', err);
@@ -168,6 +174,34 @@ export function CreatePostForm({ onSuccess, onCancel, currentUserId, defaultCoun
                   </button>
                 );
               })}
+            </div>
+          </div>
+
+          {/* Optional rating */}
+          <div>
+            <style>{`
+              @keyframes recStarPop { 0% { transform: scale(0.5); } 55% { transform: scale(1.28); } 100% { transform: scale(1); } }
+              @media (prefers-reduced-motion: reduce) { .rec-star { animation: none !important; } }
+            `}</style>
+            <label className="block text-sm font-bold text-gray-700 mb-2" style={{ fontFamily: 'Heebo, sans-serif' }}>
+              הדירוג שלך <span className="font-normal text-gray-400">(אופציונלי)</span>
+            </label>
+            <div className="flex items-center justify-between rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3">
+              <div key={rating} className="flex gap-2" style={{ direction: 'ltr' }}>
+                {[1, 2, 3, 4, 5].map((n) => {
+                  const filled = n <= rating;
+                  return (
+                    <button key={n} type="button" onClick={() => setRating(rating === n ? 0 : n)} aria-label={`דרג ${n} מתוך 5`}
+                      className="rec-star"
+                      style={{ background: 'none', border: 'none', padding: 2, cursor: 'pointer', lineHeight: 0, animation: filled ? `recStarPop 0.42s cubic-bezier(0.34,1.56,0.64,1) ${(n - 1) * 70}ms both` : 'none' }}>
+                      <Star className="w-8 h-8" strokeWidth={2} style={{ color: filled ? '#F97316' : '#D1D5DB', fill: filled ? '#F97316' : 'none', transition: 'color 0.18s, fill 0.18s' }} />
+                    </button>
+                  );
+                })}
+              </div>
+              {rating > 0 && (
+                <span className="text-sm font-bold" style={{ color: '#16A34A', fontFamily: 'Rubik, sans-serif' }}>{rating}/5</span>
+              )}
             </div>
           </div>
 

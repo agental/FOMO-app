@@ -33,6 +33,8 @@ interface MapScreenProps {
   onNavigateToMessages?: () => void;
   onNavigateToUserProfile?: (userId: string) => void;
   onMessageUser?: (userId: string) => void;
+  focusLocation?: { latitude: number; longitude: number } | null;
+  onFocusHandled?: () => void;
 }
 
 interface UserLocation { latitude: number; longitude: number; }
@@ -55,6 +57,8 @@ export function MapScreen({
   onNavigateToMyEvents,
   onNavigateToMessages,
   onNavigateToUserProfile,
+  focusLocation,
+  onFocusHandled,
 }: MapScreenProps) {
   /* location & map */
   const [location,      setLocation]      = useState<UserLocation | null>(null);
@@ -426,6 +430,14 @@ export function MapScreen({
       postMarkersRef.current.push(marker);
     });
   }, [posts, mapReady]);
+
+  /* ── Fly to a focused location (e.g. "open in map" from a recommendation) ── */
+  useEffect(() => {
+    if (!focusLocation || !mapInstanceRef.current) return;
+    setMapFilter(f => (f === 'all' || f === 'places') ? f : 'all');
+    mapInstanceRef.current.flyTo({ center: [focusLocation.longitude, focusLocation.latitude], zoom: 15, essential: true });
+    onFocusHandled?.();
+  }, [focusLocation, mapReady]);
 
   /* ── Meetup pins ── */
   useEffect(() => {
