@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { Plus, MapPin, Shield, Bell, Calendar, Users, Clock, Star, Globe, ChevronDown, Check, X } from 'lucide-react';
+import { Plus, MapPin, Shield, Bell, Calendar, Users, Clock, Star, ChevronDown, Check, X, Search } from 'lucide-react';
 import { FilterSheet } from './FilterSheet';
 import { HeaderProfileAvatar } from './HeaderProfileAvatar';
 import { supabase } from '../lib/supabase';
@@ -73,6 +73,7 @@ export function HomeScreen({
   const [selectedInterest, setSelectedInterest] = useState<string | null>(null);
   const [showFilterSheet, setShowFilterSheet] = useState(false);
   const [showCountryPicker, setShowCountryPicker] = useState(false);
+  const [showSearch, setShowSearch] = useState(false);
   const [selectedDateFilter, setSelectedDateFilter] = useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [pendingRequestsCount, setPendingRequestsCount] = useState(0);
@@ -408,16 +409,12 @@ export function HomeScreen({
               )}
             </button>
             <button
-              onClick={() => setShowCountryPicker(true)}
-              aria-label="בחר מדינה"
-              className="relative h-10 px-2.5 rounded-full hover:bg-gray-100 flex items-center gap-1 transition-colors active:scale-95"
+              onClick={() => setShowSearch(s => !s)}
+              aria-label="חיפוש"
+              aria-pressed={showSearch}
+              className="w-10 h-10 rounded-full hover:bg-gray-100 flex items-center justify-center transition-colors active:scale-95"
             >
-              {activeCountryData ? (
-                <span className="text-[20px] leading-none">{activeCountryData.flag}</span>
-              ) : (
-                <Globe className="w-5 h-5 text-gray-700" strokeWidth={1.7} />
-              )}
-              <ChevronDown className="w-3.5 h-3.5 text-gray-400" strokeWidth={2.5} />
+              <Search className="w-5 h-5 text-gray-700" strokeWidth={1.8} />
             </button>
           </div>
         </div>
@@ -576,9 +573,87 @@ export function HomeScreen({
           </div>
         </div>
 
-        {/* ─── Category filter (stories style) ──────────── */}
+        {/* ─── Search (toggled from header) ─────────────── */}
+        {showSearch && (
+          <div className="px-4 pb-3 animate-slide-down">
+            <div className="relative">
+              <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+              <input
+                autoFocus
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="חיפוש אירועים, מקומות..."
+                aria-label="חיפוש"
+                className="w-full h-11 pr-10 pl-10 text-sm rounded-2xl outline-none bg-gray-100 focus:bg-white focus:ring-2 focus:ring-orange-200 transition"
+                style={{ fontFamily: 'Heebo, sans-serif' }}
+              />
+              <button
+                onClick={() => { setSearchQuery(''); setShowSearch(false); }}
+                aria-label="סגור חיפוש"
+                className="absolute left-2.5 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full flex items-center justify-center hover:bg-gray-200 active:scale-90 transition"
+              >
+                <X className="w-4 h-4 text-gray-500" />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ─── Countries row (circles) ──────────────────── */}
         <div
-          className="flex gap-4 overflow-x-auto scrollbar-hide px-4 pb-2 mb-1"
+          className="flex gap-4 overflow-x-auto scrollbar-hide px-4 pb-3"
+          style={{ WebkitOverflowScrolling: 'touch' } as React.CSSProperties}
+        >
+          {selectedCountries.map((code) => {
+            const c = COUNTRIES[code];
+            if (!c) return null;
+            const active = activeCountry === code;
+            return (
+              <button
+                key={code}
+                onClick={() => setActiveCountry(active ? null : code)}
+                aria-pressed={active}
+                className="flex-shrink-0 flex flex-col items-center gap-1.5 active:scale-90 transition-transform"
+              >
+                <div
+                  className="rounded-full p-[2.5px] transition-all duration-200"
+                  style={active
+                    ? { background: 'linear-gradient(135deg, #FF9F43, #FF7E1D)', boxShadow: '0 0 0 1px rgba(255,126,29,0.25)' }
+                    : { background: 'transparent', boxShadow: 'inset 0 0 0 2px #e5e7eb' }}
+                >
+                  <div className="w-[60px] h-[60px] rounded-full bg-white flex items-center justify-center overflow-hidden">
+                    <span className="text-[30px] leading-none select-none">{c.flag}</span>
+                  </div>
+                </div>
+                <span
+                  className={`text-[11px] font-bold max-w-[68px] truncate text-center leading-tight transition-colors ${active ? 'text-orange-500' : 'text-gray-600'}`}
+                  style={{ fontFamily: 'Heebo, sans-serif' }}
+                >
+                  {c.name}
+                </span>
+              </button>
+            );
+          })}
+
+          {/* Add / edit countries — sits at the left end of the row */}
+          <button
+            onClick={() => { if (onNavigateToCountrySelection) onNavigateToCountrySelection(); else setShowCountryPicker(true); }}
+            aria-label="הוסף או ערוך מדינות"
+            className="flex-shrink-0 flex flex-col items-center gap-1.5 active:scale-90 transition-transform"
+          >
+            <div
+              className="w-[60px] h-[60px] rounded-full flex items-center justify-center"
+              style={{ border: '2px dashed #D1D5DB', background: '#FAFAFA' }}
+            >
+              <Plus className="w-6 h-6 text-gray-400" strokeWidth={2.2} />
+            </div>
+            <span className="text-[11px] font-bold text-gray-500" style={{ fontFamily: 'Heebo, sans-serif' }}>הוסף</span>
+          </button>
+        </div>
+
+        {/* ─── Category filter (pills) ──────────────────── */}
+        <div
+          className="flex gap-2.5 overflow-x-auto scrollbar-hide px-4 pb-2 mb-1"
           style={{ WebkitOverflowScrolling: 'touch' } as React.CSSProperties}
         >
           {Object.entries(eventCategories).map(([key, c]) => {
@@ -591,33 +666,13 @@ export function HomeScreen({
                   setSelectedDateFilter(null);
                 }}
                 aria-pressed={isActive}
-                className="flex-shrink-0 flex flex-col items-center gap-1.5 active:scale-90 transition-transform duration-150"
+                className="flex-shrink-0 flex items-center gap-1.5 px-3.5 h-10 rounded-full transition-all active:scale-95"
+                style={isActive
+                  ? { background: 'linear-gradient(135deg, #F97316, #EA580C)', color: '#fff', boxShadow: '0 6px 16px rgba(249,115,22,0.30)' }
+                  : { background: '#fff', color: '#4B5563', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}
               >
-                {/* Ring + circle */}
-                <div
-                  className="rounded-full p-[2.5px] transition-all duration-200"
-                  style={
-                    isActive
-                      ? { background: 'linear-gradient(135deg, #FF9F43, #FF7E1D)', boxShadow: '0 0 0 1px rgba(255,126,29,0.25)' }
-                      : { background: 'transparent', boxShadow: 'inset 0 0 0 2px #e5e7eb' }
-                  }
-                >
-                  <div
-                    className="w-[60px] h-[60px] rounded-full flex items-center justify-center overflow-hidden transition-colors duration-200"
-                    style={{ background: isActive ? '#FFF7ED' : '#fff' }}
-                  >
-                    <span className="text-[28px] leading-none select-none">{c.emoji}</span>
-                  </div>
-                </div>
-                {/* Label */}
-                <span
-                  className={`text-[11px] font-bold max-w-[68px] truncate text-center leading-tight transition-colors duration-200 ${
-                    isActive ? 'text-orange-500' : 'text-gray-500'
-                  }`}
-                  style={{ fontFamily: 'Heebo, sans-serif' }}
-                >
-                  {c.label}
-                </span>
+                <span className="text-[16px] leading-none select-none">{c.emoji}</span>
+                <span className="text-[13px] font-bold whitespace-nowrap" style={{ fontFamily: 'Heebo, sans-serif' }}>{c.label}</span>
               </button>
             );
           })}

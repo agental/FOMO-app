@@ -254,7 +254,12 @@ function App() {
   }
 
   if (currentScreen === 'onboarding') {
-    return <OnboardingScreen onComplete={() => setCurrentScreen('createProfile')} />;
+    return (
+      <OnboardingScreen
+        onComplete={() => setCurrentScreen('createProfile')}
+        onLogin={() => setCurrentScreen('auth')}
+      />
+    );
   }
 
   if (currentScreen === 'createProfile') {

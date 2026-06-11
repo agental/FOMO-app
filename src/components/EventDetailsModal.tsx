@@ -25,7 +25,7 @@ const CATEGORY_CONFIG: Record<string, { gradient: string; accent: string; light:
   parties:   { gradient: 'from-purple-500 via-pink-500 to-rose-400',    accent: '#a855f7', light: '#faf5ff', image: 'https://images.pexels.com/photos/1105666/pexels-photo-1105666.jpeg?auto=compress&cs=tinysrgb&w=800', label: 'מסיבה 🎉' },
   treks:     { gradient: 'from-green-400 via-emerald-500 to-teal-600',  accent: '#10b981', light: '#f0fdf4', image: 'https://images.pexels.com/photos/2662116/pexels-photo-2662116.jpeg?auto=compress&cs=tinysrgb&w=800', label: 'טרק 🏕️' },
   food:      { gradient: 'from-orange-400 via-amber-400 to-yellow-400', accent: '#f97316', light: '#fff7ed', image: 'https://images.pexels.com/photos/1640777/pexels-photo-1640777.jpeg?auto=compress&cs=tinysrgb&w=800', label: 'אוכל 🍔' },
-  sports:    { gradient: 'from-blue-500 via-cyan-400 to-sky-400',       accent: '#3b82f6', light: '#eff6ff', image: 'https://images.pexels.com/photos/390051/surfer-wave-sunset-the-indian-ocean-390051.jpeg?auto=compress&cs=tinysrgb&w=800', label: 'ספורט 🏄' },
+  sports:    { gradient: 'from-blue-500 via-cyan-400 to-sky-400',       accent: '#3b82f6', light: '#eff6ff', image: 'https://images.pexels.com/photos/2884867/pexels-photo-2884867.jpeg?auto=compress&cs=tinysrgb&w=800', label: 'אטרקציות 🎡' },
   workshops: { gradient: 'from-yellow-400 via-amber-400 to-orange-400', accent: '#f59e0b', light: '#fffbeb', image: 'https://images.pexels.com/photos/3822622/pexels-photo-3822622.jpeg?auto=compress&cs=tinysrgb&w=800', label: 'סדנה 🧘' },
   yeshivot:  { gradient: 'from-indigo-500 via-violet-500 to-purple-600',accent: '#6366f1', light: '#eef2ff', image: 'https://images.pexels.com/photos/256541/pexels-photo-256541.jpeg?auto=compress&cs=tinysrgb&w=800', label: 'ישיבה 📖' },
 };

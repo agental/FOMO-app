@@ -3,8 +3,7 @@ import { X, Check, Search } from 'lucide-react';
 
 const CATEGORIES = [
   { id: 'parties',   label: 'מסיבות', emoji: '🎉', color: '#A855F7' },
-  { id: 'food',      label: 'אוכל',   emoji: '🍔', color: '#F97316' },
-  { id: 'sports',    label: 'ספורט',  emoji: '🏄', color: '#0EA5E9' },
+  { id: 'sports',    label: 'אטרקציות', emoji: '🎡', color: '#0EA5E9' },
   { id: 'treks',     label: 'טיולים', emoji: '🏕️', color: '#22C55E' },
   { id: 'workshops', label: 'סדנאות', emoji: '🧘', color: '#FACC15' },
 ];
