@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Calendar, MapPin } from 'lucide-react';
+import { Calendar, MapPin, MessageCircle, Navigation } from 'lucide-react';
 import { supabase, type Event } from '../lib/supabase';
 import { flagEmoji } from '../utils/flags';
 import { UserAvatar } from './UserAvatar';
@@ -19,6 +19,8 @@ type EventDetailsModalProps = {
   onClose: () => void;
   currentUserId?: string | null;
   onNavigateToUserProfile?: (userId: string) => void;
+  onOpenMapAt?: (lat: number, lng: number) => void;
+  onMessageUser?: (userId: string) => void;
 };
 
 const CATEGORY_CONFIG: Record<string, { gradient: string; accent: string; light: string; image: string; label: string }> = {
@@ -31,13 +33,14 @@ const CATEGORY_CONFIG: Record<string, { gradient: string; accent: string; light:
 };
 const DEFAULT_CONFIG = { gradient: 'from-slate-500 via-gray-500 to-zinc-600', accent: '#F97316', light: '#fff7ed', image: '', label: 'אירוע 📅' };
 
-export function EventDetailsModal({ event, onClose, currentUserId: propUserId, onNavigateToUserProfile }: EventDetailsModalProps) {
+export function EventDetailsModal({ event, onClose, currentUserId: propUserId, onNavigateToUserProfile, onOpenMapAt, onMessageUser }: EventDetailsModalProps) {
   const [attendees, setAttendees]     = useState<Attendee[]>([]);
   const [isJoined, setIsJoined]       = useState(false);
   const [requestStatus, setRequestStatus] = useState<'none' | 'pending' | 'approved' | 'rejected'>('none');
   const [joining, setJoining]         = useState(false);
   const [saved, setSaved]             = useState(false);
   const [showPayment, setShowPayment] = useState(false);
+  const [showNav, setShowNav] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const currentUserId = propUserId || '00000000-0000-0000-0000-000000000001';
@@ -158,6 +161,27 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
       if (navigator.share) await navigator.share({ title: event.title, text, url });
       else if (navigator.clipboard) { await navigator.clipboard.writeText(`${text}\n${url}`); alert('הקישור הועתק'); }
     } catch { /* user dismissed the share sheet */ }
+  };
+
+  // Tapping the map → open the exact location inside the app's map.
+  // If no in-app handler is available, fall back to the external navigation picker.
+  const handleMapClick = () => {
+    if (event.latitude == null || event.longitude == null) return;
+    if (onOpenMapAt) { onOpenMapAt(event.latitude, event.longitude); onClose(); }
+    else setShowNav(true);
+  };
+
+  // Open the exact location in an external navigation app.
+  const openNav = (app: 'google' | 'apple' | 'waze') => {
+    const lat = event.latitude, lng = event.longitude;
+    if (lat == null || lng == null) return;
+    const label = encodeURIComponent(event.title || event.city || '');
+    const url =
+      app === 'google' ? `https://www.google.com/maps/search/?api=1&query=${lat},${lng}` :
+      app === 'apple'  ? `https://maps.apple.com/?ll=${lat},${lng}&q=${label}` :
+                         `https://waze.com/ul?ll=${lat},${lng}&navigate=yes`;
+    window.open(url, '_blank');
+    setShowNav(false);
   };
 
   const joinLabel = isJoined ? 'ביטול השתתפות'
@@ -305,16 +329,30 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
             )}
           </div>
 
-          {/* Location */}
-          <div
-            className="flex items-center gap-2 py-3.5"
-            style={{  }}
-          >
-            <MapPin className="w-4 h-4 flex-shrink-0" style={{ color: '#F97316' }} />
-            <span className="text-[13px] font-semibold" style={{ color: '#F97316' }}>
-              {flagEmoji(event.country ?? '')} {event.city}
-            </span>
-          </div>
+          {/* Location → external navigation picker (Google / Apple / Waze) */}
+          {event.latitude != null && event.longitude != null ? (
+            <button
+              onClick={() => setShowNav(true)}
+              className="w-full flex items-center justify-between py-3.5 active:opacity-70 transition-opacity"
+            >
+              <span className="flex items-center gap-2">
+                <MapPin className="w-4 h-4 flex-shrink-0" style={{ color: '#F97316' }} />
+                <span className="text-[13px] font-semibold" style={{ color: '#F97316' }}>
+                  {flagEmoji(event.country ?? '')} {event.city}
+                </span>
+              </span>
+              <span className="flex items-center gap-1 text-[12px] font-bold" style={{ color: '#9CA3AF', fontFamily: 'Heebo, sans-serif' }}>
+                <Navigation className="w-3.5 h-3.5" /> נווט
+              </span>
+            </button>
+          ) : (
+            <div className="flex items-center gap-2 py-3.5">
+              <MapPin className="w-4 h-4 flex-shrink-0" style={{ color: '#F97316' }} />
+              <span className="text-[13px] font-semibold" style={{ color: '#F97316' }}>
+                {flagEmoji(event.country ?? '')} {event.city}
+              </span>
+            </div>
+          )}
 
           {/* Host row */}
           {creator && (
@@ -337,12 +375,13 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
                   <p className="text-[12px] text-gray-400">מארגן</p>
                 </div>
               </div>
-              {!isOwner && (
+              {!isOwner && onMessageUser && (
                 <button
-                  className="px-5 py-2 rounded-full text-white text-[13px] font-bold active:scale-95 transition-transform"
+                  onClick={() => onMessageUser(event.user_id)}
+                  className="flex items-center gap-1.5 px-5 py-2 rounded-full text-white text-[13px] font-bold active:scale-95 transition-transform"
                   style={{ background: '#111827', fontFamily: 'Heebo, sans-serif' }}
                 >
-                  הודעה
+                  <MessageCircle className="w-4 h-4" /> הודעה
                 </button>
               )}
             </div>
@@ -378,11 +417,21 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
             )}
           </div>
 
-          {/* Map */}
+          {/* Map → opens the exact location inside the app */}
           {event.latitude && event.longitude && (
             <div className="pt-4 pb-2">
               <p className="text-[11px] text-gray-400 font-semibold mb-2 tracking-wide uppercase">מפה</p>
-              <div className="rounded-[16px] overflow-hidden relative" style={{ height: 180 }}>
+              <div
+                onClick={handleMapClick}
+                className="rounded-[16px] overflow-hidden relative cursor-pointer active:opacity-95"
+                style={{ height: 180 }}
+              >
+                <div
+                  className="absolute top-2 right-2 z-30 bg-white/95 backdrop-blur-sm text-[11px] font-bold px-2.5 py-1 rounded-full flex items-center gap-1 shadow-sm"
+                  style={{ color: '#F97316', fontFamily: 'Heebo, sans-serif' }}
+                >
+                  <MapPin className="w-3 h-3" /> פתח במפה
+                </div>
                 <img
                   src={`https://api.mapbox.com/styles/v1/mapbox/streets-v12/static/${event.longitude},${event.latitude},14,0/600x420@2x?access_token=${import.meta.env.VITE_MAPBOX_TOKEN}`}
                   alt="map"
@@ -585,6 +634,67 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
             <div className="px-5 mt-3">
               <button
                 onClick={() => setShowPayment(false)}
+                className="w-full text-center text-[15px] font-semibold text-gray-400 py-3"
+                style={{ fontFamily: 'Heebo, sans-serif' }}
+              >
+                ביטול
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* ── Navigation picker sheet ── */}
+      {showNav && (
+        <>
+          <div
+            className="fixed inset-0 z-30"
+            style={{ background: 'rgba(0,0,0,0.45)', backdropFilter: 'blur(3px)' }}
+            onClick={() => setShowNav(false)}
+          />
+          <div
+            className="fixed bottom-0 left-0 right-0 z-40 bg-white"
+            dir="rtl"
+            style={{
+              borderRadius: '24px 24px 0 0',
+              animation: 'payment-up 0.32s cubic-bezier(0.16,1,0.3,1)',
+              paddingBottom: 'max(28px, env(safe-area-inset-bottom))',
+            }}
+          >
+            <div className="flex justify-center pt-3 pb-1">
+              <div className="w-10 h-1 rounded-full bg-gray-200" />
+            </div>
+            <div className="px-5 pt-3 pb-4" style={{ borderBottom: '1px solid #F3F4F6' }}>
+              <p className="text-[18px] font-black text-gray-900 text-center" style={{ fontFamily: 'Heebo, sans-serif' }}>
+                ניווט למיקום
+              </p>
+              <p className="text-[13px] text-gray-400 text-center mt-1">{event.title}{event.city ? ' · ' + event.city : ''}</p>
+            </div>
+
+            <div className="px-5 pt-4 flex flex-col gap-3">
+              {[
+                { id: 'google' as const, label: 'Google Maps', emoji: '🗺️' },
+                { id: 'apple'  as const, label: 'Apple Maps',  emoji: '🍎' },
+                { id: 'waze'   as const, label: 'Waze',        emoji: '🚗' },
+              ].map(opt => (
+                <button
+                  key={opt.id}
+                  onClick={() => openNav(opt.id)}
+                  className="w-full flex items-center gap-4 active:scale-[0.98] transition-transform"
+                  style={{ background: '#F9FAFB', border: '1.5px solid #E5E7EB', borderRadius: 16, padding: '14px 16px' }}
+                >
+                  <div className="flex-shrink-0 w-10 h-10 rounded-[10px] flex items-center justify-center bg-white text-[20px]" style={{ border: '1.5px solid #E5E7EB' }}>
+                    {opt.emoji}
+                  </div>
+                  <span className="text-[15px] font-bold text-gray-900 flex-1 text-right" style={{ fontFamily: 'Heebo, sans-serif' }}>{opt.label}</span>
+                  <Navigation className="w-4 h-4" style={{ color: '#9CA3AF' }} />
+                </button>
+              ))}
+            </div>
+
+            <div className="px-5 mt-3">
+              <button
+                onClick={() => setShowNav(false)}
                 className="w-full text-center text-[15px] font-semibold text-gray-400 py-3"
                 style={{ fontFamily: 'Heebo, sans-serif' }}
               >

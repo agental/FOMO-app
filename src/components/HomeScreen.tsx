@@ -60,6 +60,7 @@ export function HomeScreen({
   onNavigateToCountrySelection,
   onNavigateToMyEvents,
   onOpenMapAt,
+  onMessageUser,
   initialCountries,
   currentUserId: propUserId,
 }: HomeScreenProps = {}) {
@@ -1232,6 +1233,8 @@ export function HomeScreen({
           onClose={() => setSelectedEvent(null)}
           currentUserId={currentUserId}
           onNavigateToUserProfile={onNavigateToUserProfile}
+          onOpenMapAt={onOpenMapAt}
+          onMessageUser={onMessageUser}
         />
       )}
 
