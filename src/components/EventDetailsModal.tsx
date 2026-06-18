@@ -4,6 +4,7 @@ import { supabase, type Event } from '../lib/supabase';
 import { flagEmoji } from '../utils/flags';
 import { UserAvatar } from './UserAvatar';
 import { getCategoryEmoji } from '../utils/eventCategories';
+import { BookingFlow } from './BookingFlow';
 
 export type Attendee = {
   id: string;
@@ -516,132 +517,15 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
         </button>
       </div>
 
-      {/* ── Payment sheet ── */}
+      {/* ── Booking + payment flow ── */}
       {showPayment && (
-        <>
-          <div
-            className="fixed inset-0 z-30"
-            style={{ background: 'rgba(0,0,0,0.45)', backdropFilter: 'blur(3px)' }}
-            onClick={() => setShowPayment(false)}
-          />
-          <div
-            className="fixed bottom-0 left-0 right-0 z-40 bg-white"
-            style={{
-              borderRadius: '24px 24px 0 0',
-              animation: 'payment-up 0.32s cubic-bezier(0.16,1,0.3,1)',
-              paddingBottom: 'max(28px, env(safe-area-inset-bottom))',
-            }}
-          >
-            <style>{`@keyframes payment-up { from { transform: translateY(100%) } to { transform: translateY(0) } }`}</style>
-
-            {/* drag handle */}
-            <div className="flex justify-center pt-3 pb-1">
-              <div className="w-10 h-1 rounded-full bg-gray-200" />
-            </div>
-
-            {/* header */}
-            <div className="px-5 pt-3 pb-4" style={{ borderBottom: '1px solid #F3F4F6' }}>
-              <p className="text-[18px] font-black text-gray-900 text-center" style={{ fontFamily: 'Heebo, sans-serif' }}>
-                בחר אמצעי תשלום
-              </p>
-              <p className="text-[13px] text-gray-400 text-center mt-1">
-                {event.title} · ₪{price}
-              </p>
-            </div>
-
-            {/* options */}
-            <div className="px-5 pt-4 flex flex-col gap-3">
-
-              {/* Credit card */}
-              <button
-                onClick={completePayment}
-                disabled={joining}
-                className="w-full flex items-center gap-4 active:scale-[0.98] transition-transform disabled:opacity-60"
-                style={{ background: '#F9FAFB', border: '1.5px solid #E5E7EB', borderRadius: 16, padding: '14px 16px' }}
-              >
-                <div className="flex-shrink-0 w-10 h-10 rounded-[10px] flex items-center justify-center" style={{ background: '#FFF7ED' }}>
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={'#F97316'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/>
-                  </svg>
-                </div>
-                <span className="text-[15px] font-bold text-gray-900 flex-1 text-right" style={{ fontFamily: 'Heebo, sans-serif' }}>כרטיס אשראי</span>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#C7C7CC" strokeWidth="2.5" strokeLinecap="round">
-                  <path d="M9 18l-6-6 6-6"/>
-                </svg>
-              </button>
-
-              {/* Apple Pay */}
-              <button
-                onClick={completePayment}
-                disabled={joining}
-                className="w-full flex items-center gap-4 active:scale-[0.98] transition-transform disabled:opacity-60"
-                style={{ background: '#F9FAFB', border: '1.5px solid #E5E7EB', borderRadius: 16, padding: '14px 16px' }}
-              >
-                <div className="flex-shrink-0 w-10 h-10 rounded-[10px] bg-black flex items-center justify-center">
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="white">
-                    <path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/>
-                  </svg>
-                </div>
-                <span className="text-[15px] font-bold text-gray-900 flex-1 text-right" style={{ fontFamily: 'Heebo, sans-serif' }}>Apple Pay</span>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#C7C7CC" strokeWidth="2.5" strokeLinecap="round">
-                  <path d="M9 18l-6-6 6-6"/>
-                </svg>
-              </button>
-
-              {/* PayPal */}
-              <button
-                onClick={completePayment}
-                disabled={joining}
-                className="w-full flex items-center gap-4 active:scale-[0.98] transition-transform disabled:opacity-60"
-                style={{ background: '#F9FAFB', border: '1.5px solid #E5E7EB', borderRadius: 16, padding: '14px 16px' }}
-              >
-                <div className="flex-shrink-0 w-10 h-10 rounded-[10px] flex items-center justify-center" style={{ background: '#003087' }}>
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="white">
-                    <path d="M7.144 19.532l1.049-5.751c.11-.605.686-1.075 1.31-1.075h5.358c3.746 0 6.03-2.088 6.55-5.66.026-.169.039-.333.039-.494C21.45 4.22 19.454 3 16.544 3H8.502c-.63 0-1.205.434-1.32 1.044L4.527 18.532c-.117.61.352 1.19.98 1.19h1.295a.76.76 0 00.342-.19z"/>
-                    <path opacity=".5" d="M19.447 8.125c-.527 3.467-2.756 5.432-6.354 5.432H11.3c-.624 0-1.185.454-1.299 1.055l-1.14 6.234a.754.754 0 00.742.891h2.48c.525 0 1.004-.363 1.1-.88l.461-2.53a1.11 1.11 0 011.1-.88h.698c3.163 0 5.289-1.742 5.73-4.834.198-1.354.01-2.461-.725-3.488z"/>
-                  </svg>
-                </div>
-                <span className="text-[15px] font-bold text-gray-900 flex-1 text-right" style={{ fontFamily: 'Heebo, sans-serif' }}>PayPal</span>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#C7C7CC" strokeWidth="2.5" strokeLinecap="round">
-                  <path d="M9 18l-6-6 6-6"/>
-                </svg>
-              </button>
-
-              {/* Google Pay */}
-              <button
-                onClick={completePayment}
-                disabled={joining}
-                className="w-full flex items-center gap-4 active:scale-[0.98] transition-transform disabled:opacity-60"
-                style={{ background: '#F9FAFB', border: '1.5px solid #E5E7EB', borderRadius: 16, padding: '14px 16px' }}
-              >
-                <div className="flex-shrink-0 w-10 h-10 rounded-[10px] flex items-center justify-center bg-white" style={{ border: '1.5px solid #E5E7EB' }}>
-                  <svg width="24" height="24" viewBox="0 0 24 24">
-                    <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
-                    <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
-                    <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
-                    <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
-                  </svg>
-                </div>
-                <span className="text-[15px] font-bold text-gray-900 flex-1 text-right" style={{ fontFamily: 'Heebo, sans-serif' }}>Google Pay</span>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#C7C7CC" strokeWidth="2.5" strokeLinecap="round">
-                  <path d="M9 18l-6-6 6-6"/>
-                </svg>
-              </button>
-
-            </div>
-
-            {/* cancel */}
-            <div className="px-5 mt-3">
-              <button
-                onClick={() => setShowPayment(false)}
-                className="w-full text-center text-[15px] font-semibold text-gray-400 py-3"
-                style={{ fontFamily: 'Heebo, sans-serif' }}
-              >
-                ביטול
-              </button>
-            </div>
-          </div>
-        </>
+        <BookingFlow
+          event={event}
+          price={price || 0}
+          currentUserId={currentUserId}
+          onClose={() => setShowPayment(false)}
+          onComplete={completePayment}
+        />
       )}
 
       {/* ── Navigation picker sheet ── */}
