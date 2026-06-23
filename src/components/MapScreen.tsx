@@ -769,7 +769,7 @@ export function MapScreen({
                       <EventCard
                         event={event}
                         currentUserId={userId}
-                        onAttendClick={() => {}}
+                        onAttendClick={() => setDetailsEvent(event)}
                         onUserClick={onNavigateToUserProfile}
                       />
                     </div>

@@ -132,6 +132,7 @@ type MessagesScreenProps = {
   onMapClick?: () => void;
   onCreateClick?: () => void;
   onMyEventsClick?: () => void;
+  onNavigateToCountrySelection?: () => void;
 };
 
 const DEMO_COUNTRIES = ['TH', 'JP', 'IT', 'FR', 'US', 'GR'];
@@ -148,7 +149,7 @@ type GroupChat = {
   unreadCount: number;
 };
 
-export function MessagesScreen({ currentUserId, onBack, onConversationClick, onHomeClick, onMapClick, onCreateClick, onMyEventsClick }: MessagesScreenProps) {
+export function MessagesScreen({ currentUserId, onBack, onConversationClick, onHomeClick, onMapClick, onCreateClick, onMyEventsClick, onNavigateToCountrySelection }: MessagesScreenProps) {
   const [conversations,   setConversations]   = useState<Conversation[]>([]);
   const [groupChats,      setGroupChats]      = useState<GroupChat[]>([]);
   const [loading,         setLoading]         = useState(true);
@@ -317,6 +318,19 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
     }
   };
 
+  // Delete a conversation (its messages + the conversation row), with an
+  // optimistic removal from the list so the UI updates immediately.
+  const handleDeleteConversation = async (conversationId: string) => {
+    setSwipedId(null);
+    setConversations(prev => prev.filter(c => c.id !== conversationId));
+    try {
+      await supabase.from('messages').delete().eq('conversation_id', conversationId);
+      await supabase.from('conversations').delete().eq('id', conversationId);
+    } catch (err) {
+      console.error('Delete conversation error:', err);
+    }
+  };
+
   const filteredConversations = conversations.filter(convo =>
     convo.other_user.display_name.toLowerCase().includes(searchQuery.toLowerCase())
   );
@@ -379,13 +393,17 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
           {/* Country circles row */}
           <div className="overflow-x-auto scrollbar-hide">
             <div className="flex gap-3 px-4 pb-1" style={{ width: 'max-content' }}>
-              {/* Add button */}
-              <div className="flex flex-col items-center gap-1.5 flex-shrink-0">
+              {/* Add button → manage followed countries */}
+              <button
+                onClick={() => onNavigateToCountrySelection?.()}
+                className="flex flex-col items-center gap-1.5 flex-shrink-0 active:scale-95 transition-transform"
+                style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}
+              >
                 <div className="w-14 h-14 rounded-full bg-gray-100 flex items-center justify-center border-2 border-dashed border-gray-300">
                   <Plus className="w-5 h-5 text-gray-400" strokeWidth={2.5} />
                 </div>
                 <span className="text-[11px] text-gray-400 font-medium">הוסף</span>
-              </div>
+              </button>
 
               {userCountries.map((code) => {
                 const country = COUNTRIES[code];
@@ -570,7 +588,7 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
                   <div className="absolute inset-y-0 left-0 flex items-center">
                     <button
                       className="h-full px-5 bg-rose-500 text-white text-xs font-bold flex items-center gap-1"
-                      onClick={() => setSwipedId(null)}
+                      onClick={() => handleDeleteConversation(conversation.id)}
                     >
                       <X className="w-4 h-4" />
                       מחק
