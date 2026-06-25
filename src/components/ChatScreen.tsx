@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { ArrowRight, Send } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { UserAvatar } from './UserAvatar';
@@ -32,7 +32,17 @@ export function ChatScreen({ conversationId, currentUserId, otherUserId, onBack 
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const initialLoadDone = useRef(false);
+
+  // Scroll to bottom before first paint
+  useLayoutEffect(() => {
+    if (!loading && !initialLoadDone.current && scrollContainerRef.current) {
+      scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
+      initialLoadDone.current = true;
+    }
+  }, [loading]);
 
   useEffect(() => {
     loadOtherUser();
@@ -69,7 +79,9 @@ export function ChatScreen({ conversationId, currentUserId, otherUserId, onBack 
   }, [conversationId, currentUserId]);
 
   useEffect(() => {
-    scrollToBottom();
+    if (initialLoadDone.current) {
+      scrollToBottom(true); // smooth only for new messages after first load
+    }
   }, [messages]);
 
   const loadOtherUser = async () => {
@@ -117,8 +129,8 @@ export function ChatScreen({ conversationId, currentUserId, otherUserId, onBack 
     }
   };
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  const scrollToBottom = (smooth = false) => {
+    messagesEndRef.current?.scrollIntoView({ behavior: smooth ? 'smooth' : 'instant' });
   };
 
   const handleSendMessage = async (e: React.FormEvent) => {
@@ -209,7 +221,7 @@ export function ChatScreen({ conversationId, currentUserId, otherUserId, onBack 
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-4 py-6 space-y-4">
+      <div ref={scrollContainerRef} className="flex-1 overflow-y-auto px-4 py-6 space-y-4">
         {messages.map((message, index) => (
           <div key={message.id}>
             {shouldShowDateHeader(index) && (

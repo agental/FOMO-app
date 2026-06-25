@@ -216,8 +216,14 @@ export function MapScreen({
       setTimeout(() => setLoading(false), 600);
     };
 
-    // Fallback: listen for location injected by React Native WebView
-    // (fires when navigator.geolocation prototype override fails on iOS HTTP)
+    // If location was already injected by React Native (e.g. user navigated back),
+    // use the cached value immediately instead of waiting for the event again.
+    const cached = (window as any)._nativeLocation;
+    if (cached?.lat != null && !isNaN(cached.lat)) {
+      applyLocation(cached.lat, cached.lng);
+      return;
+    }
+
     const onNativeLocation = (e: Event) => {
       const { lat, lng } = (e as CustomEvent).detail;
       applyLocation(lat, lng);
@@ -236,7 +242,6 @@ export function MapScreen({
 
     return () => {
       window.removeEventListener('nativeLocation', onNativeLocation);
-      if (mapInstanceRef.current) mapInstanceRef.current.remove();
     };
   }, []);
 
@@ -244,11 +249,29 @@ export function MapScreen({
   useEffect(() => {
     if (!location || !mapRef.current || mapInstanceRef.current) return;
 
-    const map = new mapboxgl.Map({
-      container: mapRef.current,
-      style: 'mapbox://styles/mapbox/streets-v11',
-      center: [location.longitude, location.latitude],
-      zoom: 12,
+    const supported = mapboxgl.supported();
+    if (!supported) {
+      console.error('MAPBOX_UNSUPPORTED: WebGL not available in this browser/WebView');
+      return;
+    }
+
+    let map: mapboxgl.Map;
+    try {
+      map = new mapboxgl.Map({
+        container: mapRef.current,
+        style: 'mapbox://styles/mapbox/streets-v11',
+        center: [location.longitude, location.latitude],
+        zoom: 12,
+        failIfMajorPerformanceCaveat: false,
+      });
+    } catch (err: any) {
+      console.error('MAPBOX_INIT_ERROR: ' + (err?.message || String(err)));
+      return;
+    }
+
+    map.on('error', (e: any) => {
+      const msg = e?.error?.message || e?.message || JSON.stringify(e);
+      console.error('MAPBOX_TILE_ERROR: ' + msg);
     });
 
     new mapboxgl.Marker({ color: '#3B82F6' })
@@ -270,7 +293,11 @@ export function MapScreen({
     };
 
     map.on('zoom', updatePinScales);
-    return () => { map.off('zoom', updatePinScales); };
+    return () => {
+      map.off('zoom', updatePinScales);
+      map.remove();
+      mapInstanceRef.current = null;
+    };
   }, [location]);
 
   /* ── Visibility helpers (filter-based) ── */
