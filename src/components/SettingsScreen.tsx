@@ -10,6 +10,11 @@ interface SettingsScreenProps {
   onNavigateToMap?: () => void;
   onNavigateToMessages?: () => void;
   onNavigateToMyEvents?: () => void;
+  onNavigateToCreate?: () => void;
+  onNavigateToCountrySelection?: () => void;
+  onNavigateToNotifications?: () => void;
+  onNavigateToPrivacy?: () => void;
+  onNavigateToAbout?: () => void;
   onSignOut?: () => void;
 }
 
@@ -28,6 +33,11 @@ export function SettingsScreen({
   onNavigateToMap,
   onNavigateToMessages,
   onNavigateToMyEvents,
+  onNavigateToCreate,
+  onNavigateToCountrySelection,
+  onNavigateToNotifications,
+  onNavigateToPrivacy,
+  onNavigateToAbout,
   onSignOut,
 }: SettingsScreenProps) {
   const [signingOut, setSigningOut] = useState(false);
@@ -52,11 +62,13 @@ export function SettingsScreen({
           icon: <Globe className="w-5 h-5" />,
           label: 'מדינות נבחרות',
           sublabel: 'ניהול מדינות שאתה עוקב אחריהן',
+          onClick: onNavigateToCountrySelection,
         },
         {
           icon: <Bell className="w-5 h-5" />,
           label: 'התראות',
           sublabel: 'ניהול העדפות התראות',
+          onClick: onNavigateToNotifications,
         },
       ],
     },
@@ -67,6 +79,7 @@ export function SettingsScreen({
           icon: <Shield className="w-5 h-5" />,
           label: 'פרטיות',
           sublabel: 'שליטה על מה שאחרים רואים',
+          onClick: onNavigateToPrivacy,
         },
       ],
     },
@@ -77,6 +90,7 @@ export function SettingsScreen({
           icon: <Info className="w-5 h-5" />,
           label: 'אודות FOMO',
           sublabel: 'גרסה 1.0.0',
+          onClick: onNavigateToAbout,
         },
       ],
     },
@@ -177,6 +191,7 @@ export function SettingsScreen({
         currentUserId={currentUserId}
         onHomeClick={onNavigateToHome}
         onMapClick={onNavigateToMap}
+        onCreateClick={onNavigateToCreate}
         onChatClick={onNavigateToMessages}
         onMyEventsClick={onNavigateToMyEvents}
       />

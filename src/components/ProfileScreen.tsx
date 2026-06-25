@@ -14,6 +14,7 @@ interface ProfileScreenProps {
   onNavigateToMessages?: () => void;
   onNavigateToMyEvents?: () => void;
   onNavigateToSettings?: () => void;
+  onNavigateToCreate?: () => void;
   viewUserId?: string;
   onMessageUser?: (otherUserId: string) => void;
 }
@@ -124,7 +125,7 @@ const INTEREST_EMOJI: Record<string, string> = {
 };
 
 export default function ProfileScreen({
-  onBack, currentUserId, onNavigateToMap, onNavigateToMessages, onNavigateToMyEvents, onNavigateToSettings, viewUserId, onMessageUser,
+  onBack, currentUserId, onNavigateToMap, onNavigateToMessages, onNavigateToMyEvents, onNavigateToSettings, onNavigateToCreate, viewUserId, onMessageUser,
 }: ProfileScreenProps) {
   const [profile,              setProfile]              = useState<User | null>(null);
   const [eventsCount,          setEventsCount]          = useState(0);
@@ -921,6 +922,7 @@ export default function ProfileScreen({
         currentUserId={currentUserId}
         onHomeClick={onBack}
         onMapClick={onNavigateToMap}
+        onCreateClick={onNavigateToCreate}
         onChatClick={onNavigateToMessages}
         onMyEventsClick={onNavigateToMyEvents}
       />

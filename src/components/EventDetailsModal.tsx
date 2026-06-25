@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
-import { Calendar, MapPin } from 'lucide-react';
+import { Calendar, MapPin, MessageCircle, Navigation } from 'lucide-react';
 import { supabase, type Event } from '../lib/supabase';
 import { flagEmoji } from '../utils/flags';
 import { UserAvatar } from './UserAvatar';
 import { getCategoryEmoji } from '../utils/eventCategories';
+import { BookingFlow } from './BookingFlow';
 
 export type Attendee = {
   id: string;
@@ -19,6 +20,8 @@ type EventDetailsModalProps = {
   onClose: () => void;
   currentUserId?: string | null;
   onNavigateToUserProfile?: (userId: string) => void;
+  onOpenMapAt?: (lat: number, lng: number) => void;
+  onMessageUser?: (userId: string) => void;
 };
 
 const CATEGORY_CONFIG: Record<string, { gradient: string; accent: string; light: string; image: string; label: string }> = {
@@ -31,13 +34,14 @@ const CATEGORY_CONFIG: Record<string, { gradient: string; accent: string; light:
 };
 const DEFAULT_CONFIG = { gradient: 'from-slate-500 via-gray-500 to-zinc-600', accent: '#F97316', light: '#fff7ed', image: '', label: 'אירוע 📅' };
 
-export function EventDetailsModal({ event, onClose, currentUserId: propUserId, onNavigateToUserProfile }: EventDetailsModalProps) {
+export function EventDetailsModal({ event, onClose, currentUserId: propUserId, onNavigateToUserProfile, onOpenMapAt, onMessageUser }: EventDetailsModalProps) {
   const [attendees, setAttendees]     = useState<Attendee[]>([]);
   const [isJoined, setIsJoined]       = useState(false);
   const [requestStatus, setRequestStatus] = useState<'none' | 'pending' | 'approved' | 'rejected'>('none');
   const [joining, setJoining]         = useState(false);
   const [saved, setSaved]             = useState(false);
   const [showPayment, setShowPayment] = useState(false);
+  const [showNav, setShowNav] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const currentUserId = propUserId || '00000000-0000-0000-0000-000000000001';
@@ -158,6 +162,27 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
       if (navigator.share) await navigator.share({ title: event.title, text, url });
       else if (navigator.clipboard) { await navigator.clipboard.writeText(`${text}\n${url}`); alert('הקישור הועתק'); }
     } catch { /* user dismissed the share sheet */ }
+  };
+
+  // Tapping the map → open the exact location inside the app's map.
+  // If no in-app handler is available, fall back to the external navigation picker.
+  const handleMapClick = () => {
+    if (event.latitude == null || event.longitude == null) return;
+    if (onOpenMapAt) { onOpenMapAt(event.latitude, event.longitude); onClose(); }
+    else setShowNav(true);
+  };
+
+  // Open the exact location in an external navigation app.
+  const openNav = (app: 'google' | 'apple' | 'waze') => {
+    const lat = event.latitude, lng = event.longitude;
+    if (lat == null || lng == null) return;
+    const label = encodeURIComponent(event.title || event.city || '');
+    const url =
+      app === 'google' ? `https://www.google.com/maps/search/?api=1&query=${lat},${lng}` :
+      app === 'apple'  ? `https://maps.apple.com/?ll=${lat},${lng}&q=${label}` :
+                         `https://waze.com/ul?ll=${lat},${lng}&navigate=yes`;
+    window.open(url, '_blank');
+    setShowNav(false);
   };
 
   const joinLabel = isJoined ? 'ביטול השתתפות'
@@ -305,16 +330,30 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
             )}
           </div>
 
-          {/* Location */}
-          <div
-            className="flex items-center gap-2 py-3.5"
-            style={{  }}
-          >
-            <MapPin className="w-4 h-4 flex-shrink-0" style={{ color: '#F97316' }} />
-            <span className="text-[13px] font-semibold" style={{ color: '#F97316' }}>
-              {flagEmoji(event.country ?? '')} {event.city}
-            </span>
-          </div>
+          {/* Location → external navigation picker (Google / Apple / Waze) */}
+          {event.latitude != null && event.longitude != null ? (
+            <button
+              onClick={() => setShowNav(true)}
+              className="w-full flex items-center justify-between py-3.5 active:opacity-70 transition-opacity"
+            >
+              <span className="flex items-center gap-2">
+                <MapPin className="w-4 h-4 flex-shrink-0" style={{ color: '#F97316' }} />
+                <span className="text-[13px] font-semibold" style={{ color: '#F97316' }}>
+                  {flagEmoji(event.country ?? '')} {event.city}
+                </span>
+              </span>
+              <span className="flex items-center gap-1 text-[12px] font-bold" style={{ color: '#9CA3AF', fontFamily: 'Heebo, sans-serif' }}>
+                <Navigation className="w-3.5 h-3.5" /> נווט
+              </span>
+            </button>
+          ) : (
+            <div className="flex items-center gap-2 py-3.5">
+              <MapPin className="w-4 h-4 flex-shrink-0" style={{ color: '#F97316' }} />
+              <span className="text-[13px] font-semibold" style={{ color: '#F97316' }}>
+                {flagEmoji(event.country ?? '')} {event.city}
+              </span>
+            </div>
+          )}
 
           {/* Host row */}
           {creator && (
@@ -337,12 +376,13 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
                   <p className="text-[12px] text-gray-400">מארגן</p>
                 </div>
               </div>
-              {!isOwner && (
+              {!isOwner && onMessageUser && (
                 <button
-                  className="px-5 py-2 rounded-full text-white text-[13px] font-bold active:scale-95 transition-transform"
+                  onClick={() => onMessageUser(event.user_id)}
+                  className="flex items-center gap-1.5 px-5 py-2 rounded-full text-white text-[13px] font-bold active:scale-95 transition-transform"
                   style={{ background: '#111827', fontFamily: 'Heebo, sans-serif' }}
                 >
-                  הודעה
+                  <MessageCircle className="w-4 h-4" /> הודעה
                 </button>
               )}
             </div>
@@ -378,11 +418,21 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
             )}
           </div>
 
-          {/* Map */}
+          {/* Map → opens the exact location inside the app */}
           {event.latitude && event.longitude && (
             <div className="pt-4 pb-2">
               <p className="text-[11px] text-gray-400 font-semibold mb-2 tracking-wide uppercase">מפה</p>
-              <div className="rounded-[16px] overflow-hidden relative" style={{ height: 180 }}>
+              <div
+                onClick={handleMapClick}
+                className="rounded-[16px] overflow-hidden relative cursor-pointer active:opacity-95"
+                style={{ height: 180 }}
+              >
+                <div
+                  className="absolute top-2 right-2 z-30 bg-white/95 backdrop-blur-sm text-[11px] font-bold px-2.5 py-1 rounded-full flex items-center gap-1 shadow-sm"
+                  style={{ color: '#F97316', fontFamily: 'Heebo, sans-serif' }}
+                >
+                  <MapPin className="w-3 h-3" /> פתח במפה
+                </div>
                 <img
                   src={`https://api.mapbox.com/styles/v1/mapbox/streets-v12/static/${event.longitude},${event.latitude},14,0/600x420@2x?access_token=${import.meta.env.VITE_MAPBOX_TOKEN}`}
                   alt="map"
@@ -467,124 +517,68 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
         </button>
       </div>
 
-      {/* ── Payment sheet ── */}
+      {/* ── Booking + payment flow ── */}
       {showPayment && (
+        <BookingFlow
+          event={event}
+          price={price || 0}
+          currentUserId={currentUserId}
+          onClose={() => setShowPayment(false)}
+          onComplete={completePayment}
+        />
+      )}
+
+      {/* ── Navigation picker sheet ── */}
+      {showNav && (
         <>
           <div
             className="fixed inset-0 z-30"
             style={{ background: 'rgba(0,0,0,0.45)', backdropFilter: 'blur(3px)' }}
-            onClick={() => setShowPayment(false)}
+            onClick={() => setShowNav(false)}
           />
           <div
             className="fixed bottom-0 left-0 right-0 z-40 bg-white"
+            dir="rtl"
             style={{
               borderRadius: '24px 24px 0 0',
               animation: 'payment-up 0.32s cubic-bezier(0.16,1,0.3,1)',
               paddingBottom: 'max(28px, env(safe-area-inset-bottom))',
             }}
           >
-            <style>{`@keyframes payment-up { from { transform: translateY(100%) } to { transform: translateY(0) } }`}</style>
-
-            {/* drag handle */}
             <div className="flex justify-center pt-3 pb-1">
               <div className="w-10 h-1 rounded-full bg-gray-200" />
             </div>
-
-            {/* header */}
             <div className="px-5 pt-3 pb-4" style={{ borderBottom: '1px solid #F3F4F6' }}>
               <p className="text-[18px] font-black text-gray-900 text-center" style={{ fontFamily: 'Heebo, sans-serif' }}>
-                בחר אמצעי תשלום
+                ניווט למיקום
               </p>
-              <p className="text-[13px] text-gray-400 text-center mt-1">
-                {event.title} · ₪{price}
-              </p>
+              <p className="text-[13px] text-gray-400 text-center mt-1">{event.title}{event.city ? ' · ' + event.city : ''}</p>
             </div>
 
-            {/* options */}
             <div className="px-5 pt-4 flex flex-col gap-3">
-
-              {/* Credit card */}
-              <button
-                onClick={completePayment}
-                disabled={joining}
-                className="w-full flex items-center gap-4 active:scale-[0.98] transition-transform disabled:opacity-60"
-                style={{ background: '#F9FAFB', border: '1.5px solid #E5E7EB', borderRadius: 16, padding: '14px 16px' }}
-              >
-                <div className="flex-shrink-0 w-10 h-10 rounded-[10px] flex items-center justify-center" style={{ background: '#FFF7ED' }}>
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={'#F97316'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/>
-                  </svg>
-                </div>
-                <span className="text-[15px] font-bold text-gray-900 flex-1 text-right" style={{ fontFamily: 'Heebo, sans-serif' }}>כרטיס אשראי</span>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#C7C7CC" strokeWidth="2.5" strokeLinecap="round">
-                  <path d="M9 18l-6-6 6-6"/>
-                </svg>
-              </button>
-
-              {/* Apple Pay */}
-              <button
-                onClick={completePayment}
-                disabled={joining}
-                className="w-full flex items-center gap-4 active:scale-[0.98] transition-transform disabled:opacity-60"
-                style={{ background: '#F9FAFB', border: '1.5px solid #E5E7EB', borderRadius: 16, padding: '14px 16px' }}
-              >
-                <div className="flex-shrink-0 w-10 h-10 rounded-[10px] bg-black flex items-center justify-center">
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="white">
-                    <path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/>
-                  </svg>
-                </div>
-                <span className="text-[15px] font-bold text-gray-900 flex-1 text-right" style={{ fontFamily: 'Heebo, sans-serif' }}>Apple Pay</span>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#C7C7CC" strokeWidth="2.5" strokeLinecap="round">
-                  <path d="M9 18l-6-6 6-6"/>
-                </svg>
-              </button>
-
-              {/* PayPal */}
-              <button
-                onClick={completePayment}
-                disabled={joining}
-                className="w-full flex items-center gap-4 active:scale-[0.98] transition-transform disabled:opacity-60"
-                style={{ background: '#F9FAFB', border: '1.5px solid #E5E7EB', borderRadius: 16, padding: '14px 16px' }}
-              >
-                <div className="flex-shrink-0 w-10 h-10 rounded-[10px] flex items-center justify-center" style={{ background: '#003087' }}>
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="white">
-                    <path d="M7.144 19.532l1.049-5.751c.11-.605.686-1.075 1.31-1.075h5.358c3.746 0 6.03-2.088 6.55-5.66.026-.169.039-.333.039-.494C21.45 4.22 19.454 3 16.544 3H8.502c-.63 0-1.205.434-1.32 1.044L4.527 18.532c-.117.61.352 1.19.98 1.19h1.295a.76.76 0 00.342-.19z"/>
-                    <path opacity=".5" d="M19.447 8.125c-.527 3.467-2.756 5.432-6.354 5.432H11.3c-.624 0-1.185.454-1.299 1.055l-1.14 6.234a.754.754 0 00.742.891h2.48c.525 0 1.004-.363 1.1-.88l.461-2.53a1.11 1.11 0 011.1-.88h.698c3.163 0 5.289-1.742 5.73-4.834.198-1.354.01-2.461-.725-3.488z"/>
-                  </svg>
-                </div>
-                <span className="text-[15px] font-bold text-gray-900 flex-1 text-right" style={{ fontFamily: 'Heebo, sans-serif' }}>PayPal</span>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#C7C7CC" strokeWidth="2.5" strokeLinecap="round">
-                  <path d="M9 18l-6-6 6-6"/>
-                </svg>
-              </button>
-
-              {/* Google Pay */}
-              <button
-                onClick={completePayment}
-                disabled={joining}
-                className="w-full flex items-center gap-4 active:scale-[0.98] transition-transform disabled:opacity-60"
-                style={{ background: '#F9FAFB', border: '1.5px solid #E5E7EB', borderRadius: 16, padding: '14px 16px' }}
-              >
-                <div className="flex-shrink-0 w-10 h-10 rounded-[10px] flex items-center justify-center bg-white" style={{ border: '1.5px solid #E5E7EB' }}>
-                  <svg width="24" height="24" viewBox="0 0 24 24">
-                    <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
-                    <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
-                    <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
-                    <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
-                  </svg>
-                </div>
-                <span className="text-[15px] font-bold text-gray-900 flex-1 text-right" style={{ fontFamily: 'Heebo, sans-serif' }}>Google Pay</span>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#C7C7CC" strokeWidth="2.5" strokeLinecap="round">
-                  <path d="M9 18l-6-6 6-6"/>
-                </svg>
-              </button>
-
+              {[
+                { id: 'google' as const, label: 'Google Maps', emoji: '🗺️' },
+                { id: 'apple'  as const, label: 'Apple Maps',  emoji: '🍎' },
+                { id: 'waze'   as const, label: 'Waze',        emoji: '🚗' },
+              ].map(opt => (
+                <button
+                  key={opt.id}
+                  onClick={() => openNav(opt.id)}
+                  className="w-full flex items-center gap-4 active:scale-[0.98] transition-transform"
+                  style={{ background: '#F9FAFB', border: '1.5px solid #E5E7EB', borderRadius: 16, padding: '14px 16px' }}
+                >
+                  <div className="flex-shrink-0 w-10 h-10 rounded-[10px] flex items-center justify-center bg-white text-[20px]" style={{ border: '1.5px solid #E5E7EB' }}>
+                    {opt.emoji}
+                  </div>
+                  <span className="text-[15px] font-bold text-gray-900 flex-1 text-right" style={{ fontFamily: 'Heebo, sans-serif' }}>{opt.label}</span>
+                  <Navigation className="w-4 h-4" style={{ color: '#9CA3AF' }} />
+                </button>
+              ))}
             </div>
 
-            {/* cancel */}
             <div className="px-5 mt-3">
               <button
-                onClick={() => setShowPayment(false)}
+                onClick={() => setShowNav(false)}
                 className="w-full text-center text-[15px] font-semibold text-gray-400 py-3"
                 style={{ fontFamily: 'Heebo, sans-serif' }}
               >

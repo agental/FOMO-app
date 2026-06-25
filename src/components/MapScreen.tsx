@@ -57,6 +57,7 @@ export function MapScreen({
   onNavigateToMyEvents,
   onNavigateToMessages,
   onNavigateToUserProfile,
+  onMessageUser,
   focusLocation,
   onFocusHandled,
 }: MapScreenProps) {
@@ -768,7 +769,7 @@ export function MapScreen({
                       <EventCard
                         event={event}
                         currentUserId={userId}
-                        onAttendClick={() => {}}
+                        onAttendClick={() => setDetailsEvent(event)}
                         onUserClick={onNavigateToUserProfile}
                       />
                     </div>
@@ -829,6 +830,8 @@ export function MapScreen({
           onClose={() => setDetailsEvent(null)}
           currentUserId={userId}
           onNavigateToUserProfile={onNavigateToUserProfile}
+          onMessageUser={onMessageUser}
+          onOpenMapAt={(lat, lng) => { mapInstanceRef.current?.flyTo({ center: [lng, lat], zoom: 15, essential: true }); }}
         />
       )}
 

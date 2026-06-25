@@ -33,6 +33,8 @@ interface HomeScreenProps {
   onOpenMapAt?: (lat: number, lng: number) => void;
   initialCountries?: string[];
   currentUserId?: string | null;
+  openCreateSignal?: boolean;
+  onCreateConsumed?: () => void;
 }
 
 function formatEventDate(dateStr?: string) {
@@ -60,8 +62,11 @@ export function HomeScreen({
   onNavigateToCountrySelection,
   onNavigateToMyEvents,
   onOpenMapAt,
+  onMessageUser,
   initialCountries,
   currentUserId: propUserId,
+  openCreateSignal,
+  onCreateConsumed,
 }: HomeScreenProps = {}) {
   const [selectedCountries, setSelectedCountries] = useState<string[]>(initialCountries || []);
   const [activeCountry, setActiveCountry] = useState<string | null>(initialCountries?.[0] || null);
@@ -100,6 +105,15 @@ export function HomeScreen({
     countries: activeCountry ? [activeCountry] : selectedCountries,
     eventType: selectedInterest || undefined,
   });
+
+  // When the "+" button is pressed from another screen, App routes back here
+  // and raises this signal so we open the create sheet.
+  useEffect(() => {
+    if (openCreateSignal) {
+      setCreateMode('select');
+      onCreateConsumed?.();
+    }
+  }, [openCreateSignal]);
 
   // Re-fetch events whenever the country scope or filters change.
   // activeCountry === null → show events from ALL of the user's travel countries.
@@ -1260,6 +1274,8 @@ export function HomeScreen({
           onClose={() => setSelectedEvent(null)}
           currentUserId={currentUserId}
           onNavigateToUserProfile={onNavigateToUserProfile}
+          onOpenMapAt={onOpenMapAt}
+          onMessageUser={onMessageUser}
         />
       )}
 
