@@ -123,17 +123,26 @@ const TailRight = () => (
   </svg>
 );
 
+/* ── module-level caches (survive navigation) ── */
+const _msgCache:     Record<string, GMessage[]> = {};
+const _channelCache: Record<string, string>     = {}; // `${countryCode}:${cityEmoji}` → channelId
+const _countCache:   Record<string, number>     = {}; // channelId → approved member count
+
 /* ════════════════════════════════════════════════════ */
 export function CityGroupChat({
   countryCode, countryFlag, cityName, cityEmoji,
   currentUserId, currentUserName, currentUserAvatar, onClose,
 }: CityGroupChatProps) {
 
-  const [channelId,    setChannelId]    = useState<string | null>(null);
-  const [memberStatus, setMemberStatus] = useState<'loading' | 'none' | 'pending' | 'approved'>('loading');
-  const [messages,     setMessages]     = useState<GMessage[]>([]);
-  const [msgsLoading,  setMsgsLoading]  = useState(true);
-  const [memberCount,  setMemberCount]  = useState(0);
+  const cityKey = `${countryCode}:${cityEmoji}`;
+  const _initChannelId = _channelCache[cityKey] ?? null;
+  const _initMsgs      = _initChannelId ? (_msgCache[_initChannelId] ?? []) : [];
+
+  const [channelId,    setChannelId]    = useState<string | null>(_initChannelId);
+  const [memberStatus, setMemberStatus] = useState<'loading' | 'none' | 'pending' | 'approved' | 'just_approved'>(_initChannelId ? 'approved' : 'loading');
+  const [messages,     setMessages]     = useState<GMessage[]>(_initMsgs);
+  const [msgsLoading,  setMsgsLoading]  = useState(_initMsgs.length === 0);
+  const [memberCount,  setMemberCount]  = useState(_initChannelId ? (_countCache[_initChannelId] ?? 0) : 0);
   const [text,         setText]         = useState('');
   const [sending,      setSending]      = useState(false);
   const [uploading,    setUploading]    = useState(false);
@@ -144,6 +153,7 @@ export function CityGroupChat({
   const [showInfo,     setShowInfo]     = useState(false);
   const [members,      setMembers]      = useState<GMember[]>([]);
   const [pendingReqs,  setPendingReqs]  = useState<GMember[]>([]);
+  const [approvingId,  setApprovingId]  = useState<string | null>(null);
   const [groupDesc,    setGroupDesc]    = useState<string | null>(null);
   const [editingDesc,  setEditingDesc]  = useState(false);
   const [descDraft,    setDescDraft]    = useState('');
@@ -155,44 +165,38 @@ export function CityGroupChat({
   const fileRef   = useRef<HTMLInputElement>(null);
   const textRef   = useRef<HTMLTextAreaElement>(null);
 
-  /* ── channel init ── */
+  /* ── channel init (skip if already cached) ── */
   useEffect(() => {
+    if (_channelCache[cityKey]) return; // already know the channelId
     (async () => {
-      // Fetch ALL channels for this country+emoji (may be >1 due to old slug bug)
       const { data: all } = await supabase.from('group_channels')
         .select('id, city_slug, created_at')
         .eq('country_code', countryCode).eq('city_emoji', cityEmoji)
         .order('created_at', { ascending: true });
 
+      const save = (id: string) => {
+        _channelCache[cityKey] = id;
+        setChannelId(id);
+      };
+
       if (all && all.length > 1) {
-        // Keep the oldest channel (has real messages/members), delete dupes
         const canonical = all[0];
         const dupeIds = all.slice(1).map(c => c.id);
         for (const dupeId of dupeIds) {
-          // Remove user from dupe membership
-          await supabase.from('group_members').delete()
-            .eq('channel_id', dupeId).eq('user_id', currentUserId);
-          // Delete the dupe channel itself
+          await supabase.from('group_members').delete().eq('channel_id', dupeId).eq('user_id', currentUserId);
           await supabase.from('group_channels').delete().eq('id', dupeId);
         }
-        // Update canonical slug to emoji so future lookups are consistent
-        if (canonical.city_slug !== cityEmoji) {
+        if (canonical.city_slug !== cityEmoji)
           await supabase.from('group_channels').update({ city_slug: cityEmoji }).eq('id', canonical.id);
-        }
-        setChannelId(canonical.id);
-        return;
+        save(canonical.id); return;
       }
 
       if (all && all.length === 1) {
-        // Found exactly one — use it, fix slug if needed
-        if (all[0].city_slug !== cityEmoji) {
+        if (all[0].city_slug !== cityEmoji)
           await supabase.from('group_channels').update({ city_slug: cityEmoji }).eq('id', all[0].id);
-        }
-        setChannelId(all[0].id);
-        return;
+        save(all[0].id); return;
       }
 
-      // No channel yet — create one using emoji as slug (unique per country)
       const { data, error } = await supabase.from('group_channels')
         .upsert({ country_code: countryCode, city_slug: cityEmoji, city_name: cityName, city_emoji: cityEmoji },
           { onConflict: 'country_code,city_slug', ignoreDuplicates: false })
@@ -200,12 +204,12 @@ export function CityGroupChat({
       if (error || !data) {
         const { data: sel } = await supabase.from('group_channels').select('id')
           .eq('country_code', countryCode).eq('city_emoji', cityEmoji).maybeSingle();
-        if (sel) setChannelId(sel.id);
+        if (sel) save(sel.id);
         return;
       }
-      setChannelId(data.id);
+      save(data.id);
     })();
-  }, [countryCode, cityName, cityEmoji]);
+  }, [cityKey]);
 
   /* ── check membership status after channel resolves ── */
   useEffect(() => {
@@ -253,7 +257,7 @@ export function CityGroupChat({
       }, (payload) => {
         const row = payload.new as { user_id: string; status: string };
         if (row.user_id === currentUserId && row.status === 'approved') {
-          setMemberStatus('approved');
+          setMemberStatus('just_approved');
         }
       }).subscribe();
     return () => { supabase.removeChannel(appSub); };
@@ -263,7 +267,9 @@ export function CityGroupChat({
     if (!channelId) return;
     const { count } = await supabase.from('group_members').select('*', { count: 'exact', head: true })
       .eq('channel_id', channelId).eq('status', 'approved');
-    setMemberCount(count ?? 0);
+    const n = count ?? 0;
+    _countCache[channelId] = n;
+    setMemberCount(n);
   };
 
   const adminKey = (cid: string) => `group_admins_${cid}`;
@@ -294,17 +300,28 @@ export function CityGroupChat({
   };
 
   const handleApprove = async (userId: string) => {
-    if (!channelId) return;
-    await supabase.from('group_members').update({ status: 'approved' })
-      .eq('channel_id', channelId).eq('user_id', userId);
-    setPendingReqs(prev => prev.filter(m => m.user_id !== userId));
-    loadMemberCount();
+    if (!channelId || approvingId) return;
+    setApprovingId(userId);
+    const rpcRes = await supabase.rpc('approve_group_member', { p_channel_id: channelId, p_user_id: userId });
+    setApprovingId(null);
+    const rowsUpdated = rpcRes.data as number | null;
+    const ok = !rpcRes.error && (rowsUpdated ?? 0) > 0;
+    console.log('approve rpc:', { error: rpcRes.error, rowsUpdated, ok });
+    if (!ok) { alert(`שגיאה באישור: ${rpcRes.error?.message ?? 'אין שורות עודכנו'}`); return; }
+    const approved = pendingReqs.find(m => m.user_id === userId);
+    if (approved) {
+      setPendingReqs(prev => prev.filter(m => m.user_id !== userId));
+      setMembers(prev => [...prev, { ...approved, is_admin: false }]);
+      setMemberCount(prev => prev + 1);
+    }
   };
 
   const handleReject = async (userId: string) => {
-    if (!channelId) return;
-    await supabase.from('group_members').delete()
-      .eq('channel_id', channelId).eq('user_id', userId);
+    if (!channelId || approvingId) return;
+    setApprovingId(userId);
+    const rpcRes = await supabase.rpc('reject_group_member', { p_channel_id: channelId, p_user_id: userId });
+    setApprovingId(null);
+    console.log('reject rpc:', { error: rpcRes.error, data: rpcRes.data });
     setPendingReqs(prev => prev.filter(m => m.user_id !== userId));
   };
 
@@ -320,13 +337,22 @@ export function CityGroupChat({
   const saveDesc = async () => {
     if (!channelId) return;
     const val = descDraft.trim() || null;
-    await supabase.from('group_channels').update({ description: val }).eq('id', channelId);
+    const { error } = await supabase.rpc('update_group_description', {
+      p_channel_id: channelId, p_description: val,
+    });
+    if (error) { console.error('saveDesc failed:', error); return; }
     setGroupDesc(val);
     setEditingDesc(false);
   };
 
   const loadMessages = useCallback(async () => {
     if (!channelId) return;
+    // Show cached messages instantly — no skeleton if we have them
+    if (_msgCache[channelId]?.length) {
+      setMessages(_msgCache[channelId]);
+      setMsgsLoading(false);
+    }
+    // Always fetch fresh in background
     const { data: msgs } = await supabase.from('group_messages').select('*').eq('channel_id', channelId).order('created_at', { ascending: true }).limit(80);
     if (!msgs) { setMsgsLoading(false); return; }
     const ids = msgs.map(m => m.id);
@@ -337,7 +363,9 @@ export function CityGroupChat({
       const ex = rxMap[rx.message_id].find(r => r.emoji === rx.emoji);
       if (ex) ex.users.push(rx.user_id); else rxMap[rx.message_id].push({ emoji: rx.emoji, users: [rx.user_id] });
     }
-    setMessages(msgs.map(m => ({ ...m, reactions: (rxMap[m.id] || []).map(r => ({ emoji: r.emoji, count: r.users.length, mine: r.users.includes(currentUserId) })) })));
+    const result = msgs.map(m => ({ ...m, reactions: (rxMap[m.id] || []).map(r => ({ emoji: r.emoji, count: r.users.length, mine: r.users.includes(currentUserId) })) }));
+    _msgCache[channelId] = result;
+    setMessages(result);
     setMsgsLoading(false);
   }, [channelId, currentUserId]);
 
@@ -567,9 +595,10 @@ export function CityGroupChat({
   const hasText = text.trim().length > 0;
 
   /* ── Pending / Join screens ── */
-  if (memberStatus === 'loading' || (memberStatus !== 'approved' && channelId)) {
-    const isPending = memberStatus === 'pending';
-    const isLoading = memberStatus === 'loading';
+  if ((memberStatus === 'none' || memberStatus === 'pending' || memberStatus === 'just_approved') && channelId) {
+    const isPending      = memberStatus === 'pending';
+    const isLoading      = false;
+    const isJustApproved = memberStatus === 'just_approved';
     return (
       <div style={{
         position: 'fixed', inset: 0, zIndex: 120,
@@ -609,6 +638,26 @@ export function CityGroupChat({
         }}>
           {isLoading ? (
             <div style={{ width: 40, height: 40, borderRadius: '50%', border: '3px solid #FFE4CC', borderTopColor: '#F97316', animation: 'gchat-spin 0.8s linear infinite' }} />
+          ) : isJustApproved ? (
+            <>
+              <div style={{
+                width: 90, height: 90, borderRadius: '50%',
+                background: 'linear-gradient(135deg,#D1FAE5,#A7F3D0)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 42,
+                boxShadow: '0 4px 20px rgba(16,185,129,0.3)',
+                animation: 'approved-pop 0.5s cubic-bezier(0.175,0.885,0.32,1.275)',
+              }}>🎉</div>
+              <style>{`@keyframes approved-pop { from{transform:scale(0.4);opacity:0} to{transform:scale(1);opacity:1} }`}</style>
+              <h2 style={{ fontSize: 22, fontWeight: 800, color: '#059669', margin: 0, textAlign: 'center' }}>אושרת לקבוצה!</h2>
+              <p style={{ fontSize: 15, color: '#555', margin: 0, textAlign: 'center', lineHeight: 1.6 }}>
+                המנהל אישר את בקשתך להצטרף לקבוצת <strong>{cityName}</strong>.
+              </p>
+              <button
+                onClick={() => setMemberStatus('approved')}
+                style={{ marginTop: 12, padding: '13px 40px', borderRadius: 26, border: 'none', background: 'linear-gradient(135deg,#10B981,#059669)', color: '#fff', fontSize: 16, fontWeight: 700, cursor: 'pointer', boxShadow: '0 4px 14px rgba(16,185,129,0.4)' }}>
+                כניסה לקבוצה
+              </button>
+            </>
           ) : isPending ? (
             <>
               <div style={{ width: 80, height: 80, borderRadius: '50%', background: '#FFF3E0', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 36 }}>⏳</div>
@@ -683,7 +732,20 @@ export function CityGroupChat({
                 {countryFlag} {cityName}
               </h1>
               <p style={{ fontSize: 12, color: 'rgba(0,0,0,0.5)', margin: 0 }}>
-                {memberCount} {memberCount === 1 ? 'חבר' : 'חברים'}
+                {memberCount === 0
+                  ? <span style={{
+                      display: 'inline-block', width: 64, height: 10, borderRadius: 5,
+                      background: 'rgba(255,255,255,0.25)',
+                      overflow: 'hidden', position: 'relative',
+                    }}>
+                      <span style={{
+                        position: 'absolute', inset: 0,
+                        background: 'linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.55) 50%, transparent 100%)',
+                        animation: 'shimmer 1.4s infinite',
+                      }} />
+                      <style>{`@keyframes shimmer { from{transform:translateX(-100%)} to{transform:translateX(100%)} }`}</style>
+                    </span>
+                  : <>{memberCount} {memberCount === 1 ? 'חבר' : 'חברים'}</>}
               </p>
             </div>
           </button>
@@ -739,7 +801,7 @@ export function CityGroupChat({
 
         {/* Scroll to bottom */}
         {showScroll && (
-          <button onClick={scrollToBottom} style={{
+          <button onClick={() => scrollToBottom(true)} style={{
             position: 'absolute', bottom: 12, right: 12, zIndex: 10,
             width: 38, height: 38, borderRadius: '50%',
             background: '#fff', border: '1px solid rgba(0,0,0,0.1)',
@@ -966,11 +1028,19 @@ export function CityGroupChat({
                       <span style={{ fontSize: 15, fontWeight: 500, color: '#111' }}>{m.display_name}</span>
                     </div>
                     <div style={{ display: 'flex', gap: 8 }}>
-                      <button onClick={() => handleApprove(m.user_id)} style={{ width: 32, height: 32, borderRadius: '50%', border: 'none', background: '#D1FAE5', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                        <Check size={15} style={{ color: '#059669' }} />
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleApprove(m.user_id); }}
+                        disabled={!!approvingId}
+                        style={{ width: 44, height: 44, borderRadius: '50%', border: 'none', background: '#D1FAE5', cursor: approvingId ? 'default' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: approvingId && approvingId !== m.user_id ? 0.5 : 1 }}>
+                        {approvingId === m.user_id
+                          ? <div style={{ width: 14, height: 14, border: '2px solid #059669', borderTopColor: 'transparent', borderRadius: '50%', animation: 'gchat-spin 0.7s linear infinite' }} />
+                          : <Check size={18} style={{ color: '#059669' }} />}
                       </button>
-                      <button onClick={() => handleReject(m.user_id)} style={{ width: 32, height: 32, borderRadius: '50%', border: 'none', background: '#FEE2E2', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                        <X size={15} style={{ color: '#DC2626' }} />
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleReject(m.user_id); }}
+                        disabled={!!approvingId}
+                        style={{ width: 44, height: 44, borderRadius: '50%', border: 'none', background: '#FEE2E2', cursor: approvingId ? 'default' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: approvingId && approvingId !== m.user_id ? 0.5 : 1 }}>
+                        <X size={18} style={{ color: '#DC2626' }} />
                       </button>
                     </div>
                   </div>

@@ -124,14 +124,20 @@ const INTEREST_EMOJI: Record<string, string> = {
   'קמפינג':'🏕️','צלילה':'🤿','סקי':'⛷️','כדורגל':'⚽','כדורסל':'🏀','טניס':'🎾',
 };
 
+/* ── module-level cache (survives navigation) ── */
+type ProfileCache = { profile: User; eventsCount: number; selectedCountries: string[] };
+const _profileCache: Record<string, ProfileCache> = {};
+
 export default function ProfileScreen({
   onBack, currentUserId, onNavigateToMap, onNavigateToMessages, onNavigateToMyEvents, onNavigateToSettings, onNavigateToCreate, viewUserId, onMessageUser,
 }: ProfileScreenProps) {
-  const [profile,              setProfile]              = useState<User | null>(null);
-  const [eventsCount,          setEventsCount]          = useState(0);
-  const [loading,              setLoading]              = useState(true);
+  const targetId = (viewUserId || currentUserId) ?? '';
+  const _cached  = _profileCache[targetId];
+  const [profile,              setProfile]              = useState<User | null>(_cached?.profile ?? null);
+  const [eventsCount,          setEventsCount]          = useState(_cached?.eventsCount ?? 0);
+  const [loading,              setLoading]              = useState(!_cached);
   const [isSelectingCountries, setIsSelectingCountries] = useState(false);
-  const [selectedCountries,    setSelectedCountries]    = useState<string[]>([]);
+  const [selectedCountries,    setSelectedCountries]    = useState<string[]>(_cached?.selectedCountries ?? []);
   const [countrySearch,        setCountrySearch]        = useState('');
   const [uploadingAvatar,      setUploadingAvatar]      = useState(false);
   const [editField,            setEditField]            = useState<'languages' | 'interests' | null>(null);
@@ -181,7 +187,12 @@ export default function ProfileScreen({
   const loadProfile = async () => {
     if (!targetUserId) return;
     const { data } = await supabase.from('users').select('*').eq('id', targetUserId).maybeSingle();
-    if (data) { setProfile(data); setSelectedCountries(data.selected_countries || []); }
+    if (data) {
+      const countries = data.selected_countries || [];
+      _profileCache[targetId] = { ..._profileCache[targetId], profile: data, selectedCountries: countries };
+      setProfile(data);
+      setSelectedCountries(countries);
+    }
     setLoading(false);
   };
 
@@ -189,7 +200,9 @@ export default function ProfileScreen({
     if (!targetUserId) return;
     const { count } = await supabase
       .from('events').select('id', { count: 'exact', head: true }).eq('user_id', targetUserId);
-    setEventsCount(count || 0);
+    const n = count || 0;
+    _profileCache[targetId] = { ..._profileCache[targetId], eventsCount: n } as ProfileCache;
+    setEventsCount(n);
   };
 
   const handleLogout = async () => {

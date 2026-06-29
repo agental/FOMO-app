@@ -25,11 +25,15 @@ type ChatScreenProps = {
   onBack: () => void;
 };
 
+/* ── module-level caches (survive navigation) ── */
+const _chatMsgCache: Record<string, Message[]> = {};
+const _chatUserCache: Record<string, OtherUser> = {};
+
 export function ChatScreen({ conversationId, currentUserId, otherUserId, onBack }: ChatScreenProps) {
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [otherUser, setOtherUser] = useState<OtherUser | null>(null);
+  const [messages, setMessages] = useState<Message[]>(_chatMsgCache[conversationId] ?? []);
+  const [otherUser, setOtherUser] = useState<OtherUser | null>(_chatUserCache[otherUserId] ?? null);
   const [newMessage, setNewMessage] = useState('');
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!_chatMsgCache[conversationId]?.length);
   const [sending, setSending] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -64,7 +68,9 @@ export function ChatScreen({ conversationId, currentUserId, otherUserId, onBack 
           setMessages(prev => {
             const exists = prev.some(msg => msg.id === newMsg.id);
             if (exists) return prev;
-            return [...prev, newMsg];
+            const updated = [...prev, newMsg];
+            _chatMsgCache[conversationId] = updated;
+            return updated;
           });
           if (newMsg.sender_id !== currentUserId) {
             markMessagesAsRead();
@@ -85,6 +91,7 @@ export function ChatScreen({ conversationId, currentUserId, otherUserId, onBack 
   }, [messages]);
 
   const loadOtherUser = async () => {
+    if (_chatUserCache[otherUserId]) return; // already cached
     try {
       const { data, error } = await supabase
         .from('users')
@@ -93,7 +100,7 @@ export function ChatScreen({ conversationId, currentUserId, otherUserId, onBack 
         .maybeSingle();
 
       if (error) throw error;
-      if (data) setOtherUser(data);
+      if (data) { _chatUserCache[otherUserId] = data; setOtherUser(data); }
     } catch (error) {
       console.error('Error loading user:', error);
     }
@@ -108,7 +115,9 @@ export function ChatScreen({ conversationId, currentUserId, otherUserId, onBack 
         .order('created_at', { ascending: true });
 
       if (error) throw error;
-      setMessages(data || []);
+      const msgs = data || [];
+      _chatMsgCache[conversationId] = msgs;
+      setMessages(msgs);
     } catch (error) {
       console.error('Error loading messages:', error);
     } finally {

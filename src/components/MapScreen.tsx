@@ -48,6 +48,13 @@ const FILTER_TABS: { id: MapFilter; label: string; emoji: string }[] = [
   { id: 'meetups', label: 'ישיבות',  emoji: '☕' },
 ];
 
+/* ── module-level cache (survives navigation) ── */
+let _mapChabadHouses:   ChabadHouse[]   | null = null;
+let _mapAdminLocations: AdminLocation[] | null = null;
+let _mapPosts:          any[]           | null = null;
+let _mapMeetups:        Meetup[]        | null = null;
+let _mapLocation:       { latitude: number; longitude: number } | null = null;
+
 /* ──────────────────────────────── component ───────────────────────────────── */
 export function MapScreen({
   userId,
@@ -62,8 +69,8 @@ export function MapScreen({
   onFocusHandled,
 }: MapScreenProps) {
   /* location & map */
-  const [location,      setLocation]      = useState<UserLocation | null>(null);
-  const [loading,       setLoading]       = useState(true);
+  const [location,      setLocation]      = useState<UserLocation | null>(_mapLocation);
+  const [loading,       setLoading]       = useState(!_mapLocation);
   const [loadingFading, setLoadingFading] = useState(false);
   const [error,         setError]         = useState<string | null>(null);
   const [mapReady,      setMapReady]      = useState(false);
@@ -76,10 +83,10 @@ export function MapScreen({
   const [searchQuery, setSearchQuery] = useState('');
 
   /* data */
-  const [chabadHouses,    setChabadHouses]    = useState<ChabadHouse[]>([]);
-  const [adminLocations,  setAdminLocations]  = useState<AdminLocation[]>([]);
-  const [posts,           setPosts]           = useState<any[]>([]);
-  const [meetups,         setMeetups]         = useState<Meetup[]>([]);
+  const [chabadHouses,    setChabadHouses]    = useState<ChabadHouse[]>(_mapChabadHouses ?? []);
+  const [adminLocations,  setAdminLocations]  = useState<AdminLocation[]>(_mapAdminLocations ?? []);
+  const [posts,           setPosts]           = useState<any[]>(_mapPosts ?? []);
+  const [meetups,         setMeetups]         = useState<Meetup[]>(_mapMeetups ?? []);
 
   /* selected items / sheets */
   const [selectedEvent,         setSelectedEvent]         = useState<Event | null>(null);
@@ -123,7 +130,7 @@ export function MapScreen({
   /* ── data loading ── */
   const loadChabadHouses = async () => {
     const { data } = await supabase.from('chabad_houses').select('*').order('created_at', { ascending: false });
-    if (data) setChabadHouses(data);
+    if (data) { _mapChabadHouses = data; setChabadHouses(data); }
   };
 
   const loadAdminLocations = async () => {
@@ -132,7 +139,7 @@ export function MapScreen({
       .select('*')
       .order('created_at', { ascending: false });
     if (e) { console.error('loadAdminLocations:', e); return; }
-    if (data) setAdminLocations(data);
+    if (data) { _mapAdminLocations = data; setAdminLocations(data); }
   };
 
   const loadPosts = async () => {
@@ -142,7 +149,7 @@ export function MapScreen({
       .not('latitude', 'is', null)
       .order('created_at', { ascending: false });
     if (e) { console.error('loadPosts:', e); return; }
-    if (data) setPosts(data);
+    if (data) { _mapPosts = data; setPosts(data); }
   };
 
   const loadMeetups = async () => {
@@ -161,10 +168,10 @@ export function MapScreen({
         .gte('scheduled_at', threeHoursAgo)
         .order('scheduled_at', { ascending: true });
       if (e2) { console.error('loadMeetups fallback error:', JSON.stringify(e2)); return; }
-      if (d2) setMeetups(d2 as Meetup[]);
+      if (d2) { _mapMeetups = d2 as Meetup[]; setMeetups(d2 as Meetup[]); }
       return;
     }
-    if (data) setMeetups(data as Meetup[]);
+    if (data) { _mapMeetups = data as Meetup[]; setMeetups(data as Meetup[]); }
   };
 
   /* ── effects ── */
@@ -204,16 +211,26 @@ export function MapScreen({
   /* Geolocation */
   useEffect(() => {
     mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN || '';
+    // If we already have a cached location, skip geolocation entirely
+    if (_mapLocation) return;
     let resolved = false;
 
     const applyLocation = (lat: number, lng: number) => {
       if (resolved) return;
       resolved = true;
-      setLocation({ latitude: lat, longitude: lng });
+      const wasAlreadyCached = !!_mapLocation;
+      const loc = { latitude: lat, longitude: lng };
+      _mapLocation = loc;
+      setLocation(loc);
       loadChabadHouses();
-      // Fade out loading screen, then remove it
-      setLoadingFading(true);
-      setTimeout(() => setLoading(false), 600);
+      if (wasAlreadyCached) {
+        // Had cached location — no loading screen, hide instantly
+        setLoading(false);
+      } else {
+        // First visit — fade out loading screen
+        setLoadingFading(true);
+        setTimeout(() => setLoading(false), 600);
+      }
     };
 
     // If location was already injected by React Native (e.g. user navigated back),

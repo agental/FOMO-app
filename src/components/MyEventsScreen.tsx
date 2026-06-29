@@ -73,14 +73,19 @@ const readTabFromUrl = (): TabKey => {
 
 const SELECT = '*, users(id, display_name, avatar_url)';
 
+/* ── module-level cache (survives navigation) ── */
+type MyEventsCache = { pending: Item[]; confirmed: Item[]; past: Item[] };
+const _myEventsCache: Record<string, MyEventsCache> = {};
+
 export function MyEventsScreen({
   currentUserId, onBack, onHomeClick, onMapClick, onCreateClick, onMessagesClick, onNavigateToUserProfile,
 }: MyEventsScreenProps) {
+  const _cached = _myEventsCache[currentUserId];
   const [tab, setTab] = useState<TabKey>(readTabFromUrl);
-  const [loading, setLoading] = useState(true);
-  const [pending, setPending] = useState<Item[]>([]);
-  const [confirmed, setConfirmed] = useState<Item[]>([]);
-  const [past, setPast] = useState<Item[]>([]);
+  const [loading, setLoading] = useState(!_cached);
+  const [pending, setPending] = useState<Item[]>(_cached?.pending ?? []);
+  const [confirmed, setConfirmed] = useState<Item[]>(_cached?.confirmed ?? []);
+  const [past, setPast] = useState<Item[]>(_cached?.past ?? []);
   const [selectedEvent, setSelectedEvent] = useState<Event | null>(null);
 
   /* keep the active tab in the URL (?tab=) so it survives reloads / sharing */
@@ -143,6 +148,7 @@ export function MyEventsScreen({
         .sort((a, b) => new Date(b.event_date).getTime() - new Date(a.event_date).getTime())
         .map(e => ({ event: e }));
 
+      _myEventsCache[currentUserId] = { pending: pendingItems, confirmed: confirmedItems, past: pastItems };
       setPending(pendingItems);
       setConfirmed(confirmedItems);
       setPast(pastItems);

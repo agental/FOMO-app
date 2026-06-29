@@ -2,9 +2,15 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { EventService } from '../services/eventService';
 import type { Event, EventFilters } from '../types/event';
 
+/* ── module-level event cache (survives navigation) ── */
+const _eventsCache: Record<string, Event[]> = {};
+const filterKey = (f?: EventFilters) =>
+  (f?.countries?.slice().sort().join(',') || '*') + (f?.eventType || '') + (f?.searchQuery || '');
+
 export function useEvents(initialFilters?: EventFilters) {
-  const [events, setEvents] = useState<Event[]>([]);
-  const [loading, setLoading] = useState(true);
+  const initKey = filterKey(initialFilters);
+  const [events, setEvents] = useState<Event[]>(_eventsCache[initKey] ?? []);
+  const [loading, setLoading] = useState(!_eventsCache[initKey]);
   const [error, setError] = useState<string | null>(null);
   const filtersRef = useRef(initialFilters);
   const mountedRef = useRef(true);
@@ -12,10 +18,18 @@ export function useEvents(initialFilters?: EventFilters) {
 
   const loadEvents = useCallback(async (filters?: EventFilters) => {
     try {
-      setLoading(true);
+      const currentFilters = filters || filtersRef.current;
+      const key = filterKey(currentFilters);
+
+      // Show cached events instantly — skip skeleton if we have them
+      if (_eventsCache[key]?.length) {
+        setEvents(_eventsCache[key]);
+        setLoading(false);
+      } else {
+        setLoading(true);
+      }
       setError(null);
 
-      const currentFilters = filters || filtersRef.current;
       const fetchedEvents = await EventService.getEvents(currentFilters);
 
       if (mountedRef.current) {
@@ -23,7 +37,9 @@ export function useEvents(initialFilters?: EventFilters) {
           const localEvents = prev.filter(e => localEventsRef.current.has(e.id));
           const fetchedIds = new Set(fetchedEvents.map(e => e.id));
           const uniqueLocalEvents = localEvents.filter(e => !fetchedIds.has(e.id));
-          return [...uniqueLocalEvents, ...fetchedEvents];
+          const result = [...uniqueLocalEvents, ...fetchedEvents];
+          _eventsCache[key] = result;
+          return result;
         });
       }
     } catch (err) {

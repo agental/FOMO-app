@@ -18,6 +18,10 @@ import type { AdminLocation } from '../lib/supabase';
 
 type FeedMode = 'events' | 'locations';
 
+/* ── module-level cache (survives navigation) ── */
+type HomeUserCache = { userName: string; userAvatarUrl: string | null; isAdmin: boolean; selectedCountries: string[] };
+const _homeUserCache: Record<string, HomeUserCache> = {};
+
 type CreateMode = 'none' | 'select' | 'event' | 'location' | 'post';
 
 interface HomeScreenProps {
@@ -68,8 +72,9 @@ export function HomeScreen({
   openCreateSignal,
   onCreateConsumed,
 }: HomeScreenProps = {}) {
-  const [selectedCountries, setSelectedCountries] = useState<string[]>(initialCountries || []);
-  const [activeCountry, setActiveCountry] = useState<string | null>(initialCountries?.[0] || null);
+  const _cachedCountries = propUserId ? (_homeUserCache[propUserId]?.selectedCountries ?? initialCountries ?? []) : (initialCountries || []);
+  const [selectedCountries, setSelectedCountries] = useState<string[]>(_cachedCountries);
+  const [activeCountry, setActiveCountry] = useState<string | null>(_cachedCountries[0] || null);
   const [searchQuery, setSearchQuery] = useState('');
   const [loading] = useState(false);
   const [currentUserId] = useState<string | null>(propUserId || null);
@@ -80,10 +85,11 @@ export function HomeScreen({
   const [showCountryPicker, setShowCountryPicker] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
   const [selectedDateFilter, setSelectedDateFilter] = useState<string | null>(null);
-  const [isAdmin, setIsAdmin] = useState(false);
+  const _huc = propUserId ? _homeUserCache[propUserId] : undefined;
+  const [isAdmin, setIsAdmin] = useState(_huc?.isAdmin ?? false);
   const [pendingRequestsCount, setPendingRequestsCount] = useState(0);
-  const [userName, setUserName] = useState('');
-  const [userAvatarUrl, setUserAvatarUrl] = useState<string | null>(null);
+  const [userName, setUserName] = useState(_huc?.userName ?? '');
+  const [userAvatarUrl, setUserAvatarUrl] = useState<string | null>(_huc?.userAvatarUrl ?? null);
   const [feedMode, setFeedMode] = useState<FeedMode>('events');
   const [adminLocations, setAdminLocations] = useState<AdminLocation[]>([]);
   const [recommendations, setRecommendations] = useState<any[]>([]);
@@ -99,7 +105,21 @@ export function HomeScreen({
   const scrollBodyRef = useRef<HTMLDivElement>(null);
   const dotRef = useRef<HTMLSpanElement>(null);
   const dotOriginY = useRef(32);
+  const dotOriginX = useRef(0);
   const PULL_THRESHOLD = 80;
+  const ORBIT_R = 28;
+  const DOT_SIZE = 9;
+  const orbitAngleRef = useRef(0);
+  const animDotRef = useRef<HTMLDivElement>(null);
+  const rafRef = useRef<number | null>(null);
+  const fLetterRef = useRef<HTMLSpanElement>(null);
+  const [logoAnimActive, setLogoAnimActive] = useState(false);
+  const [hotIdx, setHotIdx] = useState(0);
+  const hotIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const hotTouchXRef = useRef(0);
+  const [fomoImpact, setFomoImpact] = useState(0);
+  const logoAnimDotRef = useRef<HTMLDivElement>(null);
+  const logoAnimRafRef = useRef<number | null>(null);
 
   const { events, refreshEvents, updateFilters } = useEvents({
     countries: activeCountry ? [activeCountry] : selectedCountries,
@@ -145,6 +165,65 @@ export function HomeScreen({
     return () => { supabase.removeChannel(requestsChannel); };
   }, [currentUserId]);
 
+  // ── Orbit RAF: runs while isRefreshing ──────────────────────────────────
+  useEffect(() => {
+    if (!isRefreshing || !animDotRef.current) return;
+
+    const orbitCenterY = dotOriginY.current + 88;
+    const omega = (2 * Math.PI) / 1200; // 1 revolution per 1200 ms
+
+    // Synchronously place dot at 12-o'clock before first frame to avoid flicker
+    const initX = window.innerWidth / 2;
+    const initY = orbitCenterY - ORBIT_R;
+    animDotRef.current.style.transform = `translate(${initX - DOT_SIZE / 2}px, ${initY - DOT_SIZE / 2}px)`;
+    animDotRef.current.style.opacity = '1';
+
+    let startTime: number | null = null;
+    const tick = (now: number) => {
+      if (startTime === null) startTime = now;
+      const angle = omega * (now - startTime);
+      orbitAngleRef.current = angle;
+      const x = window.innerWidth / 2 + Math.sin(angle) * ORBIT_R;
+      const y = orbitCenterY - Math.cos(angle) * ORBIT_R;
+      if (animDotRef.current) {
+        animDotRef.current.style.transform = `translate(${x - DOT_SIZE / 2}px, ${y - DOT_SIZE / 2}px)`;
+      }
+      rafRef.current = requestAnimationFrame(tick);
+    };
+
+    rafRef.current = requestAnimationFrame(tick);
+    return () => { if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; } };
+  }, [isRefreshing]);
+
+  // ── Return RAF: smoothly travels back to "." position on completion ─────
+  useEffect(() => {
+    if (!isReturning || !animDotRef.current) return;
+    if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
+
+    const orbitCenterY = dotOriginY.current + 88;
+    const angle = orbitAngleRef.current;
+    const startX = window.innerWidth / 2 + Math.sin(angle) * ORBIT_R;
+    const startY = orbitCenterY - Math.cos(angle) * ORBIT_R;
+    const targetX = window.innerWidth / 2 + dotOriginX.current;
+    const targetY = dotOriginY.current;
+    const DURATION = 450;
+    const startTime = performance.now();
+
+    const tick = (now: number) => {
+      const t = Math.min((now - startTime) / DURATION, 1);
+      const ease = 1 - Math.pow(1 - t, 3); // ease-out cubic
+      const x = startX + (targetX - startX) * ease;
+      const y = startY + (targetY - startY) * ease;
+      if (animDotRef.current) {
+        animDotRef.current.style.transform = `translate(${x - DOT_SIZE / 2}px, ${y - DOT_SIZE / 2}px)`;
+        animDotRef.current.style.opacity = String(1 - ease);
+      }
+      if (t < 1) rafRef.current = requestAnimationFrame(tick);
+    };
+
+    rafRef.current = requestAnimationFrame(tick);
+    return () => { if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; } };
+  }, [isReturning]);
 
   const loadUserCountries = async () => {
     if (!currentUserId) return;
@@ -156,17 +235,96 @@ export function HomeScreen({
         .maybeSingle();
       if (error) throw error;
       if (data) {
-        if (data.selected_countries) {
-          setSelectedCountries(data.selected_countries);
-          setActiveCountry(prev => prev || data.selected_countries[0] || null);
+        const countries = data.selected_countries ?? [];
+        const name      = data.display_name ? data.display_name.split(' ')[0] : '';
+        const admin     = data.role === 'admin';
+        const avatar    = data.avatar_url ?? null;
+        if (currentUserId) {
+          _homeUserCache[currentUserId] = { userName: name, userAvatarUrl: avatar, isAdmin: admin, selectedCountries: countries };
         }
-        if (data.display_name) setUserName(data.display_name.split(' ')[0]);
-        setIsAdmin(data.role === 'admin');
-        setUserAvatarUrl(data.avatar_url ?? null);
+        if (countries.length) {
+          setSelectedCountries(countries);
+          setActiveCountry(prev => prev || countries[0] || null);
+        }
+        if (name) setUserName(name);
+        setIsAdmin(admin);
+        setUserAvatarUrl(avatar);
       }
     } catch (error) {
       console.error('Error loading user data:', error);
     }
+  };
+
+  // Core animation: fall (optional) → 4 orbits → slam into F → letters bounce
+  const triggerLogoAnimation = (skipFall: boolean) => {
+    const dotEl = dotRef.current;
+    const fEl   = fLetterRef.current;
+    if (!dotEl || !fEl) return;
+
+    const dr = dotEl.getBoundingClientRect();
+    const fr = fEl.getBoundingClientRect();
+    const startX = dr.left + dr.width / 2;
+    const startY = dr.top  + dr.height / 2;
+    const oCX    = window.innerWidth / 2;
+    const oCY    = startY + 80;
+    const oTopY  = oCY - ORBIT_R;
+    const fX     = fr.left + fr.width / 2;
+    const fY     = fr.top  + fr.height / 2;
+
+    const FALL_DUR   = skipFall ? 0 : 320;
+    const ORBIT_DUR  = 680;
+    const N_ORBITS   = 4;
+    const STRIKE_DUR = 260;
+
+    setLogoAnimActive(true);
+    if (logoAnimRafRef.current) cancelAnimationFrame(logoAnimRafRef.current);
+
+    // When skipping fall (pull-to-refresh), position dot at orbit top immediately
+    if (skipFall && logoAnimDotRef.current) {
+      logoAnimDotRef.current.style.transform = `translate(${oCX - DOT_SIZE / 2}px, ${oTopY - DOT_SIZE / 2}px)`;
+      logoAnimDotRef.current.style.opacity = '1';
+    }
+
+    const t0 = performance.now();
+    const tick = (now: number) => {
+      const el = now - t0;
+      let x: number, y: number;
+
+      if (el < FALL_DUR) {
+        const p = el / FALL_DUR;
+        const e = 1 - Math.pow(1 - p, 2);
+        x = startX + (oCX - startX) * e;
+        y = startY + (oTopY - startY) * e;
+      } else if (el < FALL_DUR + N_ORBITS * ORBIT_DUR) {
+        const angle = (2 * Math.PI * (el - FALL_DUR)) / ORBIT_DUR;
+        x = oCX + Math.sin(angle) * ORBIT_R;
+        y = oCY - Math.cos(angle) * ORBIT_R;
+      } else if (el < FALL_DUR + N_ORBITS * ORBIT_DUR + STRIKE_DUR) {
+        const p = (el - FALL_DUR - N_ORBITS * ORBIT_DUR) / STRIKE_DUR;
+        const e = p * p * p;
+        x = oCX + (fX - oCX) * e;
+        y = oTopY + (fY - oTopY) * e;
+      } else {
+        if (logoAnimDotRef.current) logoAnimDotRef.current.style.opacity = '0';
+        setLogoAnimActive(false);
+        setFomoImpact(n => n + 1);
+        setTimeout(() => setFomoImpact(0), 900);
+        return;
+      }
+
+      if (logoAnimDotRef.current) {
+        logoAnimDotRef.current.style.transform = `translate(${x - DOT_SIZE / 2}px, ${y - DOT_SIZE / 2}px)`;
+        logoAnimDotRef.current.style.opacity = '1';
+      }
+      logoAnimRafRef.current = requestAnimationFrame(tick);
+    };
+
+    logoAnimRafRef.current = requestAnimationFrame(tick);
+  };
+
+  const handleLogoTap = () => {
+    if (logoAnimActive || fomoImpact > 0 || pullY > 0 || isRefreshing || isReturning) return;
+    triggerLogoAnimation(false);
   };
 
   const handleTouchStart = (e: React.TouchEvent) => {
@@ -176,11 +334,12 @@ export function HomeScreen({
     if (dotRef.current) {
       const r = dotRef.current.getBoundingClientRect();
       dotOriginY.current = r.top + r.height / 2;
+      dotOriginX.current = (r.left + r.width / 2) - window.innerWidth / 2;
     }
   };
 
   const handleTouchMove = (e: React.TouchEvent) => {
-    if (!isPulling.current || isRefreshing) return;
+    if (!isPulling.current || isRefreshing || logoAnimActive) return;
     const delta = e.touches[0].clientY - touchStartY.current;
     if (delta > 0) {
       setPullY(Math.min(delta * 0.45, PULL_THRESHOLD * 1.1));
@@ -190,16 +349,13 @@ export function HomeScreen({
     }
   };
 
-  const handleTouchEnd = async () => {
+  const handleTouchEnd = () => {
     if (!isPulling.current) return;
     isPulling.current = false;
     if (pullY >= PULL_THRESHOLD) {
-      setIsRefreshing(true);
       setPullY(0);
-      await refreshEvents();
-      setIsRefreshing(false);
-      setIsReturning(true);
-      setTimeout(() => setIsReturning(false), 500);
+      refreshEvents(); // refresh data in background while animation plays
+      triggerLogoAnimation(true); // skip fall — dot is already at orbit top from the pull
     } else {
       setPullY(0);
     }
@@ -344,6 +500,18 @@ export function HomeScreen({
       .map(x => x.e);
   }, [dateFilteredEvents]);
 
+  // ── Hot-carousel auto-advance ─────────────────────────────────────────────
+  useEffect(() => {
+    if (logoAnimActive || featuredEvents.length <= 1) {
+      if (hotIntervalRef.current) clearInterval(hotIntervalRef.current);
+      return;
+    }
+    hotIntervalRef.current = setInterval(() => {
+      setHotIdx(i => (i + 1) % featuredEvents.length);
+    }, 3500);
+    return () => { if (hotIntervalRef.current) clearInterval(hotIntervalRef.current); };
+  }, [featuredEvents.length, logoAnimActive]);
+
   // Upcoming events grouped by actual calendar day
   const dayGroups = useMemo(() => {
     const now = new Date();
@@ -375,7 +543,7 @@ export function HomeScreen({
   }, [dateFilteredEvents]);
 
   return (
-    <div className="min-h-screen overflow-x-hidden max-w-full" style={{ background: 'linear-gradient(135deg, #f9fafb 0%, #f3f4f6 100%)' }} dir="rtl">
+    <div className="min-h-screen overflow-x-hidden max-w-full" style={{ background: '#ffffff' }} dir="rtl">
 
       {/* ─── Header ─────────────────────────────────── */}
       <header
@@ -408,12 +576,18 @@ export function HomeScreen({
           </div>
 
           {/* Logo */}
-          <div className="absolute left-1/2 -translate-x-1/2">
+          <div className="absolute left-1/2 -translate-x-1/2" onClick={handleLogoTap} style={{ cursor: 'default', userSelect: 'none' }}>
             <span
               className="text-[22px] font-black text-gray-900"
               style={{ fontFamily: 'Inter, system-ui, sans-serif', letterSpacing: '-0.04em' }}
             >
-              <span dir="ltr">FOMO<span ref={dotRef} style={{ color: '#F97316', opacity: (pullY > 0 || isRefreshing) ? 0 : 1, transition: 'opacity 0.45s ease' }}>.</span></span>
+              <span dir="ltr">
+                <span ref={fLetterRef} style={{ display: 'inline-block', animation: fomoImpact > 0 ? `_fhF${fomoImpact} 560ms ease-out forwards` : undefined }}>F</span>
+                <span style={{ display: 'inline-block', animation: fomoImpact > 0 ? `_fhO${fomoImpact} 500ms ease-out 55ms forwards` : undefined }}>O</span>
+                <span style={{ display: 'inline-block', animation: fomoImpact > 0 ? `_fhM${fomoImpact} 440ms ease-out 110ms forwards` : undefined }}>M</span>
+                <span style={{ display: 'inline-block', animation: fomoImpact > 0 ? `_fhO${fomoImpact} 380ms ease-out 165ms forwards` : undefined }}>O</span>
+                <span ref={dotRef} style={{ color: '#F97316', opacity: (pullY > 0 || isRefreshing || isReturning || logoAnimActive || fomoImpact > 0) ? 0 : 1, transition: 'opacity 0.4s ease' }}>.</span>
+              </span>
             </span>
           </div>
 
@@ -444,84 +618,93 @@ export function HomeScreen({
       </header>
 
       {/* ─── Pull-to-refresh: FOMO dot animation ─── */}
-      {(pullY > 0 || isRefreshing || isReturning) && (() => {
-        const ORBIT_R  = 22;
-        const DOT_SIZE = 9;
-        const originY  = dotOriginY.current;
-        const refreshY = originY + 72;
-
-        let topY: number;
-        let opacity: number;
-        let trans: string;
-
-        if (isReturning) {
-          topY    = originY + 30;       // stops near logo, never ON it
-          opacity = 0;                  // fades out on the way back
-          trans   = 'top 0.5s cubic-bezier(0.22,1,0.36,1), opacity 0.38s ease';
-        } else if (isRefreshing) {
-          topY    = refreshY;
-          opacity = 1;
-          trans   = 'none';
-        } else {
-          const p = Math.min(pullY / PULL_THRESHOLD, 1);
-          topY    = originY + (refreshY - originY) * p;
-          opacity = Math.min(p * 2.5, 1);
-          trans   = 'none';
-        }
-
+      {/* Pull phase: React-controlled position, falls diagonally from "." to top of orbit */}
+      {pullY > 0 && !isRefreshing && !isReturning && (() => {
+        const orbitCenterY = dotOriginY.current + 88;
+        const p = Math.min(pullY / PULL_THRESHOLD, 1);
+        const screenX = window.innerWidth / 2 + dotOriginX.current * (1 - p);
+        const screenY = dotOriginY.current + (orbitCenterY - ORBIT_R - dotOriginY.current) * p;
         return (
-          <>
-            <style>{`
-              @keyframes fomoWrapSpin {
-                from { transform: rotate(0deg); }
-                to   { transform: rotate(360deg); }
-              }
-            `}</style>
-
-            <div style={{
-              position: 'fixed',
-              left: '50%',
-              top: topY,
-              opacity,
-              zIndex: 98,
-              transition: trans,
-            }}>
-              {isRefreshing ? (
-                /* ── Circular orbit: pivot at (0,0), dot offset by ORBIT_R ── */
-                <div style={{ position: 'relative', width: 0, height: 0 }}>
-                  <div style={{
-                    position: 'absolute',
-                    animation: 'fomoWrapSpin 1.2s linear infinite',
-                    transformOrigin: '0 0',
-                  }}>
-                    <div style={{
-                      position: 'absolute',
-                      width: DOT_SIZE,
-                      height: DOT_SIZE,
-                      borderRadius: '50%',
-                      background: '#F97316',
-                      boxShadow: '0 0 14px rgba(249,115,22,0.95), 0 0 30px rgba(249,115,22,0.5)',
-                      left: ORBIT_R - DOT_SIZE / 2,
-                      top: -DOT_SIZE / 2,
-                    }} />
-                  </div>
-                </div>
-              ) : (
-                /* ── Falling / returning ── */
-                <div style={{
-                  position: 'absolute',
-                  transform: 'translate(-50%, -50%)',
-                  width: DOT_SIZE,
-                  height: DOT_SIZE,
-                  borderRadius: '50%',
-                  background: '#F97316',
-                  boxShadow: '0 0 12px rgba(249,115,22,0.8)',
-                }} />
-              )}
-            </div>
-          </>
+          <div style={{
+            position: 'fixed',
+            left: 0,
+            top: 0,
+            transform: `translate(${screenX - DOT_SIZE / 2}px, ${screenY - DOT_SIZE / 2}px)`,
+            width: DOT_SIZE,
+            height: DOT_SIZE,
+            borderRadius: '50%',
+            background: '#F97316',
+            opacity: Math.min(p * 2.5, 1),
+            zIndex: 98,
+            pointerEvents: 'none',
+          }} />
         );
       })()}
+      {/* Orbit + return phase: position driven entirely by RAF via animDotRef */}
+      {(isRefreshing || isReturning) && (
+        <div
+          ref={animDotRef}
+          style={{
+            position: 'fixed',
+            left: 0,
+            top: 0,
+            width: DOT_SIZE,
+            height: DOT_SIZE,
+            borderRadius: '50%',
+            background: '#F97316',
+            opacity: 0,
+            zIndex: 98,
+            pointerEvents: 'none',
+            willChange: 'transform, opacity',
+          }}
+        />
+      )}
+
+      {/* ─── Logo tap: RAF-driven dot (fall → 4 orbits → slam into F) ─── */}
+      {logoAnimActive && (
+        <div
+          ref={logoAnimDotRef}
+          style={{
+            position: 'fixed',
+            left: 0,
+            top: 0,
+            width: DOT_SIZE,
+            height: DOT_SIZE,
+            borderRadius: '50%',
+            background: '#F97316',
+            opacity: 0,
+            zIndex: 99,
+            pointerEvents: 'none',
+            willChange: 'transform, opacity',
+          }}
+        />
+      )}
+      {/* Letter-impact keyframes — unique name per hit so CSS restarts them automatically */}
+      {fomoImpact > 0 && (
+        <style>{`
+          @keyframes _fhF${fomoImpact} {
+            0%   { transform: none; }
+            16%  { transform: translateX(-8px) translateY(-5px) rotate(-9deg) scale(1.3); }
+            48%  { transform: translateX(3px) translateY(1px) rotate(3deg) scale(0.93); }
+            72%  { transform: translateX(-1.5px) rotate(-1deg); }
+            88%  { transform: translateX(0.5px); }
+            100% { transform: none; }
+          }
+          @keyframes _fhO${fomoImpact} {
+            0%   { transform: none; }
+            20%  { transform: translateX(-5px) translateY(-3px) scale(1.12); }
+            55%  { transform: translateX(2px) scale(0.96); }
+            80%  { transform: translateX(-0.5px); }
+            100% { transform: none; }
+          }
+          @keyframes _fhM${fomoImpact} {
+            0%   { transform: none; }
+            26%  { transform: translateX(-3px) translateY(-1.5px) scale(1.07); }
+            62%  { transform: translateX(1px); }
+            100% { transform: none; }
+          }
+        `}</style>
+      )}
 
 
       {/* ─── Scroll body ─────────────────────────────── */}
@@ -937,7 +1120,7 @@ export function HomeScreen({
           ) : (
             <>
               {/* ══ FEATURED / HOT EVENTS carousel ══ */}
-              {featuredEvents.length > 0 && (
+              {(logoAnimActive || featuredEvents.length > 0) && (
                 <div className="mb-8">
                   <div className="flex items-center gap-2.5 px-4 mb-4">
                     <h3 className="text-lg font-black text-gray-900 tracking-tight" style={{ fontFamily: 'Heebo, sans-serif' }}>
@@ -945,70 +1128,162 @@ export function HomeScreen({
                     </h3>
                   </div>
 
-                  <div
-                    className="flex gap-4 overflow-x-auto snap-x snap-mandatory scrollbar-hide px-4"
-                    style={{ WebkitOverflowScrolling: 'touch' } as React.CSSProperties}
-                  >
-                    {featuredEvents.map(event => {
-                      const bg = event.image_url || (event.event_type ? CATEGORY_IMAGES[event.event_type] : null);
-                      return (
-                        <div
-                          key={event.id}
-                          className="flex-none snap-center cursor-pointer active:scale-[0.97] transition-transform duration-200"
-                          style={{ width: '295px' }}
-                          onClick={() => setSelectedEvent(event)}
-                        >
+                  {logoAnimActive ? (
+                    /* ── Skeleton: mirrors the real carousel layout ── */
+                    <>
+                      <div style={{ position: 'relative', height: 214, overflow: 'hidden' }}>
+                        {[-1, 0, 1].map(offset => (
                           <div
-                            className="relative h-[200px] rounded-2xl overflow-hidden"
-                            style={{ boxShadow: '0 16px 48px rgba(0,0,0,0.18), 0 4px 12px rgba(0,0,0,0.08)' }}
+                            key={offset}
+                            className="animate-pulse"
+                            style={{
+                              position: 'absolute',
+                              left: '50%',
+                              top: '50%',
+                              width: 280,
+                              height: 200,
+                              transform: `translate(calc(-50% + ${offset * 296}px), -50%) scale(${offset === 0 ? 1 : 0.88})`,
+                              opacity: offset === 0 ? 1 : 0.55,
+                              borderRadius: 16,
+                              overflow: 'hidden',
+                              background: 'linear-gradient(135deg,#e5e7eb,#d1d5db)',
+                              boxShadow: '0 4px 20px rgba(0,0,0,0.10)',
+                            }}
                           >
-                            {/* Background */}
-                            {bg ? (
-                              <img src={bg} alt={event.title} className="absolute inset-0 w-full h-full object-cover" />
-                            ) : (
-                              <div className="absolute inset-0 bg-gradient-to-br from-brand-500 via-brand-600 to-violet-700" />
-                            )}
-                            {/* Gradient overlay */}
-                            <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/20 to-transparent" />
-
-                            {/* Top row badges */}
-                            <div className="absolute top-3 inset-x-3 flex items-center justify-between">
-                              <div className="flex items-center gap-1 bg-black/40 backdrop-blur-sm text-white text-[11px] font-bold px-2.5 py-1 rounded-full">
-                                <Users className="w-3 h-3" />
-                                <span>{event.attendees.length}</span>
-                              </div>
-                              <span className="bg-orange-500/90 backdrop-blur-sm text-white text-[11px] font-bold px-2.5 py-1 rounded-full">
-                                🔥 חם
-                              </span>
+                            {/* gradient overlay like real card */}
+                            <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to top, rgba(0,0,0,0.55) 0%, rgba(0,0,0,0.08) 50%, transparent 100%)' }} />
+                            {/* top badges */}
+                            <div style={{ position: 'absolute', top: 12, left: 12, right: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <div style={{ height: 24, width: 44, borderRadius: 20, background: 'rgba(255,255,255,0.25)' }} />
+                              <div style={{ height: 24, width: 52, borderRadius: 20, background: 'rgba(249,115,22,0.35)' }} />
                             </div>
-
-                            {/* Bottom content */}
-                            <div className="absolute bottom-0 left-0 right-0 p-3.5">
-                              <h3
-                                className="text-white text-[16px] font-black leading-tight mb-2 line-clamp-2"
-                                style={{ fontFamily: 'Heebo, sans-serif', textShadow: '0 1px 8px rgba(0,0,0,0.5)' }}
-                              >
-                                {event.title}
-                              </h3>
-                              <div className="flex items-center justify-between">
-                                <div className="flex items-center gap-3">
-                                  <span className="text-white/70 text-[11px] flex items-center gap-1 font-medium">
-                                    <Calendar className="w-3 h-3" />
-                                    {formatEventDate(event.event_date)}
+                            {/* bottom text lines */}
+                            <div style={{ position: 'absolute', bottom: 14, left: 14, right: 14 }}>
+                              <div style={{ height: 16, borderRadius: 8, background: 'rgba(255,255,255,0.35)', marginBottom: 8, width: offset === 0 ? '75%' : '60%' }} />
+                              <div style={{ height: 11, borderRadius: 6, background: 'rgba(255,255,255,0.22)', width: offset === 0 ? '50%' : '40%' }} />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                      {/* dot indicators skeleton */}
+                      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 5, marginTop: 10 }}>
+                        {[0, 1, 2].map(i => (
+                          <div key={i} style={{ width: i === 1 ? 18 : 6, height: 6, borderRadius: 3, background: i === 1 ? '#F97316' : '#D1D5DB', opacity: 0.5 }} />
+                        ))}
+                      </div>
+                    </>)
+                  ) : (
+                    /* ── Real: transform-based centered carousel with scale focus ── */
+                    <>
+                      <div
+                        style={{ position: 'relative', height: 214, overflow: 'hidden' }}
+                        onTouchStart={e => { hotTouchXRef.current = e.touches[0].clientX; }}
+                        onTouchEnd={e => {
+                          const dx = hotTouchXRef.current - e.changedTouches[0].clientX;
+                          if (Math.abs(dx) < 28) return;
+                          const n = featuredEvents.length;
+                          const next = dx > 0
+                            ? (hotIdx + 1) % n
+                            : (hotIdx - 1 + n) % n;
+                          setHotIdx(next);
+                          if (hotIntervalRef.current) clearInterval(hotIntervalRef.current);
+                          hotIntervalRef.current = setInterval(
+                            () => setHotIdx(i => (i + 1) % featuredEvents.length), 3500
+                          );
+                        }}
+                      >
+                        {featuredEvents.map((event, i) => {
+                          const n = featuredEvents.length;
+                          let offset = i - hotIdx;
+                          if (offset > n / 2) offset -= n;
+                          if (offset < -n / 2) offset += n;
+                          const bg = event.image_url || (event.event_type ? CATEGORY_IMAGES[event.event_type] : null);
+                          return (
+                            <div
+                              key={event.id}
+                              style={{
+                                position: 'absolute',
+                                left: '50%',
+                                top: '50%',
+                                width: 280,
+                                height: 200,
+                                transform: `translate(calc(-50% + ${offset * 296}px), -50%) scale(${offset === 0 ? 1 : 0.88})`,
+                                transition: 'transform 0.48s cubic-bezier(0.25,0.46,0.45,0.94)',
+                                transformOrigin: 'center center',
+                                zIndex: offset === 0 ? 2 : 1,
+                                opacity: Math.abs(offset) <= 2 ? 1 - Math.abs(offset) * 0.15 : 0,
+                                cursor: 'pointer',
+                              }}
+                              onClick={() => offset === 0 ? setSelectedEvent(event) : setHotIdx(i)}
+                            >
+                              <div className="relative w-full h-full rounded-2xl overflow-hidden" style={{ boxShadow: '0 4px 20px rgba(0,0,0,0.15), 0 2px 6px rgba(0,0,0,0.07)' }}>
+                                {bg ? (
+                                  <img src={bg} alt={event.title} className="absolute inset-0 w-full h-full object-cover" />
+                                ) : (
+                                  <div className="absolute inset-0 bg-gradient-to-br from-brand-500 via-brand-600 to-violet-700" />
+                                )}
+                                <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/20 to-transparent" />
+                                <div className="absolute top-3 inset-x-3 flex items-center justify-between">
+                                  <div className="flex items-center gap-1 bg-black/40 backdrop-blur-sm text-white text-[11px] font-bold px-2.5 py-1 rounded-full">
+                                    <Users className="w-3 h-3" />
+                                    <span>{event.attendees.length}</span>
+                                  </div>
+                                  <span className="bg-orange-500/90 backdrop-blur-sm text-white text-[11px] font-bold px-2.5 py-1 rounded-full">
+                                    🔥 חם
                                   </span>
-                                  <span className="text-white/70 text-[11px] flex items-center gap-1 font-medium">
-                                    <MapPin className="w-3 h-3" />
-                                    {event.city}
-                                  </span>
+                                </div>
+                                <div className="absolute bottom-0 left-0 right-0 p-3.5">
+                                  <h3
+                                    className="text-white text-[16px] font-black leading-tight mb-2 line-clamp-2"
+                                    style={{ fontFamily: 'Heebo, sans-serif', textShadow: '0 1px 8px rgba(0,0,0,0.5)' }}
+                                  >
+                                    {event.title}
+                                  </h3>
+                                  <div className="flex items-center gap-3">
+                                    <span className="text-white/70 text-[11px] flex items-center gap-1 font-medium">
+                                      <Calendar className="w-3 h-3" />
+                                      {formatEventDate(event.event_date)}
+                                    </span>
+                                    <span className="text-white/70 text-[11px] flex items-center gap-1 font-medium">
+                                      <MapPin className="w-3 h-3" />
+                                      {event.city}
+                                    </span>
+                                  </div>
                                 </div>
                               </div>
                             </div>
-                          </div>
+                          );
+                        })}
+                      </div>
+
+                      {/* Dot indicators */}
+                      {featuredEvents.length > 1 && (
+                        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 5, marginTop: 10 }}>
+                          {featuredEvents.map((_, i) => (
+                            <div
+                              key={i}
+                              onClick={() => {
+                                setHotIdx(i);
+                                if (hotIntervalRef.current) clearInterval(hotIntervalRef.current);
+                                hotIntervalRef.current = setInterval(
+                                  () => setHotIdx(j => (j + 1) % featuredEvents.length), 3500
+                                );
+                              }}
+                              style={{
+                                width: i === hotIdx ? 18 : 6,
+                                height: 6,
+                                borderRadius: 3,
+                                background: i === hotIdx ? '#F97316' : '#D1D5DB',
+                                transition: 'width 0.3s cubic-bezier(0.34,1.56,0.64,1), background 0.3s ease',
+                                cursor: 'pointer',
+                                flexShrink: 0,
+                              }}
+                            />
+                          ))}
                         </div>
-                      );
-                    })}
-                    <div className="flex-none w-1" />
-                  </div>
+                      )}
+                    </>
+                  )}
                 </div>
               )}
 
@@ -1066,46 +1341,59 @@ export function HomeScreen({
                           {idx > 0 && (
                             <div style={{ height: 1, background: '#F5F5F7', margin: '0 14px' }} />
                           )}
-                          <div
-                            onClick={() => setSelectedEvent(event)}
-                            style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '16px 14px', cursor: 'pointer' }}
-                          >
-                            {/* Thumbnail */}
-                            <div style={{ width: 80, height: 80, flexShrink: 0, borderRadius: 16, overflow: 'hidden', background: cat ? `${cat.color}20` : '#F3F4F6' }}>
-                              {bg ? (
-                                <img src={bg} alt={event.title} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                              ) : (
-                                <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 34 }}>
-                                  {event.emoji || cat?.emoji || '📍'}
+                          {logoAnimActive ? (
+                            /* ── Skeleton row ── */
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '16px 14px' }} className="animate-pulse">
+                              <div style={{ width: 80, height: 80, flexShrink: 0, borderRadius: 16, background: '#F3F4F6' }} />
+                              <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                                <div style={{ height: 15, borderRadius: 8, background: '#F3F4F6', width: '68%' }} />
+                                <div style={{ height: 12, borderRadius: 6, background: '#F3F4F6', width: '42%' }} />
+                                <div style={{ height: 12, borderRadius: 6, background: '#F3F4F6', width: '32%' }} />
+                              </div>
+                              <div style={{ width: 42, height: 28, borderRadius: 20, background: '#FFF7ED', flexShrink: 0 }} />
+                            </div>
+                          ) : (
+                            <div
+                              onClick={() => setSelectedEvent(event)}
+                              style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '16px 14px', cursor: 'pointer' }}
+                            >
+                              {/* Thumbnail */}
+                              <div style={{ width: 80, height: 80, flexShrink: 0, borderRadius: 16, overflow: 'hidden', background: cat ? `${cat.color}20` : '#F3F4F6' }}>
+                                {bg ? (
+                                  <img src={bg} alt={event.title} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                                ) : (
+                                  <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 34 }}>
+                                    {event.emoji || cat?.emoji || '📍'}
+                                  </div>
+                                )}
+                              </div>
+
+                              {/* Text */}
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <p style={{ fontSize: 15, fontWeight: 800, color: '#111827', fontFamily: "'Heebo', sans-serif", margin: '0 0 6px', lineHeight: 1.3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                  {event.title}
+                                </p>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                  <span style={{ fontSize: 13, color: '#9CA3AF', fontWeight: 500, display: 'flex', alignItems: 'center', gap: 4, fontFamily: "'Heebo', sans-serif" }}>
+                                    <MapPin size={12} strokeWidth={2} />{event.city}
+                                  </span>
+                                  <span style={{ fontSize: 13, color: '#9CA3AF', fontWeight: 500, display: 'flex', alignItems: 'center', gap: 4, fontFamily: "'Heebo', sans-serif" }}>
+                                    <Clock size={12} strokeWidth={2} />{time}
+                                  </span>
                                 </div>
-                              )}
-                            </div>
+                              </div>
 
-                            {/* Text */}
-                            <div style={{ flex: 1, minWidth: 0 }}>
-                              <p style={{ fontSize: 15, fontWeight: 800, color: '#111827', fontFamily: "'Heebo', sans-serif", margin: '0 0 6px', lineHeight: 1.3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                {event.title}
-                              </p>
-                              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                                <span style={{ fontSize: 13, color: '#9CA3AF', fontWeight: 500, display: 'flex', alignItems: 'center', gap: 4, fontFamily: "'Heebo', sans-serif" }}>
-                                  <MapPin size={12} strokeWidth={2} />{event.city}
-                                </span>
-                                <span style={{ fontSize: 13, color: '#9CA3AF', fontWeight: 500, display: 'flex', alignItems: 'center', gap: 4, fontFamily: "'Heebo', sans-serif" }}>
-                                  <Clock size={12} strokeWidth={2} />{time}
-                                </span>
+                              {/* Attendees badge */}
+                              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, flexShrink: 0 }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 3, background: '#FFF7ED', borderRadius: 20, padding: '5px 9px' }}>
+                                  <Users size={11} color="#F97316" strokeWidth={2} />
+                                  <span style={{ fontSize: 12, fontWeight: 700, color: '#F97316', fontFamily: "'Heebo', sans-serif" }}>
+                                    {event.attendees.length}
+                                  </span>
+                                </div>
                               </div>
                             </div>
-
-                            {/* Attendees badge */}
-                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, flexShrink: 0 }}>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: 3, background: '#FFF7ED', borderRadius: 20, padding: '5px 9px' }}>
-                                <Users size={11} color="#F97316" strokeWidth={2} />
-                                <span style={{ fontSize: 12, fontWeight: 700, color: '#F97316', fontFamily: "'Heebo', sans-serif" }}>
-                                  {event.attendees.length}
-                                </span>
-                              </div>
-                            </div>
-                          </div>
+                          )}
                         </div>
                       );
                     })}
