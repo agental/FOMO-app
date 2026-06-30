@@ -78,9 +78,17 @@ export function FloatingNavBar({
   };
   return (
     <div className="fixed bottom-0 left-0 right-0 z-20 pointer-events-none" style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
-      <div className="flex justify-center pb-5 px-6">
-        <div className="bg-white rounded-full pointer-events-auto border border-gray-200/80" style={{ boxShadow: '0 12px 40px rgba(0, 0, 0, 0.1), 0 4px 15px rgba(0, 0, 0, 0.08)' }}>
-          <div className="flex items-center justify-center gap-1 px-4 py-2 relative">
+      <div className="flex justify-center pb-2 px-6">
+        <div
+          className="rounded-full pointer-events-auto border border-white/40"
+          style={{
+            background: 'rgba(255, 255, 255, 0.55)',
+            backdropFilter: 'blur(20px) saturate(180%)',
+            WebkitBackdropFilter: 'blur(20px) saturate(180%)',
+            boxShadow: '0 12px 40px rgba(0, 0, 0, 0.12), 0 4px 15px rgba(0, 0, 0, 0.08), inset 0 1px 1px rgba(255, 255, 255, 0.6)',
+          }}
+        >
+          <div className="flex items-center justify-center gap-3 px-7 py-2 relative">
             <button
               onClick={onHomeClick}
               className="p-1.5 transition-all active:scale-95"

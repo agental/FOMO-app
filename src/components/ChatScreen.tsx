@@ -1,7 +1,8 @@
 import { useState, useEffect, useLayoutEffect, useRef } from 'react';
-import { ArrowRight, Send } from 'lucide-react';
+import { Send } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { UserAvatar } from './UserAvatar';
+import { BackButton } from './BackButton';
 
 type Message = {
   id: string;
@@ -214,12 +215,7 @@ export function ChatScreen({ conversationId, currentUserId, otherUserId, onBack 
     <div className="min-h-screen bg-gradient-to-br from-brand-50/30 via-white to-brand-50/30 flex flex-col" style={{ fontFamily: 'Rubik, sans-serif' }}>
       <div className="sticky top-0 z-10 bg-gradient-to-r from-brand-500 to-brand-600 px-6 py-4 shadow-lg safe-area-top">
         <div className="flex items-center gap-4">
-          <button
-            onClick={onBack}
-            className="p-2 hover:bg-white/20 rounded-full transition-colors active:scale-95"
-          >
-            <ArrowRight className="w-6 h-6 text-white" />
-          </button>
+          <BackButton onClick={onBack} variant="dark" />
           <UserAvatar
             userId={otherUser.id}
             displayName={otherUser.display_name}

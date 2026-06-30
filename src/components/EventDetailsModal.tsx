@@ -223,7 +223,7 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
           style={{ touchAction: 'manipulation' }}
         >
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#111827" strokeWidth="2.2" strokeLinecap="round">
-            <path d="M15 18l-6-6 6-6" />
+            <path d="M9 18l6-6-6-6" />
           </svg>
         </button>
 

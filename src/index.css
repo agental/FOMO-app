@@ -172,6 +172,22 @@
   box-sizing: border-box;
 }
 
+/* Kill the focus ring + double-tap zoom/selection highlight on taps.
+   touch-action: manipulation removes the double-tap-to-zoom gesture that
+   otherwise flashes a highlight around buttons in the WebView. */
+button {
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: manipulation;
+}
+
+button:focus,
+button:focus-visible {
+  outline: none;
+}
+
 html {
   overscroll-behavior: none;
   overflow-x: hidden;

@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
-import { X, Send, ArrowRight } from 'lucide-react';
+import { X, Send } from 'lucide-react';
+import { BackButton } from './BackButton';
 import { supabase, type Meetup } from '../lib/supabase';
 
 interface Message {
@@ -94,12 +95,7 @@ export function MeetupGroupChat({ meetup, currentUserId, onClose }: MeetupGroupC
     >
       {/* Header */}
       <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-100 bg-white flex-shrink-0">
-        <button
-          onClick={onClose}
-          className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center hover:bg-gray-200 transition-colors"
-        >
-          <ArrowRight className="w-5 h-5 text-gray-600" />
-        </button>
+        <BackButton onClick={onClose} />
         <div className="w-10 h-10 rounded-2xl bg-orange-100 border border-orange-200 flex items-center justify-center text-2xl flex-shrink-0">
           {meetup.emoji}
         </div>

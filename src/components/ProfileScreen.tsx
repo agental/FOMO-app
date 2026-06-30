@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
-import { ArrowRight, LogOut, MessageCircle, Edit2, Search, Check, Camera, MapPin, Globe, Loader2, Heart, Ticket, X, Cake, Settings, ChevronLeft, Plus } from 'lucide-react';
+import { LogOut, MessageCircle, Edit2, Search, Check, Camera, MapPin, Globe, Loader2, Heart, Ticket, X, Cake, Settings, ChevronLeft, Plus } from 'lucide-react';
+import { BackButton } from './BackButton';
 import { supabase, type User } from '../lib/supabase';
 import { flagEmoji } from '../utils/flags';
 import { COUNTRIES } from '../utils/countries';
@@ -298,18 +299,7 @@ export default function ProfileScreen({
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           padding: '0 18px', marginBottom: 36, position: 'relative',
         }}>
-          <button onClick={onBack} className="fomo-press" aria-label="חזרה" style={{
-            display: 'flex', alignItems: 'center', gap: 6,
-            minHeight: 44, padding: '0 16px', borderRadius: 50,
-            background: 'rgba(255,255,255,0.07)',
-            border: '1px solid rgba(255,255,255,0.1)',
-            color: 'rgba(255,255,255,0.75)', cursor: 'pointer',
-            fontFamily: 'Heebo, sans-serif', fontSize: 14, fontWeight: 600,
-            backdropFilter: 'blur(8px)',
-          }}>
-            <ArrowRight size={15} />
-            חזרה
-          </button>
+          <BackButton onClick={onBack} variant="dark" />
 
           <div style={{ display: 'flex', gap: 8 }}>
             {isOwnProfile && (

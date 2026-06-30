@@ -1,4 +1,5 @@
-import { ChevronLeft, Mail, Heart } from 'lucide-react';
+import { Mail, Heart } from 'lucide-react';
+import { BackButton } from './BackButton';
 
 interface AboutScreenProps {
   onBack?: () => void;
@@ -15,9 +16,7 @@ export function AboutScreen({ onBack }: AboutScreenProps) {
         style={{ paddingTop: 'env(safe-area-inset-top)', boxShadow: '0 1px 0 rgba(0,0,0,0.05)' }}
       >
         <div className="flex items-center h-16 px-4 gap-3">
-          <button onClick={onBack} className="w-9 h-9 rounded-full hover:bg-gray-100 flex items-center justify-center transition-colors active:scale-95">
-            <ChevronLeft className="w-5 h-5 text-gray-600" strokeWidth={2} />
-          </button>
+          <BackButton onClick={onBack} />
           <h1 className="text-lg font-bold text-gray-900" style={{ fontFamily: 'Heebo, sans-serif' }}>אודות FOMO</h1>
         </div>
       </header>

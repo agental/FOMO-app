@@ -105,6 +105,25 @@ const COUNTRY_CITIES: Record<string, { name: string; emoji: string }[]> = {
     { name: 'רוטורוא',    emoji: '♨️' },
     { name: 'קרייסטצ׳רץ׳', emoji: '🌿' },
   ],
+  PH: [
+    { name: 'מנילה',      emoji: '🏙️' },
+    { name: 'בוראקאי',    emoji: '🏝️' },
+    { name: 'אל נידו',    emoji: '🛶' },
+    { name: 'קורון',      emoji: '🤿' },
+    { name: 'סבו',        emoji: '🐋' },
+    { name: 'סיארגאו',    emoji: '🏄' },
+    { name: 'בוהול',      emoji: '🐒' },
+  ],
+  IN: [
+    { name: 'מנאלי',     emoji: '🏔️' },
+    { name: 'קסול',      emoji: '🌲' },
+    { name: 'דהרמסלה',   emoji: '🧘' },
+    { name: 'רישיקש',    emoji: '🕉️' },
+    { name: 'גואה',      emoji: '🏖️' },
+    { name: 'פושקאר',    emoji: '🐪' },
+    { name: 'ואראנסי',   emoji: '🛕' },
+    { name: 'דלהי',      emoji: '🏙️' },
+  ],
 };
 
 type Conversation = {
@@ -133,9 +152,13 @@ type MessagesScreenProps = {
   onCreateClick?: () => void;
   onMyEventsClick?: () => void;
   onNavigateToCountrySelection?: () => void;
+  onOpenMapAt?: (lat: number, lng: number) => void;
+  initialCountries?: string[];
 };
 
 const DEMO_COUNTRIES = ['TH', 'JP', 'IT', 'FR', 'US', 'GR'];
+// Survives navigation so re-entering Messages shows the right flags instantly.
+let _cachedUserCountries: string[] | null = null;
 
 // Module-level cache — survives component remounts
 let _cachedConversations: Conversation[] = [];
@@ -155,15 +178,41 @@ type GroupChat = {
   memberStatus: 'approved' | 'pending';
 };
 
-export function MessagesScreen({ currentUserId, onBack, onConversationClick, onHomeClick, onMapClick, onCreateClick, onMyEventsClick, onNavigateToCountrySelection }: MessagesScreenProps) {
+export function MessagesScreen({ currentUserId, onBack, onConversationClick, onHomeClick, onMapClick, onCreateClick, onMyEventsClick, onNavigateToCountrySelection, onOpenMapAt, initialCountries }: MessagesScreenProps) {
   const [conversations,   setConversations]   = useState<Conversation[]>(_cachedConversations);
   const [groupChats,      setGroupChats]      = useState<GroupChat[]>(_cachedGroupChats);
   const [loading,         setLoading]         = useState(!_cachedInitialized);
   const [initialized,     setInitialized]     = useState(_cachedInitialized);
   const [searchQuery,     setSearchQuery]     = useState('');
   const [swipedId,        setSwipedId]        = useState<string | null>(null);
-  const [userCountries,   setUserCountries]   = useState<string[]>(DEMO_COUNTRIES);
+  const [userCountries,   setUserCountries]   = useState<string[]>(
+    (initialCountries && initialCountries.length > 0)
+      ? initialCountries.slice(0, 8)
+      : (_cachedUserCountries ?? DEMO_COUNTRIES)
+  );
   const [expandedCountry, setExpandedCountry] = useState<string | null>(null);
+  const cityRowRef = useRef<HTMLDivElement>(null);
+
+  // Lock the city strip to horizontal swipes only — block vertical drags so the
+  // page doesn't scroll up/down when the user pans the cities (WebView ignores
+  // CSS touch-action, so we enforce it with a non-passive touch listener).
+  useEffect(() => {
+    const el = cityRowRef.current;
+    if (!el) return;
+    let sx = 0, sy = 0;
+    const onStart = (e: TouchEvent) => { sx = e.touches[0].clientX; sy = e.touches[0].clientY; };
+    const onMove = (e: TouchEvent) => {
+      const dx = Math.abs(e.touches[0].clientX - sx);
+      const dy = Math.abs(e.touches[0].clientY - sy);
+      if (dy > dx) e.preventDefault(); // vertical gesture → do nothing
+    };
+    el.addEventListener('touchstart', onStart, { passive: true });
+    el.addEventListener('touchmove', onMove, { passive: false });
+    return () => {
+      el.removeEventListener('touchstart', onStart);
+      el.removeEventListener('touchmove', onMove);
+    };
+  }, [expandedCountry]);
   const [currentUserName, setCurrentUserName] = useState('');
   const [currentUserAvatar, setCurrentUserAvatar] = useState<string | null>(null);
   const [openCity, setOpenCity] = useState<{ code: string; flag: string; name: string; emoji: string } | null>(null);
@@ -206,7 +255,9 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
         .eq('id', currentUserId)
         .maybeSingle();
       if (data?.selected_countries && data.selected_countries.length > 0) {
-        setUserCountries(data.selected_countries.slice(0, 8));
+        const cs = data.selected_countries.slice(0, 8);
+        _cachedUserCountries = cs;
+        setUserCountries(cs);
       }
       if (data?.display_name) setCurrentUserName(data.display_name);
       if (data?.avatar_url !== undefined) setCurrentUserAvatar(data.avatar_url);
@@ -471,7 +522,7 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
           <p className="text-[13px] font-bold text-gray-400 px-4 mb-3 tracking-wide">קבוצות</p>
 
           {/* Country circles row */}
-          <div className="overflow-x-auto scrollbar-hide">
+          <div className="overflow-x-auto scrollbar-hide" style={{ touchAction: 'pan-x', overscrollBehaviorX: 'contain' }}>
             <div className="flex gap-3 px-4 pb-1" style={{ width: 'max-content' }}>
               {userCountries.map((code) => {
                 const country = COUNTRIES[code];
@@ -525,7 +576,7 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
 
           {/* City chips — animate in when a country is expanded */}
           {expandedCountry && COUNTRY_CITIES[expandedCountry] && (
-            <div className="overflow-x-auto scrollbar-hide mt-3">
+            <div ref={cityRowRef} className="overflow-x-auto scrollbar-hide mt-3" style={{ touchAction: 'pan-x', overscrollBehaviorX: 'contain' }}>
               <div className="flex gap-2 px-4 pb-1" style={{ width: 'max-content' }}>
                 {COUNTRY_CITIES[expandedCountry].map((city, i) => (
                   <button
@@ -824,6 +875,7 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
           currentUserName={currentUserName || 'אנונימי'}
           currentUserAvatar={currentUserAvatar}
           onClose={() => { setOpenCity(null); loadGroupChats(); }}
+          onOpenMapAt={onOpenMapAt}
         />
       )}
     </div>

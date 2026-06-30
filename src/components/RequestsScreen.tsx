@@ -1,9 +1,20 @@
 import { useState, useEffect } from 'react';
-import { UserPlus, Check, X, Calendar, ArrowRight, Clock, ChevronLeft } from 'lucide-react';
+import { Check, X, Calendar, Clock, ChevronLeft, Bell } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { UserAvatar } from './UserAvatar';
 import { FloatingNavBar } from './FloatingNavBar';
 import { JoinRequestCard } from './JoinRequestCard';
+import { BackButton } from './BackButton';
+import { getNotifLastSeen, setNotifLastSeen } from '../utils/notificationsSeen';
+
+type RequestDecision = {
+  id: string;
+  event_id: string;
+  status: 'approved' | 'rejected';
+  updated_at: string;
+  eventTitle: string;
+  isNew: boolean;
+};
 
 type JoinRequest = {
   id: string;
@@ -44,17 +55,20 @@ type MeetupPendingRequest = {
 export function RequestsScreen({ currentUserId, onBack, onHomeClick, onMapClick, onCreateClick, onMessagesClick, onMyEventsClick, onNavigateToUserProfile }: RequestsScreenProps) {
   const [joinRequests, setJoinRequests] = useState<JoinRequest[]>([]);
   const [meetupRequests, setMeetupRequests] = useState<MeetupPendingRequest[]>([]);
+  const [decisions, setDecisions] = useState<RequestDecision[]>([]);
   const [loading, setLoading] = useState(true);
   const [meetupLoading, setMeetupLoading] = useState(false);
 
   useEffect(() => {
     loadJoinRequests();
     loadMeetupRequests();
+    loadDecisions();
 
     const requestsChannel = supabase
       .channel('requests-screen-sync')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'event_join_requests' }, () => {
         loadJoinRequests();
+        loadDecisions();
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'meetups' }, () => {
         loadMeetupRequests();
@@ -65,6 +79,45 @@ export function RequestsScreen({ currentUserId, onBack, onHomeClick, onMapClick,
       supabase.removeChannel(requestsChannel);
     };
   }, [currentUserId]);
+
+  // Decisions on MY OWN join requests (approved / rejected). The "new" flag is
+  // computed against the last time the user opened this screen; we then bump the
+  // seen-timestamp so the bell badge clears and these stop counting as unread.
+  const loadDecisions = async () => {
+    try {
+      const lastSeen = getNotifLastSeen(currentUserId);
+      const { data, error } = await supabase
+        .from('event_join_requests')
+        .select('id, event_id, status, updated_at')
+        .eq('user_id', currentUserId)
+        .in('status', ['approved', 'rejected'])
+        .order('updated_at', { ascending: false })
+        .limit(50);
+
+      if (error) throw error;
+      if (!data || data.length === 0) { setDecisions([]); setNotifLastSeen(currentUserId); return; }
+
+      const eventIds = [...new Set(data.map(d => d.event_id))];
+      const { data: events } = await supabase
+        .from('events')
+        .select('id, title')
+        .in('id', eventIds);
+
+      setDecisions(data.map(d => ({
+        id: d.id,
+        event_id: d.event_id,
+        status: d.status as 'approved' | 'rejected',
+        updated_at: d.updated_at,
+        eventTitle: events?.find(e => e.id === d.event_id)?.title || 'אירוע',
+        isNew: new Date(d.updated_at).getTime() > lastSeen,
+      })));
+
+      // Mark everything seen as of now (badge clears on next home refresh).
+      setNotifLastSeen(currentUserId);
+    } catch (err) {
+      console.error('Error loading decisions:', err);
+    }
+  };
 
   const loadMeetupRequests = async () => {
     setMeetupLoading(true);
@@ -253,19 +306,11 @@ export function RequestsScreen({ currentUserId, onBack, onHomeClick, onMapClick,
             paddingRight: 'max(1rem, env(safe-area-inset-right))'
           }}
         >
-          <button
-            onClick={onBack}
-            className="w-10 h-10 rounded-full hover:bg-gray-50 flex items-center justify-center transition-all active:scale-95"
-          >
-            <ArrowRight className="w-5 h-5 text-gray-700" strokeWidth={1.5} />
-          </button>
+          <BackButton onClick={onBack} />
 
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-gradient-to-br from-rose-500 to-red-500 rounded-lg flex items-center justify-center shadow-sm">
-              <UserPlus className="w-4 h-4 text-white" strokeWidth={2.5} />
-            </div>
             <h1 className="text-lg font-black text-gray-900" style={{ fontFamily: 'Heebo, sans-serif' }}>
-              בקשות להצטרפות
+              התראות
             </h1>
           </div>
 
@@ -281,16 +326,16 @@ export function RequestsScreen({ currentUserId, onBack, onHomeClick, onMapClick,
             <div className="w-14 h-14 border-4 border-brand-100 border-t-brand-500 rounded-full animate-spin mb-4" />
             <p className="text-sm text-gray-500 font-medium" style={{ fontFamily: 'Rubik, sans-serif' }}>טוען בקשות...</p>
           </div>
-        ) : meetupRequests.length === 0 && joinRequests.length === 0 ? (
+        ) : meetupRequests.length === 0 && joinRequests.length === 0 && decisions.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20 px-6">
-            <div className="w-24 h-24 bg-gradient-to-br from-green-100 to-emerald-100 rounded-3xl flex items-center justify-center mb-5 shadow-lg shadow-green-100/50">
-              <UserPlus className="w-11 h-11 text-green-500" strokeWidth={1.8} />
+            <div className="w-24 h-24 bg-gradient-to-br from-orange-100 to-amber-100 rounded-3xl flex items-center justify-center mb-5 shadow-lg shadow-orange-100/50">
+              <Bell className="w-11 h-11 text-orange-500" strokeWidth={1.8} />
             </div>
             <h3 className="text-xl font-black text-gray-900 mb-2" style={{ fontFamily: 'Heebo, sans-serif' }}>
-              אין בקשות ממתינות כרגע
+              אין התראות חדשות
             </h3>
             <p className="text-sm text-gray-500 text-center leading-relaxed" style={{ fontFamily: 'Rubik, sans-serif' }}>
-              כשמישהו יבקש להצטרף לישיבה שלך,<br />הבקשות יופיעו כאן
+              בקשות הצטרפות לאירועים שלך ועדכונים<br />על הבקשות שלך יופיעו כאן
             </p>
           </div>
         ) : (
@@ -393,6 +438,58 @@ export function RequestsScreen({ currentUserId, onBack, onHomeClick, onMapClick,
                       </div>
                     </div>
                   ))}
+                </div>
+              </div>
+            )}
+
+            {/* ── Updates: decisions on MY OWN requests (approved / rejected) ── */}
+            {decisions.length > 0 && (
+              <div>
+                <p className="text-sm font-semibold text-gray-600 mb-3 px-1" style={{ fontFamily: 'Rubik, sans-serif' }}>
+                  עדכונים על הבקשות שלך
+                </p>
+                <div className="space-y-3">
+                  {decisions.map((d, idx) => {
+                    const approved = d.status === 'approved';
+                    return (
+                      <div
+                        key={d.id}
+                        className="bg-white rounded-2xl shadow-md border border-gray-100/50 animate-fade-in p-4 flex items-center gap-3"
+                        style={{ animationDelay: `${idx * 50}ms` }}
+                      >
+                        <div
+                          className="flex-shrink-0 w-11 h-11 rounded-full flex items-center justify-center"
+                          style={{ background: approved ? 'linear-gradient(135deg,#22c55e,#16a34a)' : 'linear-gradient(135deg,#ef4444,#e11d48)' }}
+                        >
+                          {approved
+                            ? <Check className="w-5 h-5 text-white" strokeWidth={3} />
+                            : <X className="w-5 h-5 text-white" strokeWidth={3} />}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-bold text-gray-900" style={{ fontFamily: 'Heebo, sans-serif' }}>
+                            {approved ? 'בקשתך אושרה 🎉' : 'בקשתך נדחתה'}
+                          </p>
+                          <div className="flex items-center gap-1.5 mt-1">
+                            <Calendar className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" strokeWidth={2.5} />
+                            <span className="text-xs text-gray-600 font-medium truncate" style={{ fontFamily: 'Rubik, sans-serif' }}>
+                              {d.eventTitle}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1.5 mt-1">
+                            <Clock className="w-3 h-3 text-gray-400 flex-shrink-0" strokeWidth={2} />
+                            <span className="text-[11px] text-gray-400 font-medium" style={{ fontFamily: 'Rubik, sans-serif' }}>
+                              {formatTimeAgo(d.updated_at)}
+                            </span>
+                          </div>
+                        </div>
+                        {d.isNew && (
+                          <span className="flex-shrink-0 text-[10px] font-bold text-white bg-orange-500 rounded-full px-2 py-0.5" style={{ fontFamily: 'Heebo, sans-serif' }}>
+                            חדש
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}

@@ -1,10 +1,3 @@
-ש
-
-
-
-
-
-
 import { useState, useEffect } from 'react';
 import { SplashScreen } from './components/SplashScreen';
 import { HomeScreen } from './components/HomeScreen';
@@ -398,6 +391,8 @@ function App() {
         onCreateClick={goCreate}
         onMyEventsClick={() => setCurrentScreen('myEvents')}
         onNavigateToCountrySelection={navigateToCountrySelection}
+        onOpenMapAt={(lat: number, lng: number) => { setMapFocus({ latitude: lat, longitude: lng }); setCurrentScreen('map'); }}
+        initialCountries={Array.from(selectedCountries)}
       />
     );
   }

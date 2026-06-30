@@ -13,6 +13,7 @@ import { EventDetailsModal } from './EventDetailsModal';
 import { FloatingNavBar } from './FloatingNavBar';
 import { COUNTRIES } from '../utils/countries';
 import { useEvents } from '../hooks/useEvents';
+import { getNotifLastSeen } from '../utils/notificationsSeen';
 import type { Event } from '../types/event';
 import type { AdminLocation } from '../lib/supabase';
 
@@ -21,6 +22,9 @@ type FeedMode = 'events' | 'locations';
 /* ── module-level cache (survives navigation) ── */
 type HomeUserCache = { userName: string; userAvatarUrl: string | null; isAdmin: boolean; selectedCountries: string[] };
 const _homeUserCache: Record<string, HomeUserCache> = {};
+// Tracks whether the one-time "first open" refresh animation has already played.
+// Module-level so it survives navigation remounts, but resets on a full page reload.
+let _homeDidInitialRefresh = false;
 
 type CreateMode = 'none' | 'select' | 'event' | 'location' | 'post';
 
@@ -114,6 +118,12 @@ export function HomeScreen({
   const rafRef = useRef<number | null>(null);
   const fLetterRef = useRef<HTMLSpanElement>(null);
   const [logoAnimActive, setLogoAnimActive] = useState(false);
+  // True from the very first paint of a fresh app open (when we already know the
+  // user's countries), so skeletons show instead of a "no events" flash before
+  // the first-open animation takes over on the next frame.
+  const [firstOpenLoading, setFirstOpenLoading] = useState(
+    () => !_homeDidInitialRefresh && _cachedCountries.length > 0
+  );
   const [hotIdx, setHotIdx] = useState(0);
   const hotIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const hotTouchXRef = useRef(0);
@@ -327,6 +337,31 @@ export function HomeScreen({
     triggerLogoAnimation(false);
   };
 
+  // ── First open: play the refresh animation once, then remember data ──
+  // Replaces the brief "no events" flash with the same FOMO dot + skeleton
+  // loading used by pull-to-refresh. Guarded by a module flag so navigating
+  // back to Home never re-triggers it.
+  useEffect(() => {
+    if (_homeDidInitialRefresh) return;
+    if (selectedCountries.length === 0) return; // no scope yet — nothing to load
+    _homeDidInitialRefresh = true;
+    const id = requestAnimationFrame(() => {
+      refreshEvents();          // fetch in background while the animation plays
+      triggerLogoAnimation(false); // dot falls from the "." → 4 orbits → strike
+    });
+    return () => cancelAnimationFrame(id);
+  }, [selectedCountries.length]);
+
+  // First-open skeleton clears as soon as data is ready (snappy), with a hard
+  // safety cap so it can never stick — even if the dot animation failed to start.
+  // The FOMO dot keeps flying on top independently via logoAnimActive.
+  useEffect(() => {
+    if (!firstOpenLoading) return;
+    if (events.length > 0) { setFirstOpenLoading(false); return; }
+    const t = setTimeout(() => setFirstOpenLoading(false), 3500);
+    return () => clearTimeout(t);
+  }, [firstOpenLoading, events.length]);
+
   const handleTouchStart = (e: React.TouchEvent) => {
     if (window.scrollY > 0) return;
     touchStartY.current = e.touches[0].clientY;
@@ -428,21 +463,37 @@ export function HomeScreen({
   const loadPendingRequests = async () => {
     if (!currentUserId) return;
     try {
+      // (a) Incoming join requests awaiting my approval (events I created)
       const { data: myEvents } = await supabase
         .from('events')
         .select('id')
         .eq('user_id', currentUserId);
 
-      if (!myEvents || myEvents.length === 0) { setPendingRequestsCount(0); return; }
+      let incoming = 0;
+      if (myEvents && myEvents.length > 0) {
+        const { data: requests, error } = await supabase
+          .from('event_join_requests')
+          .select('id')
+          .in('event_id', myEvents.map(e => e.id))
+          .eq('status', 'pending');
+        if (error) throw error;
+        incoming = requests?.length || 0;
+      }
 
-      const { data: requests, error } = await supabase
+      // (b) Decisions on MY OWN requests I haven't seen yet (approved / rejected)
+      const lastSeen = getNotifLastSeen(currentUserId);
+      const { data: myDecisions } = await supabase
         .from('event_join_requests')
-        .select('id')
-        .in('event_id', myEvents.map(e => e.id))
-        .eq('status', 'pending');
+        .select('updated_at')
+        .eq('user_id', currentUserId)
+        .in('status', ['approved', 'rejected'])
+        .order('updated_at', { ascending: false })
+        .limit(50);
+      const unreadDecisions = (myDecisions || []).filter(
+        d => new Date(d.updated_at).getTime() > lastSeen
+      ).length;
 
-      if (error) throw error;
-      setPendingRequestsCount(requests?.length || 0);
+      setPendingRequestsCount(incoming + unreadDecisions);
     } catch (error) {
       console.error('Error loading pending requests:', error);
     }
@@ -541,6 +592,10 @@ export function HomeScreen({
       return { dateKey: key, label, dateShort, items };
     });
   }, [dateFilteredEvents]);
+
+  // Feed skeleton shows during: (a) first open until data loads, or (b) a
+  // pull/tap refresh where we already have data and want skeletons during the spin.
+  const showFeedSkeleton = firstOpenLoading || (logoAnimActive && events.length > 0);
 
   return (
     <div className="min-h-screen overflow-x-hidden max-w-full" style={{ background: '#ffffff' }} dir="rtl">
@@ -1097,8 +1152,8 @@ export function HomeScreen({
               </button>
             </div>
 
-          /* Empty state — no events at all for this country */
-          ) : events.length === 0 ? (
+          /* Empty state — no events at all for this country (suppressed while the first-open animation runs) */
+          ) : (events.length === 0 && !logoAnimActive && !firstOpenLoading) ? (
             <div className="flex flex-col items-center px-6 pt-16 pb-12 text-center animate-fade-in">
               <div className="text-6xl mb-5">{activeCountryData?.flag || '🌍'}</div>
               <h3 className="text-xl font-black text-gray-900 mb-2" style={{ fontFamily: 'Heebo, sans-serif' }}>
@@ -1120,7 +1175,7 @@ export function HomeScreen({
           ) : (
             <>
               {/* ══ FEATURED / HOT EVENTS carousel ══ */}
-              {(logoAnimActive || featuredEvents.length > 0) && (
+              {(showFeedSkeleton || featuredEvents.length > 0) && (
                 <div className="mb-8">
                   <div className="flex items-center gap-2.5 px-4 mb-4">
                     <h3 className="text-lg font-black text-gray-900 tracking-tight" style={{ fontFamily: 'Heebo, sans-serif' }}>
@@ -1128,11 +1183,11 @@ export function HomeScreen({
                     </h3>
                   </div>
 
-                  {logoAnimActive ? (
+                  {showFeedSkeleton ? (
                     /* ── Skeleton: mirrors the real carousel layout ── */
                     <>
                       <div style={{ position: 'relative', height: 214, overflow: 'hidden' }}>
-                        {[-1, 0, 1].map(offset => (
+                        {[-2, -1, 0, 1, 2].map(offset => (
                           <div
                             key={offset}
                             className="animate-pulse"
@@ -1167,11 +1222,11 @@ export function HomeScreen({
                       </div>
                       {/* dot indicators skeleton */}
                       <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 5, marginTop: 10 }}>
-                        {[0, 1, 2].map(i => (
-                          <div key={i} style={{ width: i === 1 ? 18 : 6, height: 6, borderRadius: 3, background: i === 1 ? '#F97316' : '#D1D5DB', opacity: 0.5 }} />
+                        {[0, 1, 2, 3, 4].map(i => (
+                          <div key={i} style={{ width: i === 0 ? 18 : 6, height: 6, borderRadius: 3, background: i === 0 ? '#F97316' : '#D1D5DB', opacity: 0.5 }} />
                         ))}
                       </div>
-                    </>)
+                    </>
                   ) : (
                     /* ── Real: transform-based centered carousel with scale focus ── */
                     <>
@@ -1287,6 +1342,32 @@ export function HomeScreen({
                 </div>
               )}
 
+              {/* ══ First-open / refresh skeleton rows when no events are loaded yet ══ */}
+              {showFeedSkeleton && dayGroups.length === 0 && (
+                <div style={{ marginBottom: 28 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 16px 10px' }}>
+                    <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#E5E7EB' }} />
+                    <div style={{ height: 16, width: 70, borderRadius: 8, background: '#F3F4F6' }} className="animate-pulse" />
+                  </div>
+                  <div style={{ margin: '0 16px', background: '#FFFFFF', borderRadius: 20, overflow: 'hidden', boxShadow: '0 2px 16px rgba(0,0,0,0.06)' }}>
+                    {[0, 1, 2].map((i) => (
+                      <div key={i}>
+                        {i > 0 && <div style={{ height: 1, background: '#F5F5F7', margin: '0 14px' }} />}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '16px 14px' }} className="animate-pulse">
+                          <div style={{ width: 80, height: 80, flexShrink: 0, borderRadius: 16, background: '#F3F4F6' }} />
+                          <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                            <div style={{ height: 15, borderRadius: 8, background: '#F3F4F6', width: '68%' }} />
+                            <div style={{ height: 12, borderRadius: 6, background: '#F3F4F6', width: '42%' }} />
+                            <div style={{ height: 12, borderRadius: 6, background: '#F3F4F6', width: '32%' }} />
+                          </div>
+                          <div style={{ width: 42, height: 28, borderRadius: 20, background: '#FFF7ED', flexShrink: 0 }} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {/* ══ EVENTS BY DAY groups ══ */}
               {dayGroups.map(group => (
                 <div key={group.dateKey} style={{ marginBottom: 28 }}>
@@ -1341,7 +1422,7 @@ export function HomeScreen({
                           {idx > 0 && (
                             <div style={{ height: 1, background: '#F5F5F7', margin: '0 14px' }} />
                           )}
-                          {logoAnimActive ? (
+                          {showFeedSkeleton ? (
                             /* ── Skeleton row ── */
                             <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '16px 14px' }} className="animate-pulse">
                               <div style={{ width: 80, height: 80, flexShrink: 0, borderRadius: 16, background: '#F3F4F6' }} />

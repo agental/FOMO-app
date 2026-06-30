@@ -1,5 +1,10 @@
 import React, { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
-import { ArrowLeft, MoreVertical, Send, Mic, MapPin, Image as ImageIcon, ChevronDown, Camera, Smile, Paperclip, X, Crown, Pencil, Check, Map, Phone, DollarSign, Clock, Wifi, AlertTriangle } from 'lucide-react';
+import { MoreVertical, Send, Mic, MapPin, Image as ImageIcon, ChevronDown, Camera, Smile, Paperclip, X, Crown, Pencil, Check, Map, Phone, DollarSign, Clock, Wifi, AlertTriangle, CornerUpLeft, Copy, Flag, Trash2 } from 'lucide-react';
+import { BackButton } from './BackButton';
+import { MessageBubble } from './MessageBubble';
+import { ImageBubble } from './ImageBubble';
+import { LocationName } from './LocationName';
+import { OpenLocationSheet } from './OpenLocationSheet';
 import { supabase } from '../lib/supabase';
 import { UserAvatar } from './UserAvatar';
 
@@ -21,10 +26,34 @@ interface CityGroupChatProps {
   countryCode: string; countryFlag: string; cityName: string; cityEmoji: string;
   currentUserId: string; currentUserName: string; currentUserAvatar: string | null;
   onClose: () => void;
+  onOpenMapAt?: (lat: number, lng: number) => void;
 }
 
 /* ─── constants ─── */
 const QUICK_EMOJIS = ['❤️', '😂', '😮', '🔥', '👍', '🙏'];
+
+/* ─── reply encoding (no schema): a quoted reply is stored inline in content,
+   wrapped by an invisible separator so it never collides with real text ─── */
+const REPLY_SEP = '⁣';
+function encodeReply(name: string, snippet: string, body: string): string {
+  return `${REPLY_SEP}${JSON.stringify({ n: name, t: snippet })}${REPLY_SEP}${body}`;
+}
+function parseReply(content: string | null): { reply: { n: string; t: string } | null; body: string } {
+  if (!content || content[0] !== REPLY_SEP) return { reply: null, body: content ?? '' };
+  const end = content.indexOf(REPLY_SEP, 1);
+  if (end === -1) return { reply: null, body: content };
+  try {
+    return { reply: JSON.parse(content.slice(1, end)), body: content.slice(end + 1) };
+  } catch {
+    return { reply: null, body: content };
+  }
+}
+/* Short preview of any message for the reply quote */
+function msgSnippet(m: { type: string; content: string | null; location_name: string | null }): string {
+  if (m.type === 'image') return '📷 תמונה';
+  if (m.type === 'location') return '📍 מיקום';
+  return parseReply(m.content).body.slice(0, 90);
+}
 const ORANGE = 'linear-gradient(135deg, #F97316, #EA580C)';
 const ORANGE_SH = '0 2px 8px rgba(234,88,12,0.35)';
 /* Pastel bubble colors per sender */
@@ -138,6 +167,9 @@ export function CityGroupChat({
   const _initChannelId = _channelCache[cityKey] ?? null;
   const _initMsgs      = _initChannelId ? (_msgCache[_initChannelId] ?? []) : [];
 
+  const [locSheet, setLocSheet] = useState<{ lat: number; lng: number; name: string | null } | null>(null);
+  const [lastRead, setLastRead] = useState<string | null>(null); // last_seen_at captured BEFORE this open
+  const [unreadReady, setUnreadReady] = useState(false);
   const [channelId,    setChannelId]    = useState<string | null>(_initChannelId);
   const [memberStatus, setMemberStatus] = useState<'loading' | 'none' | 'pending' | 'approved' | 'just_approved'>(_initChannelId ? 'approved' : 'loading');
   const [messages,     setMessages]     = useState<GMessage[]>(_initMsgs);
@@ -147,7 +179,9 @@ export function CityGroupChat({
   const [sending,      setSending]      = useState(false);
   const [uploading,    setUploading]    = useState(false);
   const [locLoading,   setLocLoading]   = useState(false);
-  const [activeEmoji,  setActiveEmoji]  = useState<string | null>(null);
+  const [menuMsg,      setMenuMsg]      = useState<GMessage | null>(null); // long-press context menu
+  const [replyTo,      setReplyTo]      = useState<GMessage | null>(null); // message being replied to
+  const [toast,        setToast]        = useState<string | null>(null);
   const [showScroll,   setShowScroll]   = useState(false);
   const [showAttach,   setShowAttach]   = useState(false);
   const [showInfo,     setShowInfo]     = useState(false);
@@ -162,8 +196,31 @@ export function CityGroupChat({
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const stickRef = useRef(true); // keep pinned to bottom while user is at the bottom
+  const firstUnreadRef = useRef<HTMLDivElement>(null);
+  const keepUnreadRef = useRef(false); // hold the view at the unread divider until the user scrolls
+  const unreadHandled = useRef(false); // ensure the one-time unread reposition runs once
+  const lastGestureRef = useRef(0); // timestamp of the last real user scroll gesture
   const fileRef   = useRef<HTMLInputElement>(null);
   const textRef   = useRef<HTMLTextAreaElement>(null);
+  // Floating glass header / input → measure their heights so messages can
+  // scroll *behind* them with matching top/bottom padding.
+  const headerRef = useRef<HTMLDivElement>(null);
+  const inputBarRef = useRef<HTMLDivElement>(null);
+  const [headerH, setHeaderH] = useState(64);
+  const [inputH, setInputH] = useState(56);
+  useLayoutEffect(() => {
+    const measure = () => {
+      if (headerRef.current) setHeaderH(headerRef.current.offsetHeight);
+      if (inputBarRef.current) setInputH(inputBarRef.current.offsetHeight);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    if (headerRef.current) ro.observe(headerRef.current);
+    if (inputBarRef.current) ro.observe(inputBarRef.current);
+    return () => ro.disconnect();
+  }, []);
 
   /* ── channel init (skip if already cached) ── */
   useEffect(() => {
@@ -228,7 +285,16 @@ export function CityGroupChat({
     const markSeen = () => supabase.from('group_members').upsert(
       { channel_id: channelId, user_id: currentUserId, display_name: currentUserName, avatar_url: currentUserAvatar, last_seen_at: new Date().toISOString(), status: 'approved' },
       { onConflict: 'channel_id,user_id' });
-    markSeen().then(() => loadMemberCount());
+    // Capture the PREVIOUS last_seen_at first, so we can open at the first unread
+    // message — only THEN mark the chat as seen (overwriting last_seen_at to now).
+    (async () => {
+      const { data: me } = await supabase.from('group_members')
+        .select('last_seen_at').eq('channel_id', channelId).eq('user_id', currentUserId).maybeSingle();
+      setLastRead(me?.last_seen_at ?? null);
+      setUnreadReady(true);
+      await markSeen();
+      loadMemberCount();
+    })();
     loadMessages();
     const msgSub = supabase.channel(`group-msg-${channelId}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'group_messages', filter: `channel_id=eq.${channelId}` },
@@ -378,28 +444,112 @@ export function CityGroupChat({
     }
   };
 
-  // Scroll to bottom before first paint — no visible jump
+  // First message (from someone else) newer than our previous last_seen_at.
+  const firstUnreadId = (() => {
+    if (!lastRead) return null;
+    const t = new Date(lastRead).getTime();
+    const m = messages.find(mm => mm.user_id !== currentUserId && new Date(mm.created_at).getTime() > t);
+    return m?.id ?? null;
+  })();
+
+  const scrollToUnread = () => {
+    const el = scrollRef.current, u = firstUnreadRef.current;
+    if (!el || !u) return;
+    const top = u.getBoundingClientRect().top - el.getBoundingClientRect().top;
+    el.scrollTop += top - (headerH + 10);
+  };
+
+  // Open at the BOTTOM when messages are present. Layout settles asynchronously
+  // (measured header/input padding, fonts, images), so re-pin a few times.
   useLayoutEffect(() => {
-    if (!msgsLoading && !initialLoadDone.current && scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-      initialLoadDone.current = true;
-    }
+    if (msgsLoading || initialLoadDone.current || !scrollRef.current) return;
+    initialLoadDone.current = true;
+    stickRef.current = true;
+    const pin = () => {
+      if (!scrollRef.current) return;
+      if (stickRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+      else if (keepUnreadRef.current) scrollToUnread();
+    };
+    pin();
+    requestAnimationFrame(pin);
+    requestAnimationFrame(() => requestAnimationFrame(pin));
+    const t1 = setTimeout(pin, 120);
+    const t2 = setTimeout(pin, 350);
+    const t3 = setTimeout(pin, 700);
+    return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); };
   }, [msgsLoading]);
+
+  // Once the previous last-seen is known, jump up to the first unread (if any).
+  useLayoutEffect(() => {
+    if (!unreadReady || unreadHandled.current) return;
+    unreadHandled.current = true;
+    if (firstUnreadId && firstUnreadRef.current) {
+      scrollToUnread();
+      stickRef.current = false;
+      keepUnreadRef.current = true; // hold here while images above settle
+    }
+  }, [unreadReady]);
+
+  // The floating header / input bar heights are measured AFTER first paint, which
+  // changes the scroll padding and would knock us off the bottom on first open.
+  // Re-anchor whenever those heights settle.
+  useLayoutEffect(() => {
+    if (!scrollRef.current) return;
+    if (stickRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    else if (keepUnreadRef.current) scrollToUnread();
+  }, [headerH, inputH]);
 
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    const fn = () => setShowScroll(el.scrollHeight - el.scrollTop - el.clientHeight > 100);
-    el.addEventListener('scroll', fn, { passive: true });
-    return () => el.removeEventListener('scroll', fn);
+    // Only treat scrolls that follow a real user gesture as "user scrolled".
+    // Programmatic scrolls and content-growth-induced scroll events must NOT
+    // flip the stick flag, otherwise an image loading would strand us mid-chat.
+    const markGesture = () => { lastGestureRef.current = Date.now(); };
+    const onScroll = () => {
+      const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
+      setShowScroll(dist > 100);
+      if (Date.now() - lastGestureRef.current < 500) {
+        stickRef.current = dist < 80;       // user reached / left the bottom
+        keepUnreadRef.current = false;      // user took control of the view
+      }
+    };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    el.addEventListener('wheel', markGesture, { passive: true });
+    el.addEventListener('touchmove', markGesture, { passive: true });
+    el.addEventListener('keydown', markGesture);
+    return () => {
+      el.removeEventListener('scroll', onScroll);
+      el.removeEventListener('wheel', markGesture);
+      el.removeEventListener('touchmove', markGesture);
+      el.removeEventListener('keydown', markGesture);
+    };
+  }, []);
+
+  // While content grows (images / map snapshots loading after open) keep the view
+  // anchored — to the bottom if the user is there, or to the unread divider on open.
+  useEffect(() => {
+    const content = contentRef.current;
+    const el = scrollRef.current;
+    if (!content || !el) return;
+    const ro = new ResizeObserver(() => {
+      if (stickRef.current) el.scrollTop = el.scrollHeight;
+      else if (keepUnreadRef.current) scrollToUnread();
+    });
+    ro.observe(content);
+    return () => ro.disconnect();
   }, []);
 
   const sendText = async () => {
     if (!text.trim() || !channelId || sending) return;
     setSending(true);
-    const msg = text.trim(); setText('');
+    let body = text.trim(); setText('');
+    if (replyTo) {
+      body = encodeReply(replyTo.display_name, msgSnippet(replyTo), body);
+      setReplyTo(null);
+    }
     if (textRef.current) textRef.current.style.height = 'auto';
-    await supabase.from('group_messages').insert({ channel_id: channelId, user_id: currentUserId, display_name: currentUserName, avatar_url: currentUserAvatar, content: msg, type: 'text' });
+    await supabase.from('group_messages').insert({ channel_id: channelId, user_id: currentUserId, display_name: currentUserName, avatar_url: currentUserAvatar, content: body, type: 'text' });
     setSending(false);
   };
 
@@ -435,7 +585,54 @@ export function CityGroupChat({
     const existing = msg?.reactions.find(r => r.emoji === emoji && r.mine);
     if (existing) await supabase.from('group_reactions').delete().eq('message_id', messageId).eq('user_id', currentUserId).eq('emoji', emoji);
     else await supabase.from('group_reactions').insert({ message_id: messageId, user_id: currentUserId, emoji });
-    setActiveEmoji(null);
+    setMenuMsg(null);
+  };
+
+  /* ─── long-press context menu (WhatsApp-style) ─── */
+  const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const menuOpenAt = useRef(0);
+  const startPress = (msg: GMessage) => {
+    if (pressTimer.current) clearTimeout(pressTimer.current);
+    pressTimer.current = setTimeout(() => {
+      menuOpenAt.current = Date.now();
+      setMenuMsg(msg);
+      try { (navigator as Navigator & { vibrate?: (n: number) => void }).vibrate?.(15); } catch { /* no haptics */ }
+    }, 400);
+  };
+  const cancelPress = () => { if (pressTimer.current) { clearTimeout(pressTimer.current); pressTimer.current = null; } };
+
+  const showToast = (m: string) => { setToast(m); setTimeout(() => setToast(null), 1800); };
+
+  const menuReply = () => { setReplyTo(menuMsg); setMenuMsg(null); setTimeout(() => textRef.current?.focus(), 50); };
+  const menuCopy = () => {
+    if (menuMsg) {
+      const t = menuMsg.type === 'text' ? parseReply(menuMsg.content).body
+        : menuMsg.type === 'location' ? (menuMsg.location_name ?? '') : '';
+      if (t) navigator.clipboard?.writeText(t).catch(() => {});
+    }
+    setMenuMsg(null); showToast('הועתק ✓');
+  };
+  const menuDelete = async () => {
+    const m = menuMsg; setMenuMsg(null);
+    if (!m) return;
+    setMessages(prev => prev.filter(x => x.id !== m.id)); // optimistic
+    const { error } = await supabase.from('group_messages').delete().eq('id', m.id);
+    if (error) { showToast('לא ניתן למחוק'); loadMessages(); } else { showToast('ההודעה נמחקה'); }
+  };
+  const menuReport = async () => {
+    const m = menuMsg; setMenuMsg(null);
+    showToast('תודה, ההודעה דווחה ✓');
+    if (!m) return;
+    try {
+      await supabase.from('message_reports').insert({
+        message_id: m.id,
+        channel_id: channelId,
+        reporter_id: currentUserId,
+        reported_user_id: m.user_id,
+        message_content: m.type === 'text' ? parseReply(m.content).body : (m.location_name ?? m.image_url ?? ''),
+        message_type: m.type,
+      });
+    } catch { /* reports table not provisioned yet — toast already shown */ }
   };
 
   const onInput = () => {
@@ -451,133 +648,160 @@ export function CityGroupChat({
     const isFirst   = !prev || prev.user_id !== msg.user_id;
     const isLast    = !next || next.user_id !== msg.user_id;
     const showSep   = !prev || !sameDay(prev.created_at, msg.created_at);
+    // Only show the time on the last message of a same-sender, same-minute run
     const showTime  = !next || next.user_id !== msg.user_id || !sameMinute(msg.created_at, next.created_at);
+    // WhatsApp-style: avatar on the LAST message of a same-sender, same-minute
+    // run, bottom-aligned next to the tail (one avatar per burst, at the bottom)
+    const showAvatar = !next || next.user_id !== msg.user_id || !sameMinute(msg.created_at, next.created_at);
 
     const bubbleBg  = mine ? '#FFD4A8' : '#FFFFFF';
     const textClr   = mine ? '#7C3400' : '#111111';
+    const nameClr   = senderColor(msg.display_name);
+    const showName  = !mine; // group sender label, inside every incoming bubble
     const noPad     = msg.type === 'image' || msg.type === 'location';
+    const timeStr   = fmtTime(msg.created_at);
 
     return (
       <div key={msg.id}>
         {/* Date separator */}
         {showSep && (
           <div style={{ display: 'flex', justifyContent: 'center', margin: '14px 0 10px' }}>
-            <span style={{ background: '#EFEFEF', color: '#888', fontSize: 12, fontWeight: 500, padding: '4px 14px', borderRadius: 20 }}>
+            <span style={{
+              background: 'rgba(60,55,50,0.55)',
+              color: '#FFFFFF',
+              fontSize: 12, fontWeight: 600,
+              padding: '5px 14px', borderRadius: 20,
+              boxShadow: '0 1px 4px rgba(0,0,0,0.12)',
+              backdropFilter: 'blur(8px)',
+              WebkitBackdropFilter: 'blur(8px)',
+            }}>
               {fmtSep(msg.created_at)}
             </span>
           </div>
         )}
 
-        {/* Row: others LEFT, mine RIGHT */}
+        {/* Message stack — bubble row (avatar anchored to the tail) + time/reactions below */}
         <div style={{
-          display: 'flex', alignItems: 'flex-start',
-          justifyContent: mine ? 'flex-end' : 'flex-start',
-          paddingLeft: 8,
-          paddingRight: 8,
+          display: 'flex', flexDirection: 'column',
+          alignItems: mine ? 'flex-end' : 'flex-start',
+          paddingLeft: 8, paddingRight: 8,
           marginBottom: isLast ? 6 : 2,
-          gap: 8,
-        }}
-          onMouseLeave={() => setActiveEmoji(null)}
-        >
-          {/* Avatar — others LEFT, 36px, only on first in group */}
-          {!mine && (
-            <div style={{ width: 36, flexShrink: 0, paddingTop: 2 }}>
-              {isFirst ? (
-                <div style={{ width: 36, height: 36, borderRadius: '50%', overflow: 'hidden', background: senderColor(msg.display_name), display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        }}>
+          {/* Bubble row — avatar bottom-aligned to the bubble so it hugs the tail */}
+          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 5, maxWidth: '82%' }}>
+            {/* Avatar attached to the tail (incoming only) */}
+            {!mine && (
+              showAvatar ? (
+                <div style={{ width: 26, height: 26, flexShrink: 0, borderRadius: '50%', overflow: 'hidden', background: senderColor(msg.display_name), display: 'flex', alignItems: 'center', justifyContent: 'center', boxSizing: 'border-box', border: `2px solid ${senderColor(msg.display_name)}`, marginBottom: -1 }}>
                   {msg.avatar_url
                     ? <UserAvatar userId={msg.user_id} displayName={msg.display_name} avatarUrl={msg.avatar_url} size="small" />
-                    : <span style={{ color: '#fff', fontWeight: 700, fontSize: 14 }}>{msg.display_name.charAt(0)}</span>
+                    : <span style={{ color: '#fff', fontWeight: 700, fontSize: 11 }}>{msg.display_name.charAt(0)}</span>
                   }
                 </div>
-              ) : <div style={{ width: 36 }} />}
-            </div>
-          )}
-
-          {/* Bubble + timestamp column */}
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: mine ? 'flex-end' : 'flex-start', maxWidth: '75%' }}
-            onMouseEnter={() => setActiveEmoji(msg.id)}
-          >
-            {/* Sender name above first bubble */}
-            {!mine && isFirst && (
-              <span style={{ fontSize: 12, fontWeight: 600, color: senderColor(msg.display_name), marginBottom: 4 }}>
-                {msg.display_name}
-              </span>
+              ) : <div style={{ width: 26, flexShrink: 0 }} />
             )}
 
             {/* Bubble */}
-            <div style={{ position: 'relative' }}>
-              <div style={{
-                background: bubbleBg,
-                borderRadius: mine ? '18px 18px 18px 4px' : '4px 18px 18px 18px',
-                overflow: 'hidden',
-                padding: noPad ? 0 : '10px 14px',
-              }}>
-                {msg.type === 'text' && (
-                  <p style={{ fontSize: 14, lineHeight: 1.4, color: textClr, margin: 0, wordBreak: 'break-word', whiteSpace: 'pre-wrap' }} dir="rtl">
-                    {msg.content}
-                  </p>
-                )}
-                {msg.type === 'image' && msg.image_url && (
-                  <img src={msg.image_url} alt="" style={{ display: 'block', maxWidth: 240, maxHeight: 240, objectFit: 'cover', borderRadius: 16 }} />
-                )}
-                {msg.type === 'location' && msg.location_lat != null && (
-                  <a href={`https://maps.google.com/?q=${msg.location_lat},${msg.location_lng}`} target="_blank" rel="noreferrer" style={{ display: 'block', textDecoration: 'none', minWidth: 200 }}>
-                    <div style={{ height: 90, background: 'linear-gradient(135deg,#dbeafe,#d1fae5)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      <MapPin size={28} style={{ color: '#EF4444' }} fill="#FCA5A5" />
-                    </div>
-                    <div style={{ padding: '10px 14px 12px' }}>
-                      <p style={{ fontSize: 14, fontWeight: 600, color: textClr, margin: '0 0 2px' }}>מיקום שותף</p>
-                      <p style={{ fontSize: 12, color: mine ? 'rgba(255,255,255,0.7)' : '#888', margin: 0 }}>{msg.location_name}</p>
-                    </div>
-                  </a>
-                )}
-              </div>
-
-              {/* Emoji picker */}
-              {activeEmoji === msg.id && (
-                <div style={{
-                  position: 'absolute', zIndex: 30,
-                  bottom: 'calc(100% + 6px)',
-                  ...(mine ? { right: 0 } : { left: 0 }),
-                  background: '#fff', borderRadius: 30,
-                  boxShadow: '0 4px 24px rgba(0,0,0,0.16)', border: '1px solid rgba(0,0,0,0.07)',
-                  display: 'flex', alignItems: 'center', padding: '6px 12px', gap: 8,
-                }}>
-                  {QUICK_EMOJIS.map(e => (
-                    <button key={e} onClick={() => toggleReaction(msg.id, e)}
-                      style={{ fontSize: 22, lineHeight: 1, background: 'none', border: 'none', cursor: 'pointer', padding: 2 }}>
-                      {e}
-                    </button>
-                  ))}
+            <div
+              style={{ position: 'relative', minWidth: 0, WebkitUserSelect: 'none', userSelect: 'none', WebkitTouchCallout: 'none' }}
+              onTouchStart={() => startPress(msg)}
+              onTouchMove={cancelPress}
+              onTouchEnd={cancelPress}
+              onContextMenu={(e) => { e.preventDefault(); setMenuMsg(msg); }}
+            >
+              {msg.type === 'text' ? (
+                /* iMessage-exact bubble (single SVG path, stretchable, fixed tail) */
+                <MessageBubble mine={!mine} tail={showAvatar} color={bubbleBg} contentStyle={{ padding: showName ? '5px 14px 7px' : '7px 14px' }}>
+                  {showName && (
+                    <span style={{ display: 'block', fontSize: 10, fontWeight: 700, color: nameClr, marginBottom: 2, lineHeight: 1.2 }} dir="rtl">
+                      {msg.display_name}
+                    </span>
+                  )}
+                  {(() => {
+                    const { reply, body } = parseReply(msg.content);
+                    return (
+                      <>
+                        {reply && (
+                          <div dir="rtl" style={{
+                            borderInlineStart: `3px solid ${mine ? 'rgba(124,52,0,0.45)' : nameClr}`,
+                            background: mine ? 'rgba(124,52,0,0.08)' : 'rgba(0,0,0,0.05)',
+                            borderRadius: 8, padding: '3px 8px', marginBottom: 4, maxWidth: 240,
+                          }}>
+                            <span style={{ display: 'block', fontSize: 11, fontWeight: 700, color: mine ? 'rgba(124,52,0,0.8)' : nameClr, lineHeight: 1.3 }}>{reply.n}</span>
+                            <span style={{ display: 'block', fontSize: 12, color: mine ? 'rgba(124,52,0,0.7)' : '#666', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{reply.t}</span>
+                          </div>
+                        )}
+                        <p style={{ fontSize: 14, lineHeight: 1.4, color: textClr, margin: 0, wordBreak: 'break-word', whiteSpace: 'pre-wrap' }} dir="rtl">
+                          {body}
+                        </p>
+                      </>
+                    );
+                  })()}
+                </MessageBubble>
+              ) : msg.type === 'image' && msg.image_url ? (
+                /* iMessage-exact image bubble: photo clipped to the SVG outline path */
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: mine ? 'flex-end' : 'flex-start' }}>
+                  {showName && (
+                    <span style={{ display: 'block', fontSize: 10, fontWeight: 700, color: nameClr, margin: '0 4px 3px', lineHeight: 1.2 }} dir="rtl">
+                      {msg.display_name}
+                    </span>
+                  )}
+                  <ImageBubble src={msg.image_url} tailLeft={mine} tail={showAvatar} />
                 </div>
-              )}
+              ) : msg.type === 'location' && msg.location_lat != null ? (
+                /* iOS-style shared location: real map snapshot with a pin, clipped to the iMessage shape */
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: mine ? 'flex-end' : 'flex-start' }}>
+                  {showName && (
+                    <span style={{ display: 'block', fontSize: 10, fontWeight: 700, color: nameClr, margin: '0 4px 3px', lineHeight: 1.2 }} dir="rtl">
+                      {msg.display_name}
+                    </span>
+                  )}
+                  <ImageBubble
+                    src={`https://api.mapbox.com/styles/v1/mapbox/streets-v12/static/pin-l+FF3B30(${msg.location_lng},${msg.location_lat})/${msg.location_lng},${msg.location_lat},15,0/460x320@2x?access_token=${import.meta.env.VITE_MAPBOX_TOKEN}`}
+                    tailLeft={mine}
+                    tail={showAvatar}
+                    maxW={230}
+                    onClick={() => setLocSheet({ lat: msg.location_lat!, lng: msg.location_lng!, name: msg.location_name ?? null })}
+                    caption={
+                      <div dir="rtl">
+                        <p style={{ fontSize: 14, fontWeight: 700, color: '#fff', margin: 0, lineHeight: 1.25, textShadow: '0 1px 4px rgba(0,0,0,0.5)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          <LocationName lat={msg.location_lat} lng={msg.location_lng} fallback={msg.location_name} />
+                        </p>
+                        <p style={{ fontSize: 11, fontWeight: 500, color: 'rgba(255,255,255,0.85)', margin: '1px 0 0', textShadow: '0 1px 4px rgba(0,0,0,0.5)' }}>
+                          מיקום משותף
+                        </p>
+                      </div>
+                    }
+                  />
+                </div>
+              ) : null}
             </div>
-
-            {/* Timestamp — only on last message of same sender+minute group */}
-            {showTime && (
-              <span style={{ fontSize: 11, color: '#9E9E9E', marginTop: 4, fontVariantNumeric: 'tabular-nums' }}>
-                {fmtTime(msg.created_at)}
-              </span>
-            )}
-
-            {/* Reactions */}
-            {msg.reactions.length > 0 && (
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 4, justifyContent: mine ? 'flex-end' : 'flex-start' }}>
-                {msg.reactions.map(r => (
-                  <button key={r.emoji} onClick={() => toggleReaction(msg.id, r.emoji)}
-                    style={{
-                      display: 'flex', alignItems: 'center', gap: 3, padding: '3px 8px',
-                      borderRadius: 16, fontSize: 13, fontWeight: 600, cursor: 'pointer',
-                      background: r.mine ? 'rgba(37,99,235,0.1)' : '#fff',
-                      border: r.mine ? '1.5px solid rgba(37,99,235,0.35)' : '1px solid #E5E7EB',
-                      color: r.mine ? '#2563EB' : '#555',
-                    }}>
-                    <span>{r.emoji}</span><span style={{ fontSize: 11 }}>{r.count}</span>
-                  </button>
-                ))}
-              </div>
-            )}
           </div>
+
+          {/* Timestamp — under the bubble (offset past the avatar); once per same-minute run */}
+          {showTime && (
+            <span style={{ fontSize: 10, color: '#9AA0A6', marginTop: 3, marginInlineStart: !mine ? 31 : 0, paddingInline: 2, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+              {timeStr}
+            </span>
+          )}
+
+          {/* Reactions */}
+          {msg.reactions.length > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 4, marginInlineStart: !mine ? 31 : 0, justifyContent: mine ? 'flex-end' : 'flex-start' }}>
+              {msg.reactions.map(r => (
+                <button key={r.emoji} onClick={() => toggleReaction(msg.id, r.emoji)}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 3, padding: '3px 8px',
+                    borderRadius: 16, fontSize: 13, fontWeight: 600, cursor: 'pointer',
+                    background: r.mine ? 'rgba(37,99,235,0.1)' : '#fff',
+                    border: r.mine ? '1.5px solid rgba(37,99,235,0.35)' : '1px solid #E5E7EB',
+                    color: r.mine ? '#2563EB' : '#555',
+                  }}>
+                  <span>{r.emoji}</span><span style={{ fontSize: 11 }}>{r.count}</span>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     );
@@ -622,9 +846,7 @@ export function CityGroupChat({
           display: 'flex', alignItems: 'center', gap: 12,
           flexShrink: 0,
         }}>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4 }}>
-            <ArrowLeft size={22} color="#fff" />
-          </button>
+          <BackButton onClick={onClose} variant="dark" />
           <span style={{ fontSize: 20 }}>{cityEmoji}</span>
           <span style={{ fontSize: 17, fontWeight: 700, color: '#fff', flex: 1 }} dir="rtl">{cityName}</span>
         </div>
@@ -703,21 +925,20 @@ export function CityGroupChat({
         @keyframes gchat-spin  { to { transform: rotate(360deg); } }
       `}</style>
 
-      {/* ── Header — glass ── */}
-      <div style={{
-        background: 'rgba(255,255,255,0.18)',
-        backdropFilter: 'blur(20px)',
-        WebkitBackdropFilter: 'blur(20px)',
-        borderBottom: '1px solid rgba(255,255,255,0.35)',
+      {/* ── Header — glass (matches home), floats over messages ── */}
+      <div ref={headerRef} style={{
+        position: 'absolute', top: 0, left: 0, right: 0,
+        background: 'rgba(255,255,255,0.55)',
+        backdropFilter: 'blur(20px) saturate(180%)',
+        WebkitBackdropFilter: 'blur(20px) saturate(180%)',
+        borderBottom: '1px solid rgba(255,255,255,0.4)',
         paddingTop: 'env(safe-area-inset-top)',
         flexShrink: 0, zIndex: 10,
         boxShadow: '0 2px 16px rgba(0,0,0,0.08)',
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 8px 10px' }}>
           {/* Back */}
-          <button onClick={onClose} style={{ width: 38, height: 38, borderRadius: '50%', border: 'none', background: 'rgba(0,0,0,0.07)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}>
-            <ArrowLeft size={20} style={{ color: '#333' }} />
-          </button>
+          <BackButton onClick={onClose} />
 
           {/* Avatar + Name (clickable — opens info panel) */}
           <button
@@ -757,9 +978,10 @@ export function CityGroupChat({
         </div>
       </div>
 
-      {/* ── Messages area with WA-style bg ── */}
-      <div style={{ flex: 1, position: 'relative', overflow: 'hidden', background: '#FFFFFF' }}>
-        <div ref={scrollRef} style={{ position: 'absolute', inset: 0, overflowY: 'auto', padding: '10px 0 8px' }}>
+      {/* ── Messages area with WA-style bg (fills container; scrolls behind glass bars) ── */}
+      <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: '#F3EFE9' }}>
+        <div ref={scrollRef} style={{ position: 'absolute', inset: 0, overflowY: 'auto', paddingTop: headerH + 10, paddingBottom: inputH + 8 }}>
+         <div ref={contentRef}>
 
           {/* Skeleton while loading */}
           {msgsLoading && (
@@ -795,8 +1017,20 @@ export function CityGroupChat({
             </div>
           )}
 
-          {messages.map((m, i) => renderMsg(m, i))}
+          {messages.map((m, i) => (
+            <React.Fragment key={m.id}>
+              {m.id === firstUnreadId && (
+                <div ref={firstUnreadRef} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 16px 10px' }}>
+                  <div style={{ flex: 1, height: 1, background: 'rgba(0,0,0,0.10)' }} />
+                  <span style={{ fontSize: 11, fontWeight: 700, color: '#F97316', whiteSpace: 'nowrap' }}>הודעות שלא נקראו</span>
+                  <div style={{ flex: 1, height: 1, background: 'rgba(0,0,0,0.10)' }} />
+                </div>
+              )}
+              {renderMsg(m, i)}
+            </React.Fragment>
+          ))}
           <div ref={bottomRef} />
+         </div>
         </div>
 
         {/* Scroll to bottom */}
@@ -855,9 +1089,7 @@ export function CityGroupChat({
             {/* Header */}
             <div style={{ background: 'rgba(255,255,255,0.95)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)', borderBottom: '1px solid rgba(0,0,0,0.08)', paddingTop: 'env(safe-area-inset-top)', flexShrink: 0 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px 10px' }}>
-                <button onClick={() => setShowGuide(false)} style={{ width: 38, height: 38, borderRadius: '50%', border: 'none', background: 'rgba(0,0,0,0.07)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}>
-                  <ArrowLeft size={20} style={{ color: '#333' }} />
-                </button>
+                <BackButton onClick={() => setShowGuide(false)} />
                 <h2 style={{ flex: 1, fontSize: 17, fontWeight: 700, color: '#111', margin: 0, textAlign: 'right' }} dir="rtl">
                   מדריך {cityEmoji} {cityName}
                 </h2>
@@ -945,9 +1177,7 @@ export function CityGroupChat({
             boxShadow: '0 1px 8px rgba(0,0,0,0.07)',
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px 10px' }}>
-              <button onClick={() => setShowInfo(false)} style={{ width: 38, height: 38, borderRadius: '50%', border: 'none', background: 'rgba(0,0,0,0.07)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}>
-                <ArrowLeft size={20} style={{ color: '#333' }} />
-              </button>
+              <BackButton onClick={() => setShowInfo(false)} />
               <h2 style={{ flex: 1, fontSize: 17, fontWeight: 700, color: '#111', margin: 0, textAlign: 'right' }} dir="rtl">מידע על הקבוצה</h2>
             </div>
           </div>
@@ -1127,14 +1357,35 @@ export function CityGroupChat({
         </div>
       )}
 
-      {/* ── Input bar (WhatsApp style) ── */}
-      <div style={{
-        background: '#F0F2F5', flexShrink: 0,
+      {/* ── Input bar (glass, matches home), floats over messages ── */}
+      <div ref={inputBarRef} style={{
+        position: 'absolute', bottom: 0, left: 0, right: 0,
+        background: 'rgba(255,255,255,0.55)',
+        backdropFilter: 'blur(20px) saturate(180%)',
+        WebkitBackdropFilter: 'blur(20px) saturate(180%)',
+        borderTop: '1px solid rgba(255,255,255,0.4)',
+        flexShrink: 0, zIndex: 10,
         padding: '6px 8px',
         paddingBottom: 'max(10px, env(safe-area-inset-bottom))',
-        display: 'flex', alignItems: 'flex-end', gap: 8,
+        display: 'flex', flexDirection: 'column', gap: 6,
       }}>
         <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={handleImage} />
+
+        {/* Reply preview (WhatsApp-style) */}
+        {replyTo && (
+          <div dir="rtl" style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'rgba(0,0,0,0.05)', borderRadius: 12, padding: '6px 10px' }}>
+            <div style={{ width: 3, alignSelf: 'stretch', borderRadius: 3, background: senderColor(replyTo.display_name) }} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <span style={{ display: 'block', fontSize: 12, fontWeight: 700, color: senderColor(replyTo.display_name), lineHeight: 1.3 }}>{replyTo.display_name}</span>
+              <span style={{ display: 'block', fontSize: 12.5, color: '#666', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{msgSnippet(replyTo)}</span>
+            </div>
+            <button onClick={() => setReplyTo(null)} style={{ width: 28, height: 28, borderRadius: '50%', border: 'none', background: 'rgba(0,0,0,0.06)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}>
+              <X size={15} style={{ color: '#666' }} />
+            </button>
+          </div>
+        )}
+
+        <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8 }}>
 
         {/* Attach tray popup */}
         {showAttach && (
@@ -1213,7 +1464,77 @@ export function CityGroupChat({
               : <Mic size={20} style={{ color: '#fff' }} />
           }
         </button>
+        </div>
       </div>
+
+      {/* ── Long-press message menu (WhatsApp-style): reactions + actions ── */}
+      {menuMsg && (() => {
+        const isMine = menuMsg.user_id === currentUserId;
+        const amAdmin = members.some(x => x.user_id === currentUserId && x.is_admin);
+        const canDelete = isMine || amAdmin;
+        return (
+          <div
+            onClick={() => { if (Date.now() - menuOpenAt.current > 350) setMenuMsg(null); }}
+            style={{ position: 'fixed', inset: 0, zIndex: 300, background: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(2px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, animation: 'fade-in 0.15s ease' }}
+            dir="rtl"
+          >
+            <div onClick={e => e.stopPropagation()} style={{ display: 'flex', flexDirection: 'column', gap: 12, alignItems: isMine ? 'flex-end' : 'flex-start', maxWidth: 320, width: '100%' }}>
+              {/* Emoji reactions */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4, background: '#fff', borderRadius: 30, padding: '7px 12px', boxShadow: '0 6px 30px rgba(0,0,0,0.22)' }}>
+                {QUICK_EMOJIS.map(e => (
+                  <button key={e} onClick={() => toggleReaction(menuMsg.id, e)}
+                    style={{ fontSize: 26, lineHeight: 1, background: 'none', border: 'none', cursor: 'pointer', padding: 3, transition: 'transform 0.12s' }}
+                    onMouseDown={(ev) => { (ev.currentTarget as HTMLButtonElement).style.transform = 'scale(1.3)'; }}
+                    onMouseUp={(ev) => { (ev.currentTarget as HTMLButtonElement).style.transform = 'scale(1)'; }}>
+                    {e}
+                  </button>
+                ))}
+              </div>
+
+              {/* Actions */}
+              <div style={{ background: '#fff', borderRadius: 16, overflow: 'hidden', boxShadow: '0 6px 30px rgba(0,0,0,0.22)', minWidth: 200 }}>
+                {[
+                  { key: 'reply',  label: 'הגב',   icon: <CornerUpLeft size={19} />, color: '#111', onClick: menuReply },
+                  ...(menuMsg.type === 'text' || menuMsg.type === 'location'
+                    ? [{ key: 'copy', label: 'העתק', icon: <Copy size={19} />, color: '#111', onClick: menuCopy }] : []),
+                  ...(canDelete
+                    ? [{ key: 'delete', label: 'מחק', icon: <Trash2 size={19} />, color: '#E53935', onClick: menuDelete }] : []),
+                  ...(!isMine
+                    ? [{ key: 'report', label: 'דווח', icon: <Flag size={19} />, color: '#E53935', onClick: menuReport }] : []),
+                ].map((a, i, arr) => (
+                  <button key={a.key} onClick={a.onClick}
+                    style={{
+                      display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
+                      width: '100%', padding: '13px 16px', border: 'none', background: 'transparent', cursor: 'pointer',
+                      borderBottom: i < arr.length - 1 ? '1px solid #F0F0F0' : 'none',
+                      fontFamily: 'Heebo, sans-serif',
+                    }}>
+                    <span style={{ fontSize: 15, fontWeight: 600, color: a.color }}>{a.label}</span>
+                    <span style={{ color: a.color, display: 'flex' }}>{a.icon}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Toast */}
+      {toast && (
+        <div style={{ position: 'fixed', bottom: 'calc(90px + env(safe-area-inset-bottom))', left: '50%', transform: 'translateX(-50%)', zIndex: 320, background: 'rgba(40,40,40,0.92)', color: '#fff', fontSize: 13.5, fontWeight: 600, padding: '9px 18px', borderRadius: 22, boxShadow: '0 4px 20px rgba(0,0,0,0.3)', fontFamily: 'Heebo, sans-serif', animation: 'fade-in 0.2s ease', pointerEvents: 'none', whiteSpace: 'nowrap' }} dir="rtl">
+          {toast}
+        </div>
+      )}
+
+      {/* Open-location action sheet */}
+      {locSheet && (
+        <OpenLocationSheet
+          lat={locSheet.lat}
+          lng={locSheet.lng}
+          name={locSheet.name}
+          onClose={() => setLocSheet(null)}
+        />
+      )}
     </div>
   );
 }

@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
-  ArrowRight, CalendarCheck, Clock, Check, MapPin, CalendarPlus, Eye, CalendarX2, Inbox,
+  CalendarCheck, Clock, Check, MapPin, CalendarPlus, Eye, CalendarX2, Inbox,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { Event } from '../types/event';
 import { COUNTRIES } from '../utils/countries';
 import { FloatingNavBar } from './FloatingNavBar';
+import { BackButton } from './BackButton';
 import { SkeletonCard } from './SkeletonCard';
 import { EventDetailsModal } from './EventDetailsModal';
 
@@ -178,13 +179,7 @@ export function MyEventsScreen({
         style={{ paddingTop: 'env(safe-area-inset-top)' }}
       >
         <div className="flex items-center justify-between h-16 px-4">
-          <button
-            onClick={onBack}
-            aria-label="חזרה"
-            className="w-10 h-10 rounded-full hover:bg-gray-50 flex items-center justify-center transition-all active:scale-95"
-          >
-            <ArrowRight className="w-5 h-5 text-gray-700" strokeWidth={1.5} />
-          </button>
+          <BackButton onClick={onBack} />
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 bg-gradient-to-br from-brand-500 to-brand-700 rounded-lg flex items-center justify-center shadow-sm">
               <CalendarCheck className="w-4 h-4 text-white" strokeWidth={2.5} />
