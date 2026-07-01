@@ -463,6 +463,10 @@ function App() {
         currentUserId={currentUserId!}
         otherUserId={chatOtherUserId}
         onBack={() => setCurrentScreen('messages')}
+        onNavigateToUserProfile={(userId: string) => {
+          setViewingUserId(userId);
+          setCurrentScreen('userProfile');
+        }}
       />
     );
   }

@@ -1,8 +1,12 @@
-import React, { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
-import { MoreVertical, Send, Mic, MapPin, Image as ImageIcon, ChevronDown, Camera, Smile, Paperclip, X, Crown, Pencil, Check, Map, Phone, DollarSign, Clock, Wifi, AlertTriangle, CornerUpLeft, Copy, Flag, Trash2 } from 'lucide-react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react';
+import { MoreVertical, Send, Mic, MapPin, Image as ImageIcon, ChevronDown, Camera, Smile, Paperclip, X, Crown, Pencil, Check, Map, Phone, DollarSign, Clock, Wifi, AlertTriangle, CornerUpLeft, Copy, Flag, Trash2, LogOut } from 'lucide-react';
 import { BackButton } from './BackButton';
 import { MessageBubble } from './MessageBubble';
 import { ImageBubble } from './ImageBubble';
+import { EventChatCard } from './EventChatCard';
+import { EventDetailsModal } from './EventDetailsModal';
+import { parseEvent } from '../utils/eventMessage';
+import type { Event } from '../lib/supabase';
 import { LocationName } from './LocationName';
 import { OpenLocationSheet } from './OpenLocationSheet';
 import { supabase } from '../lib/supabase';
@@ -59,7 +63,10 @@ const ORANGE_SH = '0 2px 8px rgba(234,88,12,0.35)';
 /* Pastel bubble colors per sender */
 const PASTELS = ['#FCE4EC', '#FFF3E0', '#EDE7F6', '#E0F2F1', '#FBE9E7', '#E8EAF6', '#F1F8E9', '#E3F2FD'];
 /* Sender name colors */
-const NAME_COLORS = ['#C62828', '#6A1B9A', '#1565C0', '#00695C', '#BF360C', '#F57F17'];
+const NAME_COLORS = [
+  '#C62828', '#1565C0', '#2E7D32', '#6A1B9A', '#BF360C', '#00838F', '#AD1457',
+  '#4527A0', '#00695C', '#D84315', '#283593', '#558B2F', '#7B1FA2', '#EF6C00',
+];
 
 /* ─── city guide data ─── */
 interface CityGuide {
@@ -116,7 +123,12 @@ const DEFAULT_CITY_GUIDE: CityGuide = {
 };
 
 /* ─── helpers ─── */
-const senderColor = (n: string) => NAME_COLORS[n.charCodeAt(0) % NAME_COLORS.length];
+// Fallback color for a name not among the loaded participants — hash the whole string (not just the first char)
+const senderColor = (n: string) => {
+  let h = 0;
+  for (let i = 0; i < n.length; i++) h = (h * 31 + n.charCodeAt(i)) >>> 0;
+  return NAME_COLORS[h % NAME_COLORS.length];
+};
 const pastelFor   = (n: string) => PASTELS[n.charCodeAt(0) % PASTELS.length];
 const slugify = (s: string) => s.toLowerCase().replace(/\s+/g, '-').replace(/[^\w-]/g, '');
 const fmtTime = (ts: string) => new Date(ts).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit', hour12: false });
@@ -157,6 +169,18 @@ const _msgCache:     Record<string, GMessage[]> = {};
 const _channelCache: Record<string, string>     = {}; // `${countryCode}:${cityEmoji}` → channelId
 const _countCache:   Record<string, number>     = {}; // channelId → approved member count
 
+// Channels the user explicitly left — persisted so opening the city again shows a rejoin screen
+// instead of silently auto-joining.
+// Invisible marker for system notices ("X left the group"). Stored inside a normal `type:'text'`
+// message so it never trips a CHECK constraint on the `type` column. U+2061 won't collide with
+// the reply (U+2063) or event (U+2064) markers.
+const SYS_MARK = '⁡';
+const LEFT_KEY = 'left_group_channels';
+const _leftChannels: Set<string> = new Set(
+  (() => { try { return JSON.parse(localStorage.getItem(LEFT_KEY) || '[]'); } catch { return []; } })()
+);
+const saveLeftChannels = () => { try { localStorage.setItem(LEFT_KEY, JSON.stringify([..._leftChannels])); } catch { /* ignore */ } };
+
 /* ════════════════════════════════════════════════════ */
 export function CityGroupChat({
   countryCode, countryFlag, cityName, cityEmoji,
@@ -171,7 +195,9 @@ export function CityGroupChat({
   const [lastRead, setLastRead] = useState<string | null>(null); // last_seen_at captured BEFORE this open
   const [unreadReady, setUnreadReady] = useState(false);
   const [channelId,    setChannelId]    = useState<string | null>(_initChannelId);
-  const [memberStatus, setMemberStatus] = useState<'loading' | 'none' | 'pending' | 'approved' | 'just_approved'>(_initChannelId ? 'approved' : 'loading');
+  const [memberStatus, setMemberStatus] = useState<'loading' | 'none' | 'pending' | 'approved' | 'just_approved' | 'left'>(
+    _initChannelId ? (_leftChannels.has(_initChannelId) ? 'left' : 'approved') : 'loading'
+  );
   const [messages,     setMessages]     = useState<GMessage[]>(_initMsgs);
   const [msgsLoading,  setMsgsLoading]  = useState(_initMsgs.length === 0);
   const [memberCount,  setMemberCount]  = useState(_initChannelId ? (_countCache[_initChannelId] ?? 0) : 0);
@@ -179,10 +205,17 @@ export function CityGroupChat({
   const [sending,      setSending]      = useState(false);
   const [uploading,    setUploading]    = useState(false);
   const [locLoading,   setLocLoading]   = useState(false);
+  const [openEvent,    setOpenEvent]    = useState<Event | null>(null); // shared-event card → details
   const [menuMsg,      setMenuMsg]      = useState<GMessage | null>(null); // long-press context menu
   const [replyTo,      setReplyTo]      = useState<GMessage | null>(null); // message being replied to
   const [toast,        setToast]        = useState<string | null>(null);
+  const [typingUsers,  setTypingUsers]  = useState<Record<string, { name: string; ts: number }>>({}); // live "is typing" by userId — keyed by user_id
   const [showScroll,   setShowScroll]   = useState(false);
+  const [unreadNew,    setUnreadNew]    = useState(0); // count of messages arrived while scrolled up
+  const [reconnectTick, setReconnectTick] = useState(0); // bump to force the realtime channels to rebuild
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const leftRef = useRef(false); // once we leave, stop markSeen from re-creating the membership
+  const showInfoRef = useRef(false); // live: is the group-info screen open (so member changes refresh it)
   const [showAttach,   setShowAttach]   = useState(false);
   const [showInfo,     setShowInfo]     = useState(false);
   const [members,      setMembers]      = useState<GMember[]>([]);
@@ -193,6 +226,8 @@ export function CityGroupChat({
   const [descDraft,    setDescDraft]    = useState('');
   const [showMenu,     setShowMenu]     = useState(false);
   const [showGuide,    setShowGuide]    = useState(false);
+  const [confirmLeave, setConfirmLeave] = useState(false);
+  const [leaving,      setLeaving]      = useState(false);
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -202,6 +237,10 @@ export function CityGroupChat({
   const keepUnreadRef = useRef(false); // hold the view at the unread divider until the user scrolls
   const unreadHandled = useRef(false); // ensure the one-time unread reposition runs once
   const lastGestureRef = useRef(0); // timestamp of the last real user scroll gesture
+  const seenIdsRef = useRef<Set<string>>(new Set()); // ids already on screen — only NEW messages get the pop-in
+  const seenInitRef = useRef(false);
+  const typingChanRef = useRef<ReturnType<typeof supabase.channel> | null>(null); // broadcast channel for "is typing"
+  const lastTypingSentRef = useRef(0); // throttle outgoing typing broadcasts
   const fileRef   = useRef<HTMLInputElement>(null);
   const textRef   = useRef<HTMLTextAreaElement>(null);
   // Floating glass header / input → measure their heights so messages can
@@ -271,11 +310,12 @@ export function CityGroupChat({
   /* ── check membership status after channel resolves ── */
   useEffect(() => {
     if (!channelId) return;
+    if (_leftChannels.has(channelId)) { setMemberStatus('left'); return; } // user left → require an explicit rejoin
     (async () => {
       const { data } = await supabase.from('group_members')
         .select('status').eq('channel_id', channelId).eq('user_id', currentUserId).maybeSingle();
       if (!data) { setMemberStatus('none'); return; }
-      setMemberStatus((data.status ?? 'approved') as 'pending' | 'approved');
+      setMemberStatus((data.status ?? 'approved') as 'pending' | 'approved' | 'left');
     })();
   }, [channelId]);
 
@@ -292,26 +332,90 @@ export function CityGroupChat({
         .select('last_seen_at').eq('channel_id', channelId).eq('user_id', currentUserId).maybeSingle();
       setLastRead(me?.last_seen_at ?? null);
       setUnreadReady(true);
+      const isNewJoin = !me; // no prior membership row → this open is a fresh (auto-)join
       await markSeen();
+      if (isNewJoin) {
+        // WhatsApp-style "X joined the group" notice
+        await supabase.from('group_messages').insert({ channel_id: channelId, user_id: currentUserId, display_name: currentUserName, avatar_url: currentUserAvatar, content: `${SYS_MARK}${currentUserName} הצטרף/ה לקבוצה`, type: 'text' });
+      }
       loadMemberCount();
     })();
     loadMessages();
     const msgSub = supabase.channel(`group-msg-${channelId}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'group_messages', filter: `channel_id=eq.${channelId}` },
         (payload) => {
+          if (leftRef.current) return; // we've left — don't process (and never markSeen ourselves back in)
           const msg = payload.new as Omit<GMessage, 'reactions'>;
           setMessages(prev => prev.find(m => m.id === msg.id) ? prev : [...prev, { ...msg, reactions: [] }]);
-          scrollToBottom(true); markSeen();
-        }).subscribe();
+          // they just sent → they're no longer typing
+          setTypingUsers(prev => { if (!prev[msg.user_id]) return prev; const n = { ...prev }; delete n[msg.user_id]; return n; });
+          if (msg.type === 'system' || (msg.content ?? '').startsWith(SYS_MARK)) loadMemberCount(); // someone left → refresh the participant count live
+          // Only auto-scroll if already at the bottom, or if it's my own message — don't yank away from history
+          if (stickRef.current || msg.user_id === currentUserId) scrollToBottom(true);
+          else setUnreadNew(n => n + 1); // arrived while reading history → count it for the badge
+          markSeen();
+        }).subscribe((status) => {
+          // Reliability: if the channel drops, schedule a rebuild (which re-runs this effect → reconnect + loadMessages catch-up)
+          if (status === 'SUBSCRIBED') {
+            if (reconnectTimerRef.current) { clearTimeout(reconnectTimerRef.current); reconnectTimerRef.current = null; }
+          } else if ((status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') && !reconnectTimerRef.current) {
+            reconnectTimerRef.current = setTimeout(() => { reconnectTimerRef.current = null; setReconnectTick(t => t + 1); }, 2500);
+          }
+        });
     const rxSub  = supabase.channel(`group-rx-${channelId}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'group_reactions' }, () => loadMessages()).subscribe();
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'group_reactions' }, (payload) => {
+        // INSERT carries message_id — ignore reactions for messages not in this chat (e.g. another group).
+        const mid = (payload.new as { message_id?: string })?.message_id;
+        if (payload.eventType === 'INSERT' && mid && !messagesRef.current.some(m => m.id === mid)) return;
+        refreshReactions(); // reactions only — no full message reload
+      }).subscribe();
     const memSub = supabase.channel(`group-mem-${channelId}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'group_members', filter: `channel_id=eq.${channelId}` }, () => loadMemberCount()).subscribe();
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'group_members', filter: `channel_id=eq.${channelId}` }, () => {
+        loadMemberCount();                       // count updates live (join / leave / approve)
+        if (showInfoRef.current) loadGroupInfo(); // refresh the open members list live too
+      }).subscribe();
+    // ── live typing indicator over ephemeral broadcast (no DB writes) ──
+    const typingSub = supabase.channel(`group-typing-${channelId}`, { config: { broadcast: { self: false } } })
+      .on('broadcast', { event: 'typing' }, ({ payload }) => {
+        const p = payload as { userId: string; name: string };
+        if (!p?.userId || p.userId === currentUserId) return;
+        setTypingUsers(prev => ({ ...prev, [p.userId]: { name: p.name, ts: Date.now() } }));
+      })
+      .on('broadcast', { event: 'stop' }, ({ payload }) => {
+        const p = payload as { userId: string };
+        if (!p?.userId) return;
+        setTypingUsers(prev => { if (!prev[p.userId]) return prev; const n = { ...prev }; delete n[p.userId]; return n; });
+      })
+      .subscribe();
+    typingChanRef.current = typingSub;
     return () => {
-      supabase.from('group_members').update({ last_seen_at: new Date().toISOString() }).eq('channel_id', channelId).eq('user_id', currentUserId);
-      supabase.removeChannel(msgSub); supabase.removeChannel(rxSub); supabase.removeChannel(memSub);
+      if (!leftRef.current) supabase.from('group_members').update({ last_seen_at: new Date().toISOString() }).eq('channel_id', channelId).eq('user_id', currentUserId);
+      if (reconnectTimerRef.current) { clearTimeout(reconnectTimerRef.current); reconnectTimerRef.current = null; }
+      typingChanRef.current = null;
+      supabase.removeChannel(msgSub); supabase.removeChannel(rxSub); supabase.removeChannel(memSub); supabase.removeChannel(typingSub);
     };
-  }, [channelId, memberStatus]);
+  }, [channelId, memberStatus, reconnectTick]);
+
+  useEffect(() => { showInfoRef.current = showInfo; }, [showInfo]);
+
+  // Messages present at mount must NOT animate — mark them seen before the first render.
+  if (!seenInitRef.current) { messages.forEach(m => seenIdsRef.current.add(m.id)); seenInitRef.current = true; }
+  /* ── mark rendered messages as "seen" (post-commit) so the pop-in plays once per new message ── */
+  useEffect(() => { messages.forEach(m => seenIdsRef.current.add(m.id)); }, [messages]);
+
+  /* ── prune stale typing entries (no broadcast for >4s ⇒ stopped) ── */
+  useEffect(() => {
+    if (Object.keys(typingUsers).length === 0) return;
+    const id = setInterval(() => {
+      const now = Date.now();
+      setTypingUsers(prev => {
+        const n: typeof prev = {}; let changed = false;
+        for (const k in prev) { if (now - prev[k].ts < 15000) n[k] = prev[k]; else changed = true; }
+        return changed ? n : prev;
+      });
+    }, 1500);
+    return () => clearInterval(id);
+  }, [typingUsers]);
 
   /* ── real-time approval listener for pending users ── */
   useEffect(() => {
@@ -338,13 +442,6 @@ export function CityGroupChat({
     setMemberCount(n);
   };
 
-  const adminKey = (cid: string) => `group_admins_${cid}`;
-  const getAdminIds = (cid: string): string[] => {
-    try { return JSON.parse(localStorage.getItem(adminKey(cid)) || '[]'); } catch { return []; }
-  };
-  const saveAdminIds = (cid: string, ids: string[]) => {
-    localStorage.setItem(adminKey(cid), JSON.stringify(ids));
-  };
 
   const loadGroupInfo = async () => {
     if (!channelId) return;
@@ -355,14 +452,38 @@ export function CityGroupChat({
         .eq('channel_id', channelId).eq('status', 'pending'),
       supabase.from('group_channels').select('description').eq('id', channelId).maybeSingle(),
     ]);
-    const adminIds = getAdminIds(channelId);
-    if (!adminIds.includes(currentUserId)) {
-      adminIds.push(currentUserId);
-      saveAdminIds(channelId, adminIds);
-    }
-    setMembers((mems ?? []).map(m => ({ ...m, is_admin: adminIds.includes(m.user_id) })));
+    // Admin status comes ONLY from the app admin panel (users.role === 'admin') — not per-group.
+    const memberIds = (mems ?? []).map(m => m.user_id);
+    const { data: roleRows } = memberIds.length
+      ? await supabase.from('users').select('id, role').in('id', memberIds)
+      : { data: [] as { id: string; role: string | null }[] };
+    const adminSet = new Set((roleRows ?? []).filter(u => u.role === 'admin').map(u => u.id));
+    setMembers((mems ?? []).map(m => ({ ...m, is_admin: adminSet.has(m.user_id) })));
     setPendingReqs((pending ?? []).map(m => ({ ...m, is_admin: false })));
     setGroupDesc(ch?.description ?? null);
+  };
+
+  const leaveGroup = async () => {
+    if (!channelId || leaving) return;
+    setLeaving(true);
+    leftRef.current = true; // block markSeen (incl. the system-notice echo) from recreating the membership
+    // WhatsApp-style notice — insert while still approved so RLS allows it; others see it live.
+    const { error: sysErr } = await supabase.from('group_messages').insert({ channel_id: channelId, user_id: currentUserId, display_name: currentUserName, avatar_url: currentUserAvatar, content: `${SYS_MARK}${currentUserName} עזב/ה את הקבוצה`, type: 'text' });
+    if (sysErr) console.error('leave: system-notice insert failed', sysErr);
+    // Mark as 'left' rather than DELETE (delete is RLS-blocked; UPDATE is allowed). This drops the
+    // user from the approved count + members list, and the group-mem subscription pushes it live.
+    const { error: updErr } = await supabase.from('group_members').update({ status: 'left' }).eq('channel_id', channelId).eq('user_id', currentUserId);
+    if (updErr) console.error('leave: status update failed', updErr);
+    _leftChannels.add(channelId); saveLeftChannels(); // remember: don't auto-rejoin on next open
+    setLeaving(false);
+    onClose(); // exit back to the messages list
+  };
+
+  const rejoinGroup = async () => {
+    if (!channelId) return;
+    _leftChannels.delete(channelId); saveLeftChannels();
+    leftRef.current = false;
+    await handleRequestJoin(); // request approval again → 'pending' (no silent auto-join)
   };
 
   const handleApprove = async (userId: string) => {
@@ -379,6 +500,8 @@ export function CityGroupChat({
       setPendingReqs(prev => prev.filter(m => m.user_id !== userId));
       setMembers(prev => [...prev, { ...approved, is_admin: false }]);
       setMemberCount(prev => prev + 1);
+      // WhatsApp-style "X joined the group" notice for the newly-approved member
+      await supabase.from('group_messages').insert({ channel_id: channelId, user_id: userId, display_name: approved.display_name, avatar_url: approved.avatar_url, content: `${SYS_MARK}${approved.display_name} הצטרף/ה לקבוצה`, type: 'text' });
     }
   };
 
@@ -391,14 +514,6 @@ export function CityGroupChat({
     setPendingReqs(prev => prev.filter(m => m.user_id !== userId));
   };
 
-  const toggleAdmin = (userId: string, current: boolean) => {
-    if (!channelId) return;
-    const next = !current;
-    const adminIds = getAdminIds(channelId);
-    const updated = next ? [...new Set([...adminIds, userId])] : adminIds.filter(id => id !== userId);
-    saveAdminIds(channelId, updated);
-    setMembers(prev => prev.map(m => m.user_id === userId ? { ...m, is_admin: next } : m));
-  };
 
   const saveDesc = async () => {
     if (!channelId) return;
@@ -411,10 +526,32 @@ export function CityGroupChat({
     setEditingDesc(false);
   };
 
+  // Keep a live ref of messages so the reaction subscription can read current ids without a stale closure.
+  const messagesRef = useRef<GMessage[]>(messages);
+  useEffect(() => { messagesRef.current = messages; }, [messages]);
+
+  // Refresh only the reactions for the currently-loaded messages — no message reload, no flicker, no re-animate.
+  const refreshReactions = useCallback(async () => {
+    const ids = messagesRef.current.map(m => m.id);
+    if (!ids.length) return;
+    const { data: rxs } = await supabase.from('group_reactions').select('*').in('message_id', ids);
+    const rxMap: Record<string, { emoji: string; users: string[] }[]> = {};
+    for (const rx of rxs || []) {
+      if (!rxMap[rx.message_id]) rxMap[rx.message_id] = [];
+      const ex = rxMap[rx.message_id].find(r => r.emoji === rx.emoji);
+      if (ex) ex.users.push(rx.user_id); else rxMap[rx.message_id].push({ emoji: rx.emoji, users: [rx.user_id] });
+    }
+    setMessages(prev => prev.map(m => ({
+      ...m,
+      reactions: (rxMap[m.id] || []).map(r => ({ emoji: r.emoji, count: r.users.length, mine: r.users.includes(currentUserId) })),
+    })));
+  }, [currentUserId]);
+
   const loadMessages = useCallback(async () => {
     if (!channelId) return;
     // Show cached messages instantly — no skeleton if we have them
     if (_msgCache[channelId]?.length) {
+      _msgCache[channelId].forEach(m => seenIdsRef.current.add(m.id)); // fetched, not "new" → no pop-in
       setMessages(_msgCache[channelId]);
       setMsgsLoading(false);
     }
@@ -431,9 +568,21 @@ export function CityGroupChat({
     }
     const result = msgs.map(m => ({ ...m, reactions: (rxMap[m.id] || []).map(r => ({ emoji: r.emoji, count: r.users.length, mine: r.users.includes(currentUserId) })) }));
     _msgCache[channelId] = result;
+    result.forEach(m => seenIdsRef.current.add(m.id)); // fetched batch, not "new" → no pop-in on first open / reaction reload
     setMessages(result);
     setMsgsLoading(false);
   }, [channelId, currentUserId]);
+
+  // Catch up on messages missed while the app was backgrounded (the realtime socket drops on lock/background).
+  useEffect(() => {
+    const onResume = () => { if (document.visibilityState === 'visible') loadMessages(); };
+    document.addEventListener('visibilitychange', onResume);
+    window.addEventListener('focus', onResume);
+    return () => {
+      document.removeEventListener('visibilitychange', onResume);
+      window.removeEventListener('focus', onResume);
+    };
+  }, [loadMessages]);
 
   const initialLoadDone = useRef(false);
   const scrollToBottom = (smooth = false) => {
@@ -443,6 +592,19 @@ export function CityGroupChat({
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   };
+
+  // WhatsApp-style sender colors: assign a distinct color per user by order of appearance
+  // (the current user is skipped — their bubbles are orange). Colors repeat only once the palette runs out.
+  const nameColorMap = useMemo(() => {
+    const map: Record<string, string> = {};
+    let i = 0;
+    for (const m of messages) {
+      const n = m.display_name;
+      if (n && n !== currentUserName && !(n in map)) { map[n] = NAME_COLORS[i % NAME_COLORS.length]; i++; }
+    }
+    return map;
+  }, [messages, currentUserName]);
+  const colorFor = (n: string) => nameColorMap[n] ?? senderColor(n);
 
   // First message (from someone else) newer than our previous last_seen_at.
   const firstUnreadId = (() => {
@@ -509,6 +671,7 @@ export function CityGroupChat({
     const onScroll = () => {
       const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
       setShowScroll(dist > 100);
+      if (dist < 80) setUnreadNew(0); // reached the bottom → clear the new-message badge
       if (Date.now() - lastGestureRef.current < 500) {
         stickRef.current = dist < 80;       // user reached / left the bottom
         keepUnreadRef.current = false;      // user took control of the view
@@ -543,6 +706,8 @@ export function CityGroupChat({
   const sendText = async () => {
     if (!text.trim() || !channelId || sending) return;
     setSending(true);
+    lastTypingSentRef.current = 0;
+    typingChanRef.current?.send({ type: 'broadcast', event: 'stop', payload: { userId: currentUserId } });
     let body = text.trim(); setText('');
     if (replyTo) {
       body = encodeReply(replyTo.display_name, msgSnippet(replyTo), body);
@@ -582,10 +747,27 @@ export function CityGroupChat({
 
   const toggleReaction = async (messageId: string, emoji: string) => {
     const msg = messages.find(m => m.id === messageId);
-    const existing = msg?.reactions.find(r => r.emoji === emoji && r.mine);
-    if (existing) await supabase.from('group_reactions').delete().eq('message_id', messageId).eq('user_id', currentUserId).eq('emoji', emoji);
-    else await supabase.from('group_reactions').insert({ message_id: messageId, user_id: currentUserId, emoji });
+    const removing = !!msg?.reactions.find(r => r.emoji === emoji && r.mine);
     setMenuMsg(null);
+    // Optimistic: update the badge instantly, sync to the server in the background.
+    setMessages(prev => prev.map(m => {
+      if (m.id !== messageId) return m;
+      let reactions = m.reactions.map(r => ({ ...r }));
+      const r = reactions.find(r => r.emoji === emoji);
+      if (removing) {
+        if (r) { r.count -= 1; r.mine = false; }
+        reactions = reactions.filter(r => r.count > 0);
+      } else if (r) {
+        r.count += 1; r.mine = true;
+      } else {
+        reactions.push({ emoji, count: 1, mine: true });
+      }
+      return { ...m, reactions };
+    }));
+    const { error } = removing
+      ? await supabase.from('group_reactions').delete().eq('message_id', messageId).eq('user_id', currentUserId).eq('emoji', emoji)
+      : await supabase.from('group_reactions').insert({ message_id: messageId, user_id: currentUserId, emoji });
+    if (error) refreshReactions(); // revert to server truth if it failed
   };
 
   /* ─── long-press context menu (WhatsApp-style) ─── */
@@ -619,6 +801,12 @@ export function CityGroupChat({
     const { error } = await supabase.from('group_messages').delete().eq('id', m.id);
     if (error) { showToast('לא ניתן למחוק'); loadMessages(); } else { showToast('ההודעה נמחקה'); }
   };
+  const openEventById = async (id: string) => {
+    const { data } = await supabase.from('events').select('*').eq('id', id).maybeSingle();
+    if (data) setOpenEvent(data as Event);
+    else showToast('האירוע לא נמצא');
+  };
+
   const menuReport = async () => {
     const m = menuMsg; setMenuMsg(null);
     showToast('תודה, ההודעה דווחה ✓');
@@ -642,6 +830,18 @@ export function CityGroupChat({
 
   /* ─── render message ─── */
   const renderMsg = (msg: GMessage, idx: number) => {
+    // System notice (WhatsApp-style "X joined/left the group") — centered pill, no bubble/avatar.
+    if (msg.type === 'system' || (msg.content ?? '').startsWith(SYS_MARK)) {
+      const sysText = (msg.content ?? '').replace(SYS_MARK, '');
+      const selfText = sysText.includes('הצטרף') ? 'הצטרפת לקבוצה' : 'עזבת את הקבוצה';
+      return (
+        <div key={msg.id} style={{ display: 'flex', justifyContent: 'center', margin: '10px 14px' }}>
+          <span dir="rtl" style={{ background: 'rgba(60,55,50,0.10)', color: '#555', fontSize: 12.5, fontWeight: 500, padding: '5px 14px', borderRadius: 14, textAlign: 'center', maxWidth: '85%' }}>
+            {msg.user_id === currentUserId ? selfText : sysText}
+          </span>
+        </div>
+      );
+    }
     const mine    = msg.user_id === currentUserId;
     const prev    = messages[idx - 1];
     const next    = messages[idx + 1];
@@ -656,10 +856,11 @@ export function CityGroupChat({
 
     const bubbleBg  = mine ? '#FFD4A8' : '#FFFFFF';
     const textClr   = mine ? '#7C3400' : '#111111';
-    const nameClr   = senderColor(msg.display_name);
+    const nameClr   = colorFor(msg.display_name);
     const showName  = !mine; // group sender label, inside every incoming bubble
     const noPad     = msg.type === 'image' || msg.type === 'location';
     const timeStr   = fmtTime(msg.created_at);
+    const isNew     = !seenIdsRef.current.has(msg.id); // animate only freshly-arrived messages
 
     return (
       <div key={msg.id}>
@@ -688,11 +889,11 @@ export function CityGroupChat({
           marginBottom: isLast ? 6 : 2,
         }}>
           {/* Bubble row — avatar bottom-aligned to the bubble so it hugs the tail */}
-          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 5, maxWidth: '82%' }}>
+          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 5, maxWidth: '82%', marginBottom: msg.reactions.length > 0 ? 12 : 0, ...(isNew && { animation: 'gchat-pop 360ms cubic-bezier(0.34,1.56,0.64,1) both', transformOrigin: mine ? 'right bottom' : 'left bottom' }) }}>
             {/* Avatar attached to the tail (incoming only) */}
             {!mine && (
               showAvatar ? (
-                <div style={{ width: 26, height: 26, flexShrink: 0, borderRadius: '50%', overflow: 'hidden', background: senderColor(msg.display_name), display: 'flex', alignItems: 'center', justifyContent: 'center', boxSizing: 'border-box', border: `2px solid ${senderColor(msg.display_name)}`, marginBottom: -1 }}>
+                <div style={{ width: 26, height: 26, flexShrink: 0, borderRadius: '50%', overflow: 'hidden', background: colorFor(msg.display_name), display: 'flex', alignItems: 'center', justifyContent: 'center', boxSizing: 'border-box', border: `2px solid ${colorFor(msg.display_name)}`, marginBottom: -1 }}>
                   {msg.avatar_url
                     ? <UserAvatar userId={msg.user_id} displayName={msg.display_name} avatarUrl={msg.avatar_url} size="small" />
                     : <span style={{ color: '#fff', fontWeight: 700, fontSize: 11 }}>{msg.display_name.charAt(0)}</span>
@@ -709,7 +910,17 @@ export function CityGroupChat({
               onTouchEnd={cancelPress}
               onContextMenu={(e) => { e.preventDefault(); setMenuMsg(msg); }}
             >
-              {msg.type === 'text' ? (
+              {msg.type === 'text' && parseEvent(msg.content).event ? (
+                /* Shared event → glass card that opens the event */
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: mine ? 'flex-end' : 'flex-start' }}>
+                  {showName && (
+                    <span style={{ display: 'block', fontSize: 10, fontWeight: 700, color: nameClr, margin: '0 4px 3px', lineHeight: 1.2 }} dir="rtl">
+                      {msg.display_name}
+                    </span>
+                  )}
+                  <EventChatCard data={parseEvent(msg.content).event!} onClick={() => openEventById(parseEvent(msg.content).event!.id)} />
+                </div>
+              ) : msg.type === 'text' ? (
                 /* iMessage-exact bubble (single SVG path, stretchable, fixed tail) */
                 <MessageBubble mine={!mine} tail={showAvatar} color={bubbleBg} contentStyle={{ padding: showName ? '5px 14px 7px' : '7px 14px' }}>
                   {showName && (
@@ -721,16 +932,20 @@ export function CityGroupChat({
                     const { reply, body } = parseReply(msg.content);
                     return (
                       <>
-                        {reply && (
-                          <div dir="rtl" style={{
-                            borderInlineStart: `3px solid ${mine ? 'rgba(124,52,0,0.45)' : nameClr}`,
-                            background: mine ? 'rgba(124,52,0,0.08)' : 'rgba(0,0,0,0.05)',
-                            borderRadius: 8, padding: '3px 8px', marginBottom: 4, maxWidth: 240,
-                          }}>
-                            <span style={{ display: 'block', fontSize: 11, fontWeight: 700, color: mine ? 'rgba(124,52,0,0.8)' : nameClr, lineHeight: 1.3 }}>{reply.n}</span>
-                            <span style={{ display: 'block', fontSize: 12, color: mine ? 'rgba(124,52,0,0.7)' : '#666', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{reply.t}</span>
-                          </div>
-                        )}
+                        {reply && (() => {
+                          // Replied-to sender's color — but orange when the reply targets MY own message
+                          const replyClr = reply.n === currentUserName ? '#EA580C' : colorFor(reply.n);
+                          return (
+                            <div dir="rtl" style={{
+                              borderInlineStart: `3px solid ${replyClr}`,
+                              background: mine ? 'rgba(124,52,0,0.08)' : 'rgba(0,0,0,0.05)',
+                              borderRadius: 8, padding: '3px 8px', marginBottom: 4, maxWidth: 240,
+                            }}>
+                              <span style={{ display: 'block', fontSize: 11, fontWeight: 700, color: replyClr, lineHeight: 1.3 }}>{reply.n === currentUserName ? 'אתה' : reply.n}</span>
+                              <span style={{ display: 'block', fontSize: 12, color: mine ? 'rgba(124,52,0,0.7)' : '#666', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{reply.t}</span>
+                            </div>
+                          );
+                        })()}
                         <p style={{ fontSize: 14, lineHeight: 1.4, color: textClr, margin: 0, wordBreak: 'break-word', whiteSpace: 'pre-wrap' }} dir="rtl">
                           {body}
                         </p>
@@ -775,6 +990,23 @@ export function CityGroupChat({
                   />
                 </div>
               ) : null}
+
+              {/* Reactions — WhatsApp-style badge straddling the bubble's bottom edge */}
+              {msg.reactions.length > 0 && (
+                <div style={{ position: 'absolute', bottom: -11, zIndex: 3, display: 'flex', gap: 3, ...(mine ? { left: 2 } : { right: 18 }) }}>
+                  {msg.reactions.map(r => (
+                    <button key={r.emoji} onClick={() => toggleReaction(msg.id, r.emoji)}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 2, padding: '2px 6px',
+                        borderRadius: 14, cursor: 'pointer', lineHeight: 1,
+                        background: '#fff', border: '1px solid rgba(0,0,0,0.07)', boxShadow: '0 1px 3px rgba(0,0,0,0.14)',
+                      }}>
+                      <span style={{ fontSize: 13 }}>{r.emoji}</span>
+                      {r.count > 1 && <span style={{ fontSize: 11, fontWeight: 700, color: '#555' }}>{r.count}</span>}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
 
@@ -783,24 +1015,6 @@ export function CityGroupChat({
             <span style={{ fontSize: 10, color: '#9AA0A6', marginTop: 3, marginInlineStart: !mine ? 31 : 0, paddingInline: 2, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
               {timeStr}
             </span>
-          )}
-
-          {/* Reactions */}
-          {msg.reactions.length > 0 && (
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 4, marginInlineStart: !mine ? 31 : 0, justifyContent: mine ? 'flex-end' : 'flex-start' }}>
-              {msg.reactions.map(r => (
-                <button key={r.emoji} onClick={() => toggleReaction(msg.id, r.emoji)}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: 3, padding: '3px 8px',
-                    borderRadius: 16, fontSize: 13, fontWeight: 600, cursor: 'pointer',
-                    background: r.mine ? 'rgba(37,99,235,0.1)' : '#fff',
-                    border: r.mine ? '1.5px solid rgba(37,99,235,0.35)' : '1px solid #E5E7EB',
-                    color: r.mine ? '#2563EB' : '#555',
-                  }}>
-                  <span>{r.emoji}</span><span style={{ fontSize: 11 }}>{r.count}</span>
-                </button>
-              ))}
-            </div>
           )}
         </div>
       </div>
@@ -819,10 +1033,11 @@ export function CityGroupChat({
   const hasText = text.trim().length > 0;
 
   /* ── Pending / Join screens ── */
-  if ((memberStatus === 'none' || memberStatus === 'pending' || memberStatus === 'just_approved') && channelId) {
+  if ((memberStatus === 'none' || memberStatus === 'pending' || memberStatus === 'just_approved' || memberStatus === 'left') && channelId) {
     const isPending      = memberStatus === 'pending';
     const isLoading      = false;
     const isJustApproved = memberStatus === 'just_approved';
+    const isLeft         = memberStatus === 'left';
     return (
       <div style={{
         position: 'fixed', inset: 0, zIndex: 120,
@@ -880,6 +1095,20 @@ export function CityGroupChat({
                 כניסה לקבוצה
               </button>
             </>
+          ) : isLeft ? (
+            <>
+              <div style={{ fontSize: 56 }}>{cityEmoji}</div>
+              <h2 style={{ fontSize: 20, fontWeight: 700, color: '#111', margin: 0, textAlign: 'center' }}>עזבת את קבוצת {cityName}</h2>
+              <p style={{ fontSize: 15, color: '#666', margin: 0, textAlign: 'center', lineHeight: 1.6 }}>
+                כבר לא קיבלת הודעות מהקבוצה הזו. אפשר להצטרף שוב בכל רגע.
+              </p>
+              <button
+                onClick={rejoinGroup}
+                style={{ marginTop: 8, padding: '12px 36px', borderRadius: 24, border: 'none', background: 'linear-gradient(135deg,#F97316,#EA580C)', color: '#fff', fontSize: 16, fontWeight: 700, cursor: 'pointer', boxShadow: '0 3px 10px rgba(234,88,12,0.35)' }}>
+                הצטרף מחדש
+              </button>
+              <button onClick={onClose} style={{ background: 'none', border: 'none', color: '#999', fontSize: 14, cursor: 'pointer' }}>חזרה</button>
+            </>
           ) : isPending ? (
             <>
               <div style={{ width: 80, height: 80, borderRadius: '50%', background: '#FFF3E0', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 36 }}>⏳</div>
@@ -923,6 +1152,19 @@ export function CityGroupChat({
       <style>{`
         @keyframes gchat-slide { from { transform: translateY(100%); } to { transform: translateY(0); } }
         @keyframes gchat-spin  { to { transform: rotate(360deg); } }
+        @keyframes gchat-pop {
+          0%   { transform: scale(0.8);  opacity: 0; }
+          60%  { transform: scale(1.04); opacity: 1; }
+          100% { transform: scale(1); }
+        }
+        @keyframes gchat-typing {
+          0%, 60%, 100% { transform: translateY(0); }
+          30%           { transform: translateY(-4px); }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          @keyframes gchat-pop { from { opacity: 0; } to { opacity: 1; } }
+          @keyframes gchat-typing { 0%,100% { transform: none; } }
+        }
       `}</style>
 
       {/* ── Header — glass (matches home), floats over messages ── */}
@@ -942,7 +1184,7 @@ export function CityGroupChat({
 
           {/* Avatar + Name (clickable — opens info panel) */}
           <button
-            onClick={() => { loadGroupInfo(); setShowInfo(true); }}
+            onClick={() => { loadGroupInfo(); setConfirmLeave(false); setShowInfo(true); }}
             style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 0, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
           >
             <div style={{ width: 40, height: 40, borderRadius: '50%', background: 'rgba(0,0,0,0.08)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, flexShrink: 0, border: '1.5px solid rgba(255,255,255,0.6)' }}>
@@ -1029,20 +1271,50 @@ export function CityGroupChat({
               {renderMsg(m, i)}
             </React.Fragment>
           ))}
+
+          {/* Live typing indicator (ephemeral broadcast) */}
+          {(() => {
+            const names = Object.values(typingUsers).map(t => t.name);
+            if (names.length === 0) return null;
+            const label = names.length === 1 ? `${names[0]} מקליד/ה`
+              : names.length === 2 ? `${names[0]} ו${names[1]} מקלידים`
+              : `${names[0]} ועוד ${names.length - 1} מקלידים`;
+            return (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 18, paddingRight: 18, marginBottom: 8, animation: 'gchat-pop 260ms ease-out both', transformOrigin: 'left bottom' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
+                  {[4, 5, 6].map((d, i) => (
+                    <span key={i} style={{ width: d, height: d, borderRadius: '50%', background: 'rgba(0,0,0,0.3)', display: 'inline-block', animation: `gchat-typing 1.2s ${i * 0.16}s infinite ease-in-out` }} />
+                  ))}
+                </div>
+                <span dir="rtl" style={{ fontSize: 12.5, fontWeight: 500, color: 'rgba(0,0,0,0.6)' }}>{label}</span>
+              </div>
+            );
+          })()}
           <div ref={bottomRef} />
          </div>
         </div>
 
-        {/* Scroll to bottom */}
+        {/* Scroll to bottom — float ABOVE the glass input bar so it isn't hidden behind it */}
         {showScroll && (
-          <button onClick={() => scrollToBottom(true)} style={{
-            position: 'absolute', bottom: 12, right: 12, zIndex: 10,
+          <button onClick={() => { setUnreadNew(0); stickRef.current = true; scrollToBottom(true); }} style={{
+            position: 'absolute', bottom: inputH + 12, right: 12, zIndex: 11,
             width: 38, height: 38, borderRadius: '50%',
             background: '#fff', border: '1px solid rgba(0,0,0,0.1)',
             boxShadow: '0 2px 10px rgba(0,0,0,0.15)',
             display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
           }}>
             <ChevronDown size={18} style={{ color: '#555' }} />
+            {unreadNew > 0 && (
+              <span style={{
+                position: 'absolute', top: -8, left: '50%', transform: 'translateX(-50%)',
+                minWidth: 18, height: 18, padding: '0 5px', borderRadius: 9,
+                background: ORANGE, boxShadow: ORANGE_SH,
+                color: '#fff', fontSize: 11, fontWeight: 700, lineHeight: '18px',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}>
+                {unreadNew > 99 ? '99+' : unreadNew}
+              </span>
+            )}
           </button>
         )}
       </div>
@@ -1179,6 +1451,13 @@ export function CityGroupChat({
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px 10px' }}>
               <BackButton onClick={() => setShowInfo(false)} />
               <h2 style={{ flex: 1, fontSize: 17, fontWeight: 700, color: '#111', margin: 0, textAlign: 'right' }} dir="rtl">מידע על הקבוצה</h2>
+              <button onClick={() => setConfirmLeave(true)} title="עזוב את הקבוצה" style={{
+                width: 38, height: 38, borderRadius: '50%', flexShrink: 0,
+                border: '1px solid rgba(220,38,38,0.25)', background: 'rgba(220,38,38,0.08)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
+              }}>
+                <LogOut size={18} style={{ color: '#DC2626', transform: 'scaleX(-1)' }} />
+              </button>
             </div>
           </div>
 
@@ -1289,11 +1568,9 @@ export function CityGroupChat({
                 });
                 const admins  = sorted.filter(m => m.is_admin);
                 const regular = sorted.filter(m => !m.is_admin);
-                const amAdmin = members.some(x => x.user_id === currentUserId && x.is_admin);
 
                 const MemberRow = ({ m, i }: { m: GMember; i: number }) => {
                   const isAdmin = !!m.is_admin;
-                  const isSelf  = m.user_id === currentUserId;
                   return (
                     <div style={{
                       display: 'flex', alignItems: 'center', gap: 12,
@@ -1323,17 +1600,8 @@ export function CityGroupChat({
                       <div style={{ flex: 1 }}>
                         <span style={{ fontSize: 15, fontWeight: 500, color: '#111' }}>{m.display_name}</span>
                       </div>
-                      {amAdmin && !isSelf && (
-                        <button
-                          onClick={() => toggleAdmin(m.user_id, isAdmin)}
-                          style={{
-                            width: 28, height: 28, borderRadius: '50%', cursor: 'pointer', border: 'none', flexShrink: 0,
-                            background: isAdmin ? '#FEE2E2' : '#FFF3E0',
-                            display: 'flex', alignItems: 'center', justifyContent: 'center',
-                          }}
-                        >
-                          {isAdmin ? <X size={13} style={{ color: '#DC2626' }} /> : <Crown size={13} style={{ color: '#F97316' }} />}
-                        </button>
+                      {isAdmin && (
+                        <span style={{ fontSize: 12, fontWeight: 600, color: '#F97316', flexShrink: 0 }}>מנהל</span>
                       )}
                     </div>
                   );
@@ -1354,36 +1622,58 @@ export function CityGroupChat({
             </div>
 
           </div>
+
+          {/* Leave-group confirmation dialog */}
+          {confirmLeave && (
+            <div onClick={() => !leaving && setConfirmLeave(false)} style={{
+              position: 'absolute', inset: 0, zIndex: 60, background: 'rgba(0,0,0,0.4)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24,
+            }}>
+              <div onClick={e => e.stopPropagation()} style={{ background: '#fff', borderRadius: 18, padding: 22, width: '100%', maxWidth: 320, boxShadow: '0 10px 40px rgba(0,0,0,0.25)' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, marginBottom: 16 }}>
+                  <div style={{ width: 52, height: 52, borderRadius: '50%', background: 'rgba(220,38,38,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <LogOut size={24} style={{ color: '#DC2626', transform: 'scaleX(-1)' }} />
+                  </div>
+                  <p style={{ margin: 0, fontSize: 16, fontWeight: 700, color: '#111', textAlign: 'center' }} dir="rtl">לעזוב את הקבוצה?</p>
+                  <p style={{ margin: 0, fontSize: 13, color: '#888', textAlign: 'center' }} dir="rtl">לא תקבל יותר הודעות מהקבוצה הזו.</p>
+                </div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button onClick={leaveGroup} disabled={leaving} style={{ flex: 1, padding: '12px', borderRadius: 12, border: 'none', background: '#DC2626', color: '#fff', fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>{leaving ? 'עוזב…' : 'עזוב'}</button>
+                  <button onClick={() => setConfirmLeave(false)} disabled={leaving} style={{ flex: 1, padding: '12px', borderRadius: 12, border: '1px solid rgba(0,0,0,0.12)', background: '#fff', color: '#555', fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>ביטול</button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
       {/* ── Input bar (glass, matches home), floats over messages ── */}
       <div ref={inputBarRef} style={{
         position: 'absolute', bottom: 0, left: 0, right: 0,
-        background: 'rgba(255,255,255,0.55)',
-        backdropFilter: 'blur(20px) saturate(180%)',
-        WebkitBackdropFilter: 'blur(20px) saturate(180%)',
-        borderTop: '1px solid rgba(255,255,255,0.4)',
+        background: 'transparent',
         flexShrink: 0, zIndex: 10,
-        padding: '6px 8px',
-        paddingBottom: 'max(10px, env(safe-area-inset-bottom))',
+        padding: '6px 26px',
+        paddingBottom: 'calc(max(10px, env(safe-area-inset-bottom)) + 10px)',
         display: 'flex', flexDirection: 'column', gap: 6,
       }}>
         <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={handleImage} />
 
         {/* Reply preview (WhatsApp-style) */}
-        {replyTo && (
-          <div dir="rtl" style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'rgba(0,0,0,0.05)', borderRadius: 12, padding: '6px 10px' }}>
-            <div style={{ width: 3, alignSelf: 'stretch', borderRadius: 3, background: senderColor(replyTo.display_name) }} />
+        {replyTo && (() => {
+          const previewClr = replyTo.display_name === currentUserName ? '#EA580C' : colorFor(replyTo.display_name);
+          return (
+          <div dir="rtl" style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#fff', borderRadius: 14, padding: '6px 10px', boxShadow: '0 2px 10px rgba(0,0,0,0.12)' }}>
+            <div style={{ width: 3, alignSelf: 'stretch', borderRadius: 3, background: previewClr }} />
             <div style={{ flex: 1, minWidth: 0 }}>
-              <span style={{ display: 'block', fontSize: 12, fontWeight: 700, color: senderColor(replyTo.display_name), lineHeight: 1.3 }}>{replyTo.display_name}</span>
+              <span style={{ display: 'block', fontSize: 12, fontWeight: 700, color: previewClr, lineHeight: 1.3 }}>{replyTo.display_name === currentUserName ? 'אתה' : replyTo.display_name}</span>
               <span style={{ display: 'block', fontSize: 12.5, color: '#666', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{msgSnippet(replyTo)}</span>
             </div>
             <button onClick={() => setReplyTo(null)} style={{ width: 28, height: 28, borderRadius: '50%', border: 'none', background: 'rgba(0,0,0,0.06)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}>
               <X size={15} style={{ color: '#666' }} />
             </button>
           </div>
-        )}
+          );
+        })()}
 
         <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8 }}>
 
@@ -1422,7 +1712,7 @@ export function CityGroupChat({
           flex: 1, background: '#fff', borderRadius: 24, minHeight: 44,
           display: 'flex', alignItems: 'flex-end',
           paddingLeft: 6, paddingRight: 12, paddingTop: 6, paddingBottom: 6,
-          boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+          boxShadow: '0 2px 10px rgba(0,0,0,0.12)',
           gap: 4,
         }}>
           <button onClick={() => setShowAttach(v => !v)} style={{ width: 32, height: 32, borderRadius: '50%', border: 'none', background: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
@@ -1431,7 +1721,20 @@ export function CityGroupChat({
           <textarea
             ref={textRef}
             value={text}
-            onChange={e => setText(e.target.value)}
+            onChange={e => {
+              const v = e.target.value;
+              setText(v);
+              const now = Date.now();
+              if (!v) {
+                // input cleared → stop showing immediately
+                lastTypingSentRef.current = 0;
+                typingChanRef.current?.send({ type: 'broadcast', event: 'stop', payload: { userId: currentUserId } });
+              } else if (now - lastTypingSentRef.current > 1500) {
+                // keep the indicator alive while there's text being changed (expires 15s after last change)
+                lastTypingSentRef.current = now;
+                typingChanRef.current?.send({ type: 'broadcast', event: 'typing', payload: { userId: currentUserId, name: currentUserName } });
+              }
+            }}
             onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendText(); } }}
             onInput={onInput}
             placeholder="הודעה..."
@@ -1533,6 +1836,15 @@ export function CityGroupChat({
           lng={locSheet.lng}
           name={locSheet.name}
           onClose={() => setLocSheet(null)}
+        />
+      )}
+
+      {/* Shared-event details */}
+      {openEvent && (
+        <EventDetailsModal
+          event={openEvent}
+          currentUserId={currentUserId}
+          onClose={() => setOpenEvent(null)}
         />
       )}
     </div>

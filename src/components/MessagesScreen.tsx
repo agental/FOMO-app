@@ -5,6 +5,7 @@ import { UserAvatar } from './UserAvatar';
 import { COUNTRIES } from '../utils/countries';
 import { FloatingNavBar } from './FloatingNavBar';
 import { CityGroupChat } from './CityGroupChat';
+import { messagePreview } from '../utils/eventMessage';
 
 const COUNTRY_CITIES: Record<string, { name: string; emoji: string }[]> = {
   TH: [
@@ -220,6 +221,10 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
   const [chatsCollapsed,  setChatsCollapsed]  = useState(false);
   const [pinnedIds,  setPinnedIds]  = useState<Set<string>>(() => new Set(JSON.parse(localStorage.getItem('pinned_convos') || '[]')));
   const [mutedIds,   setMutedIds]   = useState<Set<string>>(() => new Set(JSON.parse(localStorage.getItem('muted_convos') || '[]')));
+  // Live "is typing" by chat id (conversation id for DMs, channel id for groups) — WhatsApp-style list indicator
+  const [typingChats, setTypingChats] = useState<Record<string, { name?: string; ts: number }>>({});
+  const [reconnectTick, setReconnectTick] = useState(0); // bump to force the realtime channels to rebuild
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const touchStartX = useRef<number>(0);
 
   useEffect(() => {
@@ -232,7 +237,14 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
       .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, () => {
         loadConversations();
       })
-      .subscribe();
+      .subscribe((status) => {
+        // Reliability: if the channel drops, schedule a rebuild (re-runs this effect → reconnect + reload catch-up)
+        if (status === 'SUBSCRIBED') {
+          if (reconnectTimerRef.current) { clearTimeout(reconnectTimerRef.current); reconnectTimerRef.current = null; }
+        } else if ((status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') && !reconnectTimerRef.current) {
+          reconnectTimerRef.current = setTimeout(() => { reconnectTimerRef.current = null; setReconnectTick(t => t + 1); }, 2500);
+        }
+      });
 
     const groupChannel = supabase
       .channel('group-messages-changes')
@@ -241,11 +253,88 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
       })
       .subscribe();
 
+    // Membership changes (join / leave / approve) — keep the group list + member counts live.
+    const groupMemChannel = supabase
+      .channel('group-members-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'group_members' }, () => {
+        loadGroupChats();
+      })
+      .subscribe();
+
     return () => {
+      if (reconnectTimerRef.current) { clearTimeout(reconnectTimerRef.current); reconnectTimerRef.current = null; }
       supabase.removeChannel(messagesChannel);
       supabase.removeChannel(groupChannel);
+      supabase.removeChannel(groupMemChannel);
+    };
+  }, [currentUserId, reconnectTick]);
+
+  // Catch up on anything missed while the app was backgrounded (the realtime socket drops on lock/background).
+  useEffect(() => {
+    const onResume = () => { if (document.visibilityState === 'visible') { loadConversations(); loadGroupChats(); } };
+    document.addEventListener('visibilitychange', onResume);
+    window.addEventListener('focus', onResume);
+    return () => {
+      document.removeEventListener('visibilitychange', onResume);
+      window.removeEventListener('focus', onResume);
     };
   }, [currentUserId]);
+
+  // ── Listen for "is typing" broadcasts across every chat in the list (WhatsApp-style) ──
+  const convoIds = conversations.map(c => c.id).join(',');
+  const groupIds = groupChats.map(g => g.channelId).join(',');
+  // The currently-open group already owns its typing topic (CityGroupChat) — skip it to avoid a duplicate subscribe.
+  const openGroupChannelId = openCity
+    ? (groupChats.find(g => g.countryCode === openCity.code && g.cityName === openCity.name)?.channelId ?? null)
+    : null;
+  useEffect(() => {
+    const channels: ReturnType<typeof supabase.channel>[] = [];
+    conversations.forEach(c => {
+      const ch = supabase.channel(`dm-typing-${c.id}`, { config: { broadcast: { self: false } } })
+        .on('broadcast', { event: 'typing' }, ({ payload }) => {
+          if ((payload as { userId?: string })?.userId === currentUserId) return;
+          setTypingChats(prev => ({ ...prev, [c.id]: { ts: Date.now() } }));
+        })
+        .on('broadcast', { event: 'stop' }, () => {
+          setTypingChats(prev => { if (!prev[c.id]) return prev; const n = { ...prev }; delete n[c.id]; return n; });
+        })
+        .on('broadcast', { event: 'msg' }, () => {
+          setTypingChats(prev => { if (!prev[c.id]) return prev; const n = { ...prev }; delete n[c.id]; return n; });
+          loadConversations(); // refresh preview/order even if DB replication is off
+        })
+        .subscribe();
+      channels.push(ch);
+    });
+    groupChats.forEach(g => {
+      if (g.channelId === openGroupChannelId) return;
+      const ch = supabase.channel(`group-typing-${g.channelId}`, { config: { broadcast: { self: false } } })
+        .on('broadcast', { event: 'typing' }, ({ payload }) => {
+          const p = payload as { userId?: string; name?: string };
+          if (!p?.userId || p.userId === currentUserId) return;
+          setTypingChats(prev => ({ ...prev, [g.channelId]: { name: p.name, ts: Date.now() } }));
+        })
+        .on('broadcast', { event: 'stop' }, () => {
+          setTypingChats(prev => { if (!prev[g.channelId]) return prev; const n = { ...prev }; delete n[g.channelId]; return n; });
+        })
+        .subscribe();
+      channels.push(ch);
+    });
+    return () => { channels.forEach(ch => supabase.removeChannel(ch)); };
+  }, [convoIds, groupIds, openGroupChannelId, currentUserId]);
+
+  // Prune typing entries with no broadcast for >15s
+  useEffect(() => {
+    if (Object.keys(typingChats).length === 0) return;
+    const id = setInterval(() => {
+      const now = Date.now();
+      setTypingChats(prev => {
+        const n: typeof prev = {}; let changed = false;
+        for (const k in prev) { if (now - prev[k].ts < 15000) n[k] = prev[k]; else changed = true; }
+        return changed ? n : prev;
+      });
+    }, 2000);
+    return () => clearInterval(id);
+  }, [typingChats]);
 
   const loadUserCountries = async () => {
     try {
@@ -266,11 +355,14 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
 
   const loadGroupChats = async () => {
     try {
-      const { data: memberships } = await supabase
+      const { data: membershipsRaw } = await supabase
         .from('group_members')
         .select('channel_id, last_seen_at, status')
         .eq('user_id', currentUserId);
-      if (!memberships?.length) return;
+      // Hide groups the user explicitly left (localStorage), even if the DB row lingers.
+      let left: Set<string>; try { left = new Set(JSON.parse(localStorage.getItem('left_group_channels') || '[]')); } catch { left = new Set(); }
+      const memberships = (membershipsRaw ?? []).filter(m => m.status !== 'left' && !left.has(m.channel_id));
+      if (!memberships.length) { _cachedGroupChats = []; setGroupChats([]); return; }
 
       const channelIds = memberships.map(m => m.channel_id);
       const { data: channels } = await supabase
@@ -297,16 +389,11 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
         supabase.from('group_messages').select('id', { count: 'exact', head: true })
           .eq('channel_id', ch.id as string).neq('user_id', currentUserId).gt('created_at', lastSeen),
         supabase.from('group_members').select('*', { count: 'exact', head: true })
-          .eq('channel_id', ch.id),
+          .eq('channel_id', ch.id).eq('status', 'approved'),
       ]);
 
       const lastMsg = lastMsgRes.data;
-      let preview = null;
-      if (lastMsg) {
-        if (lastMsg.type === 'image') preview = `${lastMsg.display_name}: 📷 תמונה`;
-        else if (lastMsg.type === 'location') preview = `${lastMsg.display_name}: 📍 מיקום`;
-        else preview = `${lastMsg.display_name}: ${lastMsg.content}`;
-      }
+      const preview = lastMsg ? `${lastMsg.display_name}: ${messagePreview(lastMsg.content, lastMsg.type)}` : null;
 
       return {
         channelId: ch.id as string,
@@ -672,9 +759,15 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
                       {gc.lastMessageAt ? formatTime(gc.lastMessageAt) : ''}
                     </span>
                   </div>
-                  <p className={`text-[13px] truncate text-right ${gc.unreadCount > 0 ? 'text-[#444] font-medium' : 'text-gray-400'}`}>
-                    {gc.lastMessage ?? 'טרם נשלחו הודעות'}
-                  </p>
+                  {typingChats[gc.channelId] ? (
+                    <p className="text-[13px] truncate text-right font-semibold" style={{ color: '#F97316' }}>
+                      {typingChats[gc.channelId].name ? `${typingChats[gc.channelId].name} מקליד/ה…` : 'מקליד/ה…'}
+                    </p>
+                  ) : (
+                    <p className={`text-[13px] truncate text-right ${gc.unreadCount > 0 ? 'text-[#444] font-medium' : 'text-gray-400'}`}>
+                      {gc.lastMessage ?? 'טרם נשלחו הודעות'}
+                    </p>
+                  )}
                 </div>
 
                 {/* Unread badge */}
@@ -829,7 +922,11 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
                           {isMuted && <BellOff size={12} color="#9CA3AF" />}
                         </div>
                       </div>
-                      {conversation.last_message && (
+                      {typingChats[conversation.id] ? (
+                        <p className="text-[13px] truncate text-right font-semibold" style={{ color: '#F97316' }}>
+                          מקליד/ה…
+                        </p>
+                      ) : conversation.last_message && (
                         <p
                           className={`text-[13px] truncate text-right ${isUnread ? 'text-[#444] font-medium' : 'text-gray-400 font-normal'}`}
                           style={{ opacity: isMuted ? 0.6 : 1 }}
@@ -837,7 +934,7 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
                           {conversation.last_message.sender_id === currentUserId && (
                             <span className="text-gray-300">אתה: </span>
                           )}
-                          {conversation.last_message.content}
+                          {messagePreview(conversation.last_message.content)}
                         </p>
                       )}
                     </div>

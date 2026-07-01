@@ -5,6 +5,8 @@ import { flagEmoji } from '../utils/flags';
 import { UserAvatar } from './UserAvatar';
 import { getCategoryEmoji } from '../utils/eventCategories';
 import { BookingFlow } from './BookingFlow';
+import { ShareEventSheet } from './ShareEventSheet';
+import { OpenLocationSheet } from './OpenLocationSheet';
 
 export type Attendee = {
   id: string;
@@ -42,6 +44,7 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
   const [saved, setSaved]             = useState(false);
   const [showPayment, setShowPayment] = useState(false);
   const [showNav, setShowNav] = useState(false);
+  const [showShare, setShowShare] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const currentUserId = propUserId || '00000000-0000-0000-0000-000000000001';
@@ -155,13 +158,9 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
   const fmtDate = (d: string) => new Date(d).toLocaleDateString('he-IL', { day: 'numeric', month: 'long', year: 'numeric' });
   const fmtTime = (d: string) => new Date(d).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' });
 
-  const handleShare = async () => {
-    const url = window.location.href;
-    const text = `${event.title}${event.city ? ' · ' + event.city : ''}`;
-    try {
-      if (navigator.share) await navigator.share({ title: event.title, text, url });
-      else if (navigator.clipboard) { await navigator.clipboard.writeText(`${text}\n${url}`); alert('הקישור הועתק'); }
-    } catch { /* user dismissed the share sheet */ }
+  const handleShare = () => {
+    // Open the in-app share sheet (send the event to chats / groups).
+    setShowShare(true);
   };
 
   // Tapping the map → open the exact location inside the app's map.
@@ -170,19 +169,6 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
     if (event.latitude == null || event.longitude == null) return;
     if (onOpenMapAt) { onOpenMapAt(event.latitude, event.longitude); onClose(); }
     else setShowNav(true);
-  };
-
-  // Open the exact location in an external navigation app.
-  const openNav = (app: 'google' | 'apple' | 'waze') => {
-    const lat = event.latitude, lng = event.longitude;
-    if (lat == null || lng == null) return;
-    const label = encodeURIComponent(event.title || event.city || '');
-    const url =
-      app === 'google' ? `https://www.google.com/maps/search/?api=1&query=${lat},${lng}` :
-      app === 'apple'  ? `https://maps.apple.com/?ll=${lat},${lng}&q=${label}` :
-                         `https://waze.com/ul?ll=${lat},${lng}&navigate=yes`;
-    window.open(url, '_blank');
-    setShowNav(false);
   };
 
   const joinLabel = isJoined ? 'ביטול השתתפות'
@@ -528,65 +514,19 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
         />
       )}
 
-      {/* ── Navigation picker sheet ── */}
-      {showNav && (
-        <>
-          <div
-            className="fixed inset-0 z-30"
-            style={{ background: 'rgba(0,0,0,0.45)', backdropFilter: 'blur(3px)' }}
-            onClick={() => setShowNav(false)}
-          />
-          <div
-            className="fixed bottom-0 left-0 right-0 z-40 bg-white"
-            dir="rtl"
-            style={{
-              borderRadius: '24px 24px 0 0',
-              animation: 'payment-up 0.32s cubic-bezier(0.16,1,0.3,1)',
-              paddingBottom: 'max(28px, env(safe-area-inset-bottom))',
-            }}
-          >
-            <div className="flex justify-center pt-3 pb-1">
-              <div className="w-10 h-1 rounded-full bg-gray-200" />
-            </div>
-            <div className="px-5 pt-3 pb-4" style={{ borderBottom: '1px solid #F3F4F6' }}>
-              <p className="text-[18px] font-black text-gray-900 text-center" style={{ fontFamily: 'Heebo, sans-serif' }}>
-                ניווט למיקום
-              </p>
-              <p className="text-[13px] text-gray-400 text-center mt-1">{event.title}{event.city ? ' · ' + event.city : ''}</p>
-            </div>
+      {/* ── Share event to chats ── */}
+      {showShare && (
+        <ShareEventSheet event={event} currentUserId={currentUserId} onClose={() => setShowShare(false)} />
+      )}
 
-            <div className="px-5 pt-4 flex flex-col gap-3">
-              {[
-                { id: 'google' as const, label: 'Google Maps', emoji: '🗺️' },
-                { id: 'apple'  as const, label: 'Apple Maps',  emoji: '🍎' },
-                { id: 'waze'   as const, label: 'Waze',        emoji: '🚗' },
-              ].map(opt => (
-                <button
-                  key={opt.id}
-                  onClick={() => openNav(opt.id)}
-                  className="w-full flex items-center gap-4 active:scale-[0.98] transition-transform"
-                  style={{ background: '#F9FAFB', border: '1.5px solid #E5E7EB', borderRadius: 16, padding: '14px 16px' }}
-                >
-                  <div className="flex-shrink-0 w-10 h-10 rounded-[10px] flex items-center justify-center bg-white text-[20px]" style={{ border: '1.5px solid #E5E7EB' }}>
-                    {opt.emoji}
-                  </div>
-                  <span className="text-[15px] font-bold text-gray-900 flex-1 text-right" style={{ fontFamily: 'Heebo, sans-serif' }}>{opt.label}</span>
-                  <Navigation className="w-4 h-4" style={{ color: '#9CA3AF' }} />
-                </button>
-              ))}
-            </div>
-
-            <div className="px-5 mt-3">
-              <button
-                onClick={() => setShowNav(false)}
-                className="w-full text-center text-[15px] font-semibold text-gray-400 py-3"
-                style={{ fontFamily: 'Heebo, sans-serif' }}
-              >
-                ביטול
-              </button>
-            </div>
-          </div>
-        </>
+      {/* ── Navigation picker — real Apple/Google/Waze logos, opens the native app ── */}
+      {showNav && event.latitude != null && event.longitude != null && (
+        <OpenLocationSheet
+          lat={event.latitude}
+          lng={event.longitude}
+          name={event.title || event.city || 'מיקום האירוע'}
+          onClose={() => setShowNav(false)}
+        />
       )}
     </div>
   );

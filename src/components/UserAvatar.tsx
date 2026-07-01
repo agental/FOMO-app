@@ -23,7 +23,19 @@ const iconSizes = {
   xlarge: 'w-12 h-12',
 };
 
+// Distinct per-user avatar colors (WhatsApp-style) — hashed from a stable id so each user gets their own.
+const AVATAR_COLORS = [
+  '#EF5350', '#EC407A', '#AB47BC', '#7E57C2', '#5C6BC0', '#42A5F5', '#26A69A',
+  '#66BB6A', '#9CCC65', '#FFA726', '#FF7043', '#8D6E63', '#26C6DA', '#78909C',
+];
+const avatarColor = (key: string) => {
+  let h = 0;
+  for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0;
+  return AVATAR_COLORS[h % AVATAR_COLORS.length];
+};
+
 export function UserAvatar({
+  userId,
   avatarUrl,
   displayName,
   size = 'medium',
@@ -53,7 +65,8 @@ export function UserAvatar({
   return (
     <div
       onClick={onClick}
-      className={`${sizeClasses[size]} rounded-full bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center text-white font-bold ${className} ${clickableClasses}`}
+      style={{ background: avatarColor(userId || displayName || '?') }}
+      className={`${sizeClasses[size]} rounded-full flex items-center justify-center text-white font-bold ${className} ${clickableClasses}`}
     >
       {displayName ? firstLetter : <User className={iconSizes[size]} />}
     </div>
