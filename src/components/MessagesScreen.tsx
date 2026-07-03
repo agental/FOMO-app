@@ -415,6 +415,7 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
         lastMessage: preview,
         lastMessageAt: lastMsg?.created_at ?? null,
         unreadCount: unreadRes.count ?? 0,
+        memberStatus: mStatus,
       };
     }));
 
@@ -759,10 +760,14 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
                       {gc.countryFlag} {gc.cityName}
                     </h3>
                     <span className="text-[12px] text-gray-400 flex-shrink-0 ml-2">
-                      {gc.lastMessageAt ? formatTime(gc.lastMessageAt) : ''}
+                      {gc.memberStatus === 'pending' ? '' : (gc.lastMessageAt ? formatTime(gc.lastMessageAt) : '')}
                     </span>
                   </div>
-                  {typingChats[gc.channelId] ? (
+                  {gc.memberStatus === 'pending' ? (
+                    <p className="text-[13px] truncate text-right font-semibold" style={{ color: '#F97316' }}>
+                      ⏳ ממתין לאישור מנהל הקבוצה
+                    </p>
+                  ) : typingChats[gc.channelId] ? (
                     <p className="text-[13px] truncate text-right font-semibold" style={{ color: '#F97316' }}>
                       {typingChats[gc.channelId].name ? `${typingChats[gc.channelId].name} מקליד/ה…` : 'מקליד/ה…'}
                     </p>
@@ -774,7 +779,7 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
                 </div>
 
                 {/* Unread badge */}
-                {gc.unreadCount > 0 && (
+                {gc.unreadCount > 0 && gc.memberStatus !== 'pending' && (
                   <div style={{
                     minWidth: 20, height: 20, borderRadius: 10, padding: '0 5px',
                     background: 'linear-gradient(135deg, #F97316, #EA580C)',

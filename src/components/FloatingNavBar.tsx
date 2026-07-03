@@ -99,7 +99,6 @@ export function FloatingNavBar({
               }`}>
                 <Home className="w-5 h-5" strokeWidth={2.5} style={{ color: activeTab === 'home' ? '#F97316' : '#9ca3af' }} />
               </div>
-              <div className="w-1 h-1 rounded-full transition-all duration-300" style={{ background: activeTab === 'home' ? '#F97316' : 'transparent' }} />
             </button>
 
             <button
@@ -112,7 +111,6 @@ export function FloatingNavBar({
               }`}>
                 <Map className="w-4.5 h-4.5" strokeWidth={2} style={{ color: activeTab === 'map' ? '#F97316' : '#9ca3af' }} />
               </div>
-              <div className="w-1 h-1 rounded-full transition-all duration-300" style={{ background: activeTab === 'map' ? '#F97316' : 'transparent' }} />
             </button>
 
             <button
@@ -142,7 +140,6 @@ export function FloatingNavBar({
                   </span>
                 </div>
               )}
-              <div className="w-1 h-1 rounded-full transition-all duration-300" style={{ background: activeTab === 'chat' ? '#F97316' : 'transparent' }} />
             </button>
 
             <button
@@ -157,7 +154,6 @@ export function FloatingNavBar({
               }`}>
                 <CalendarCheck className="w-4.5 h-4.5" strokeWidth={2} style={{ color: activeTab === 'myEvents' ? '#F97316' : '#9ca3af' }} />
               </div>
-              <div className="w-1 h-1 rounded-full transition-all duration-300" style={{ background: activeTab === 'myEvents' ? '#F97316' : 'transparent' }} />
             </button>
           </div>
         </div>
