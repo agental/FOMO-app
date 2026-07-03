@@ -46,6 +46,20 @@ function App() {
     };
   }, []);
 
+  // Native OAuth bridge: the Expo wrapper opens Google/Apple in the system browser
+  // (embedded webviews are blocked by the providers) and calls this back with the
+  // access_token + refresh_token from the implicit-flow redirect fragment. setSession
+  // establishes the session here → a normal SIGNED_IN event then routes the user.
+  useEffect(() => {
+    (window as unknown as { __fomoSetSession?: (a: string, r: string) => void }).__fomoSetSession = async (accessToken: string, refreshToken: string) => {
+      try {
+        await supabase.auth.setSession({ access_token: accessToken, refresh_token: refreshToken });
+      } catch (err) {
+        console.error('OAuth setSession failed:', err);
+      }
+    };
+  }, []);
+
   // Remember the screen the user came from, so a viewed profile can return there
   useEffect(() => {
     if (currentScreen !== 'userProfile') setProfileBackScreen(currentScreen);
@@ -226,6 +240,10 @@ function App() {
       alert('אירעה שגיאה ביצירת השיחה');
     }
   };
+
+
+
+
 
 
 

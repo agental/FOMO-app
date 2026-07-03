@@ -11,6 +11,10 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
     detectSessionInUrl: true,
     persistSession: true,
+    // Implicit flow: OAuth returns access_token + refresh_token directly in the URL
+    // fragment. The native wrapper reads them and calls setSession — no PKCE code
+    // exchange / code_verifier (which is fragile in a non-secure http WebView).
+    flowType: 'implicit',
   },
 });
 

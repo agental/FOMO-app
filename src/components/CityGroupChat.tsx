@@ -1115,66 +1115,74 @@ export function CityGroupChat({
           textAlign: 'center',
         }}>
           {isLoading ? (
-            <div style={{ width: 40, height: 40, borderRadius: '50%', border: '3px solid #FFE4CC', borderTopColor: '#F97316', animation: 'gchat-spin 0.8s linear infinite' }} />
+            <div style={{ width: 54, height: 54, borderRadius: '50%', border: '3px solid #FCE3CC', borderTopColor: '#F97316', animation: 'gchat-spin 0.8s linear infinite' }} />
           ) : isJustApproved ? (
             <>
-              <div style={{
-                width: 90, height: 90, borderRadius: '50%',
-                background: 'linear-gradient(135deg,#D1FAE5,#A7F3D0)',
-                display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 42,
-                boxShadow: '0 4px 20px rgba(16,185,129,0.3)',
-                animation: 'approved-pop 0.5s cubic-bezier(0.175,0.885,0.32,1.275)',
-              }}>🎉</div>
-              <style>{`@keyframes approved-pop { from{transform:scale(0.4);opacity:0} to{transform:scale(1);opacity:1} }`}</style>
-              <h2 style={{ fontSize: 22, fontWeight: 800, color: '#059669', margin: 0, textAlign: 'center' }}>אושרת לקבוצה!</h2>
-              <p style={{ fontSize: 15, color: '#555', margin: 0, textAlign: 'center', lineHeight: 1.6 }}>
-                המנהל אישר את בקשתך להצטרף לקבוצת <strong>{cityName}</strong>.
+              <div style={{ animation: 'approved-pop 0.5s cubic-bezier(0.175,0.885,0.32,1.275)' }}>
+                {heroOrb('🎉', '#10B981')}
+              </div>
+              <h2 style={{ fontSize: 25, fontWeight: 800, color: '#059669', margin: '0 0 10px', animation: 'fomo-rise .5s both .05s' }}>אושרת לקבוצה!</h2>
+              <p style={{ fontSize: 15.5, color: '#57534E', margin: '0 0 26px', lineHeight: 1.65, maxWidth: 300, animation: 'fomo-rise .5s both .12s' }}>
+                המנהל אישר את בקשתך להצטרף לקבוצת <strong style={{ color: '#1C1C1E' }}>{cityName}</strong> 🎊
               </p>
-              <button
+              <button className="fomo-btn"
                 onClick={() => { if (channelId) _memberStatusCache[channelId] = 'approved'; setMemberStatus('approved'); }}
-                style={{ marginTop: 12, padding: '13px 40px', borderRadius: 26, border: 'none', background: 'linear-gradient(135deg,#10B981,#059669)', color: '#fff', fontSize: 16, fontWeight: 700, cursor: 'pointer', boxShadow: '0 4px 14px rgba(16,185,129,0.4)' }}>
+                style={{ width: '100%', maxWidth: 300, padding: '15px 24px', borderRadius: 16, border: 'none', background: 'linear-gradient(135deg,#34D399,#059669)', color: '#fff', fontSize: 16.5, fontWeight: 700, cursor: 'pointer', boxShadow: '0 8px 22px rgba(16,185,129,0.35)', animation: 'fomo-rise .5s both .2s' }}>
                 כניסה לקבוצה
               </button>
             </>
           ) : isLeft ? (
             <>
-              <div style={{ fontSize: 56 }}>{cityEmoji}</div>
-              <h2 style={{ fontSize: 20, fontWeight: 700, color: '#111', margin: 0, textAlign: 'center' }}>עזבת את קבוצת {cityName}</h2>
-              <p style={{ fontSize: 15, color: '#666', margin: 0, textAlign: 'center', lineHeight: 1.6 }}>
-                כבר לא קיבלת הודעות מהקבוצה הזו. אפשר להצטרף שוב בכל רגע.
+              {heroOrb(cityEmoji, '#F97316', false)}
+              <h2 style={{ fontSize: 22, fontWeight: 800, color: '#1C1C1E', margin: '0 0 10px', animation: 'fomo-rise .5s both .05s' }}>עזבת את קבוצת {cityName}</h2>
+              <p style={{ fontSize: 15.5, color: '#6B7280', margin: '0 0 26px', lineHeight: 1.65, maxWidth: 300, animation: 'fomo-rise .5s both .12s' }}>
+                כבר לא מגיעות אליך הודעות מהקבוצה. אפשר להצטרף שוב בכל רגע.
               </p>
-              <button
+              <button className="fomo-btn"
                 onClick={rejoinGroup}
-                style={{ marginTop: 8, padding: '12px 36px', borderRadius: 24, border: 'none', background: 'linear-gradient(135deg,#F97316,#EA580C)', color: '#fff', fontSize: 16, fontWeight: 700, cursor: 'pointer', boxShadow: '0 3px 10px rgba(234,88,12,0.35)' }}>
+                style={{ width: '100%', maxWidth: 300, padding: '15px 24px', borderRadius: 16, border: 'none', background: 'linear-gradient(135deg,#FB923C,#F97316)', color: '#fff', fontSize: 16.5, fontWeight: 700, cursor: 'pointer', boxShadow: '0 8px 22px rgba(249,115,22,0.32)', animation: 'fomo-rise .5s both .2s' }}>
                 הצטרף מחדש
               </button>
-              <button onClick={onClose} style={{ background: 'none', border: 'none', color: '#999', fontSize: 14, cursor: 'pointer' }}>חזרה</button>
+              <button onClick={onClose} style={{ marginTop: 14, background: 'none', border: 'none', color: '#9CA3AF', fontSize: 14.5, fontWeight: 600, cursor: 'pointer', animation: 'fomo-rise .5s both .26s' }}>חזרה</button>
             </>
           ) : isPending ? (
             <>
-              <div style={{ width: 80, height: 80, borderRadius: '50%', background: '#FFF3E0', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 36 }}>⏳</div>
-              <h2 style={{ fontSize: 20, fontWeight: 700, color: '#111', margin: 0, textAlign: 'center' }}>בקשתך נשלחה!</h2>
-              <p style={{ fontSize: 15, color: '#666', margin: 0, textAlign: 'center', lineHeight: 1.6 }}>
-                הבקשה שלך להצטרף לקבוצת <strong>{cityName}</strong> ממתינה לאישור מנהל הקבוצה.
+              {heroOrb('⏳', '#F59E0B')}
+              <h2 style={{ fontSize: 23, fontWeight: 800, color: '#1C1C1E', margin: '0 0 10px', animation: 'fomo-rise .5s both .05s' }}>בקשתך נשלחה!</h2>
+              <p style={{ fontSize: 15.5, color: '#6B7280', margin: '0 0 18px', lineHeight: 1.65, maxWidth: 300, animation: 'fomo-rise .5s both .12s' }}>
+                הבקשה שלך להצטרף לקבוצת <strong style={{ color: '#1C1C1E' }}>{cityName}</strong> ממתינה לאישור המנהל.
               </p>
-              <p style={{ fontSize: 13, color: '#999', margin: 0, textAlign: 'center' }}>תקבל גישה ברגע שהמנהל יאשר</p>
-              <button onClick={onClose} style={{ marginTop: 8, padding: '10px 28px', borderRadius: 24, border: '1.5px solid #F97316', background: '#fff', color: '#F97316', fontSize: 15, fontWeight: 600, cursor: 'pointer' }}>
+              <div style={{ display: 'flex', gap: 7, marginBottom: 20, animation: 'fomo-rise .5s both .18s' }}>
+                {[0, 1, 2].map(i => <span key={i} style={{ width: 9, height: 9, borderRadius: '50%', background: '#F59E0B', animation: `fomo-dot 1.2s ease-in-out ${i * 0.18}s infinite` }} />)}
+              </div>
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '8px 14px', borderRadius: 999, background: 'rgba(255,255,255,0.75)', border: '1px solid #F3E8DD', fontSize: 13, color: '#78716C', fontWeight: 600, marginBottom: 26, animation: 'fomo-rise .5s both .24s' }}>
+                🔔 תקבל גישה ברגע שהמנהל יאשר
+              </div>
+              <button className="fomo-btn" onClick={onClose}
+                style={{ width: '100%', maxWidth: 300, padding: '14px 24px', borderRadius: 16, border: '1.5px solid #FED7AA', background: '#fff', color: '#EA580C', fontSize: 15.5, fontWeight: 700, cursor: 'pointer', animation: 'fomo-rise .5s both .3s' }}>
                 חזרה
               </button>
             </>
           ) : (
             <>
-              <div style={{ fontSize: 56 }}>{cityEmoji}</div>
-              <h2 style={{ fontSize: 20, fontWeight: 700, color: '#111', margin: 0, textAlign: 'center' }}>קבוצת {cityName}</h2>
-              <p style={{ fontSize: 15, color: '#666', margin: 0, textAlign: 'center', lineHeight: 1.6 }}>
-                כדי להצטרף לקבוצה, שלח בקשה למנהל הקבוצה.
+              {heroOrb(cityEmoji)}
+              <h2 style={{ fontSize: 26, fontWeight: 800, color: '#1C1C1E', margin: '0 0 10px', animation: 'fomo-rise .5s both .05s' }}>קבוצת {cityName}</h2>
+              <p style={{ fontSize: 15.5, color: '#6B7280', margin: '0 0 22px', lineHeight: 1.65, maxWidth: 305, animation: 'fomo-rise .5s both .12s' }}>
+                הצטרף לטיילים ב{cityName} — שתפו חוויות, קבלו המלצות ומצאו חברים לדרך.
               </p>
-              <button
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center', marginBottom: 30, animation: 'fomo-rise .5s both .19s' }}>
+                {([['💬', "צ'אט חי"], ['📍', 'המלצות מקומיות'], ['🤝', 'חברים לדרך']] as [string, string][]).map(([e, t]) => (
+                  <span key={t} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 13px', borderRadius: 999, background: 'rgba(255,255,255,0.82)', border: '1px solid #F3E8DD', fontSize: 13, fontWeight: 600, color: '#57534E', boxShadow: '0 1px 4px rgba(0,0,0,0.04)' }}>
+                    <span style={{ fontSize: 15 }}>{e}</span>{t}
+                  </span>
+                ))}
+              </div>
+              <button className="fomo-btn"
                 onClick={handleRequestJoin}
-                style={{ marginTop: 8, padding: '12px 36px', borderRadius: 24, border: 'none', background: 'linear-gradient(135deg,#F97316,#EA580C)', color: '#fff', fontSize: 16, fontWeight: 700, cursor: 'pointer', boxShadow: '0 3px 10px rgba(234,88,12,0.35)' }}>
+                style={{ width: '100%', maxWidth: 300, padding: '15px 24px', borderRadius: 16, border: 'none', background: 'linear-gradient(135deg,#FB923C,#F97316)', color: '#fff', fontSize: 16.5, fontWeight: 700, cursor: 'pointer', boxShadow: '0 8px 22px rgba(249,115,22,0.35)', animation: 'fomo-rise .5s both .26s' }}>
                 בקש להצטרף
               </button>
-              <button onClick={onClose} style={{ background: 'none', border: 'none', color: '#999', fontSize: 14, cursor: 'pointer' }}>ביטול</button>
+              <button onClick={onClose} style={{ marginTop: 14, background: 'none', border: 'none', color: '#9CA3AF', fontSize: 14.5, fontWeight: 600, cursor: 'pointer', animation: 'fomo-rise .5s both .32s' }}>ביטול</button>
             </>
           )}
         </div>

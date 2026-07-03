@@ -1292,14 +1292,11 @@ export function HomeScreen({
                                   <div className="absolute inset-0 bg-gradient-to-br from-brand-500 via-brand-600 to-violet-700" />
                                 )}
                                 <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/20 to-transparent" />
-                                <div className="absolute top-3 inset-x-3 flex items-center justify-between">
+                                <div className="absolute top-3 inset-x-3 flex items-center justify-start">
                                   <div className="flex items-center gap-1 bg-black/40 backdrop-blur-sm text-white text-[11px] font-bold px-2.5 py-1 rounded-full">
                                     <Users className="w-3 h-3" />
                                     <span>{event.attendees.length}</span>
                                   </div>
-                                  <span className="bg-orange-500/90 backdrop-blur-sm text-white text-[11px] font-bold px-2.5 py-1 rounded-full">
-                                    🔥 חם
-                                  </span>
                                 </div>
                                 <div className="absolute bottom-0 left-0 right-0 p-3.5">
                                   <h3
