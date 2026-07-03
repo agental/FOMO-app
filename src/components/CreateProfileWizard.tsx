@@ -1,8 +1,8 @@
-import { useState, useRef, useEffect } from 'react';
-import { User, Heart, ArrowRight, ArrowLeft, Check, Camera, Sparkles, CircleUser as UserCircle2, Cake, MapPin, Instagram } from 'lucide-react';
+import { useState, useRef, useLayoutEffect } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { ChevronRight, Check, Camera, Loader2, Circle } from 'lucide-react';
 import { supabase } from '../lib/supabase';
-import { COUNTRIES } from '../utils/countries';
-import { SUGGESTED_LANGUAGES, SUGGESTED_INTERESTS } from '../utils/suggestions';
+import { SUGGESTED_INTERESTS } from '../utils/suggestions';
 
 interface CreateProfileWizardProps {
   userId: string;
@@ -10,771 +10,428 @@ interface CreateProfileWizardProps {
   onBack?: () => void;
 }
 
-const STEPS = [
-  { id: 1, title: 'פרטים בסיסיים', icon: User },
-  { id: 2, title: 'תחומי עניין', icon: Heart },
-  { id: 3, title: 'סיום', icon: Check },
+/* ── Tokens — clean & white, FOMO orange accent ── */
+const ORANGE = '#F97316';
+const ORANGE_DARK = '#EA580C';
+const INK = '#1C1C1E';
+const GRAY = '#78716C';
+const HAIRLINE = '#EFEBE6';
+const CARD_SHADOW = '0 2px 12px rgba(0,0,0,0.06)';
+
+const haptic = (ms: number) => { try { navigator.vibrate?.(ms); } catch { /* unsupported */ } };
+
+type StepKey = 'name' | 'photo' | 'age' | 'gender' | 'interests' | 'bio' | 'instagram' | 'done';
+const FLOW: StepKey[] = ['age', 'name', 'gender', 'instagram', 'bio', 'interests', 'photo', 'done'];
+const OPTIONAL: StepKey[] = ['photo', 'bio', 'instagram'];
+
+const GENDERS = [
+  { key: 'male', label: 'גבר', icon: '♂' },
+  { key: 'female', label: 'אישה', icon: '♀' },
+  { key: 'other', label: 'אחר', icon: '⚧' },
 ];
 
+const INTEREST_EMOJI: Record<string, string> = {
+  'טיולים': '🥾', 'טבע': '🌿', 'אוכל': '🍜', 'צילום': '📸', 'ספורט': '⚽', 'יוגה': '🧘', 'מדיטציה': '🧘‍♂️',
+  'ישיבות': '📿', 'אומנות': '🎨', 'מוזיקה': '🎵', 'ריקוד': '💃', 'גלישה': '🏄', 'טיפוס': '🧗', 'צלילה': '🤿',
+  'קמפינג': '🏕️', 'אופניים': '🚴', 'היסטוריה': '🏛️', 'תרבות': '🎭', 'שפות': '🗣️', 'קריאה': '📚', 'כתיבה': '✍️',
+  'בישול': '👨‍🍳', 'מסעדות': '🍽️', 'בארים': '🍸', 'חיי לילה': '🌙', 'וולנטריות': '🤝', 'עבודה מרחוק': '💻',
+};
+const emojiFor = (i: string) => INTEREST_EMOJI[i] ?? '✨';
+
+const MAX_BIO = 150;
+
+/* ── Birthday wheel picker (iOS-style) ── */
+const HE_MONTHS = ['ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי', 'יוני', 'יולי', 'אוגוסט', 'ספטמבר', 'אוקטובר', 'נובמבר', 'דצמבר'];
+const DAYS = Array.from({ length: 31 }, (_, i) => String(i + 1));
+const _now = new Date();
+const MAX_YEAR = _now.getFullYear() - 18;          // must be at least 18
+const MIN_YEAR = 1950;
+const YEARS = Array.from({ length: MAX_YEAR - MIN_YEAR + 1 }, (_, i) => MIN_YEAR + i); // ascending
+const computeAge = (y: number, m: number, d: number) => {
+  let a = _now.getFullYear() - y;
+  const md = _now.getMonth() - m;
+  if (md < 0 || (md === 0 && _now.getDate() < d)) a--;
+  return a;
+};
+
+const ITEM_H = 40;
+function Wheel({ items, value, onChange }: { items: string[]; value: number; onChange: (i: number) => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const raf = useRef<number | null>(null);
+  useLayoutEffect(() => { if (ref.current) ref.current.scrollTop = value * ITEM_H; /* init only */ // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const onScroll = () => {
+    if (raf.current) cancelAnimationFrame(raf.current);
+    raf.current = requestAnimationFrame(() => {
+      const el = ref.current; if (!el) return;
+      const i = Math.max(0, Math.min(items.length - 1, Math.round(el.scrollTop / ITEM_H)));
+      if (i !== value) { haptic(3); onChange(i); }
+    });
+  };
+  return (
+    <div ref={ref} onScroll={onScroll} className="flex-1 hf-wheel"
+      style={{ height: ITEM_H * 7, overflowY: 'scroll', scrollSnapType: 'y mandatory', scrollbarWidth: 'none', WebkitMaskImage: 'linear-gradient(to bottom, transparent, #000 26%, #000 74%, transparent)', maskImage: 'linear-gradient(to bottom, transparent, #000 26%, #000 74%, transparent)' }}>
+      <div style={{ height: ITEM_H * 3 }} />
+      {items.map((it, i) => (
+        <div key={i} style={{ height: ITEM_H, scrollSnapAlign: 'center', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'Heebo, sans-serif', fontSize: i === value ? 21 : 18, fontWeight: i === value ? 700 : 500, color: i === value ? INK : '#C4BFB8', transition: 'color .15s, font-size .12s' }}>{it}</div>
+      ))}
+      <div style={{ height: ITEM_H * 3 }} />
+    </div>
+  );
+}
+
 export function CreateProfileWizard({ userId, onComplete, onBack }: CreateProfileWizardProps) {
-  const [currentStep, setCurrentStep] = useState(1);
+  const [[index], setPage] = useState<[number, number]>([0, 0]);
+  const step = FLOW[index];
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isUploadingImage, setIsUploadingImage] = useState(false);
-  const [isDetectingLocation, setIsDetectingLocation] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [displayName, setDisplayName] = useState('');
+  const [birthD, setBirthD] = useState(2);   // default: 2 July 2001
+  const [birthM, setBirthM] = useState(6);
+  const [birthY, setBirthY] = useState(2001);
+  const [ageOpen, setAgeOpen] = useState(false); // date wheel hidden until the user taps "בחר גיל"
+  const [ageConfirm, setAgeConfirm] = useState(false); // "your age is X — confirm?" dialog
+  const age = computeAge(birthY, birthM, birthD);
+  const [gender, setGender] = useState('');
+  const [interests, setInterests] = useState<string[]>([]);
   const [bio, setBio] = useState('');
-  const [age, setAge] = useState('');
   const [instagram, setInstagram] = useState('');
 
-  const [currentCountry, setCurrentCountry] = useState('');
-  const [languages, setLanguages] = useState<string[]>([]);
-  const [customLanguage, setCustomLanguage] = useState('');
-
-  const [interests, setInterests] = useState<string[]>([]);
-  const [customInterest, setCustomInterest] = useState('');
-
-  const MAX_BIO_LENGTH = 150;
-
-  useEffect(() => {
-    if (currentStep === 3 && !currentCountry) {
-      detectUserLocation();
-    }
-  }, [currentStep]);
-
-  const toggleLanguage = (lang: string) => {
-    setLanguages(prev =>
-      prev.includes(lang) ? prev.filter(l => l !== lang) : [...prev, lang]
-    );
-  };
-
-  const addCustomLanguage = () => {
-    if (customLanguage.trim() && !languages.includes(customLanguage.trim())) {
-      setLanguages([...languages, customLanguage.trim()]);
-      setCustomLanguage('');
-    }
-  };
-
-  const toggleInterest = (interest: string) => {
-    setInterests(prev =>
-      prev.includes(interest) ? prev.filter(i => i !== interest) : [...prev, interest]
-    );
-  };
-
-  const addCustomInterest = () => {
-    if (customInterest.trim() && !interests.includes(customInterest.trim())) {
-      setInterests([...interests, customInterest.trim()]);
-      setCustomInterest('');
-    }
-  };
-
-  const detectUserLocation = async () => {
-    if (!navigator.geolocation) {
-      console.log('Geolocation is not supported');
-      return;
-    }
-
-    setIsDetectingLocation(true);
-
-    navigator.geolocation.getCurrentPosition(
-      async (position) => {
-        try {
-          const { latitude, longitude } = position.coords;
-
-          const response = await fetch(
-            `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${latitude}&longitude=${longitude}&localityLanguage=en`
-          );
-
-          if (!response.ok) throw new Error('Failed to fetch location');
-
-          const data = await response.json();
-          const countryCode = data.countryCode;
-
-          if (countryCode && COUNTRIES[countryCode]) {
-            setCurrentCountry(countryCode);
-          }
-        } catch (err) {
-          console.error('Location detection error:', err);
-        } finally {
-          setIsDetectingLocation(false);
-        }
-      },
-      (error) => {
-        console.error('Geolocation error:', error);
-        setIsDetectingLocation(false);
-      },
-      {
-        enableHighAccuracy: false,
-        timeout: 10000,
-        maximumAge: 300000
-      }
-    );
-  };
+  const firstName = displayName.trim().split(' ')[0];
 
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
-    if (!file.type.startsWith('image/')) {
-      setError('נא להעלות קובץ תמונה בלבד');
-      return;
-    }
-
-    if (file.size > 5 * 1024 * 1024) {
-      setError('התמונה גדולה מדי. גודל מקסימלי: 5MB');
-      return;
-    }
-
+    if (!file.type.startsWith('image/')) { setError('נא להעלות קובץ תמונה בלבד'); return; }
+    if (file.size > 5 * 1024 * 1024) { setError('התמונה גדולה מדי (מקס׳ 5MB)'); return; }
     setError(null);
     setIsUploadingImage(true);
-
     try {
-      const fileExt = file.name.split('.').pop();
-      const fileName = `${userId}-${Date.now()}.${fileExt}`;
-      const filePath = `avatars/${fileName}`;
-
-      const { error: uploadError } = await supabase.storage
-        .from('images')
-        .upload(filePath, file, {
-          cacheControl: '3600',
-          upsert: false,
-        });
-
-      if (uploadError) throw uploadError;
-
-      const { data: { publicUrl } } = supabase.storage
-        .from('images')
-        .getPublicUrl(filePath);
-
+      const ext = file.name.split('.').pop();
+      const path = `avatars/${userId}-${Date.now()}.${ext}`;
+      const { error: upErr } = await supabase.storage.from('images').upload(path, file, { cacheControl: '3600', upsert: false });
+      if (upErr) throw upErr;
+      const { data: { publicUrl } } = supabase.storage.from('images').getPublicUrl(path);
       setAvatarUrl(publicUrl);
-
-      await supabase
-        .from('users')
-        .update({ avatar_url: publicUrl })
-        .eq('id', userId);
-
+      supabase.from('users').update({ avatar_url: publicUrl }).eq('id', userId);
     } catch (err: any) {
-      console.error('Upload error:', err);
       setError(err.message || 'שגיאה בהעלאת התמונה');
-    } finally {
-      setIsUploadingImage(false);
-    }
+    } finally { setIsUploadingImage(false); }
   };
+
+  const toggle = (arr: string[], setArr: (v: string[]) => void, v: string) =>
+    setArr(arr.includes(v) ? arr.filter(x => x !== v) : [...arr, v]);
 
   const canContinue = () => {
-    if (currentStep === 1) return displayName.trim().length > 0;
-    if (currentStep === 2) return interests.length > 0;
-    if (currentStep === 3) return languages.length > 0;
-    return false;
-  };
-
-  const handleNext = () => {
-    if (currentStep < STEPS.length) {
-      setCurrentStep(currentStep + 1);
-    } else {
-      handleSubmit();
+    switch (step) {
+      case 'name': return displayName.trim().length > 0;
+      case 'age': return ageOpen && age >= 18;
+      case 'gender': return !!gender;
+      case 'interests': return interests.length > 0;
+      default: return true;
     }
   };
+  const stepHasValue = () => {
+    if (step === 'photo') return !!avatarUrl;
+    if (step === 'bio') return bio.trim().length > 0;
+    if (step === 'instagram') return instagram.trim().length > 0;
+    return true;
+  };
 
-  const handleBack = () => {
-    if (currentStep > 1) {
-      setCurrentStep(currentStep - 1);
-    }
+  const paginate = (d: number) => {
+    const next = index + d;
+    if (next < 0) { onBack?.(); return; }
+    if (next >= FLOW.length) return;
+    haptic(6);
+    setPage([next, d]);
   };
 
   const handleSubmit = async () => {
     setError(null);
     setLoading(true);
-
     try {
-      console.log('Saving profile data:', {
+      const { data: { user: authUser } } = await supabase.auth.getUser();
+      const { error: upErr } = await supabase.from('users').upsert({
+        id: userId,
+        email: authUser?.email ?? '',
         avatar_url: avatarUrl,
         display_name: displayName,
         bio: bio || null,
-        age: age ? parseInt(age) : null,
-        current_country: currentCountry || null,
-        languages: languages.length > 0 ? languages : [],
-        interests: interests.length > 0 ? interests : [],
+        age,
+        current_country: null, // set on the country-selection screen from real GPS location
+        languages: [],
+        interests,
         instagram: instagram || null,
         profile_completed: true,
-      });
-
-      const { data: { user: authUser } } = await supabase.auth.getUser();
-
-      const { data, error } = await supabase
-        .from('users')
-        .upsert({
-          id: userId,
-          email: authUser?.email ?? '',
-          avatar_url: avatarUrl,
-          display_name: displayName,
-          bio: bio || null,
-          age: age ? parseInt(age) : null,
-          current_country: currentCountry || null,
-          languages: languages.length > 0 ? languages : [],
-          interests: interests.length > 0 ? interests : [],
-          instagram: instagram || null,
-          profile_completed: true,
-          selected_countries: [],
-          is_location_shared: false,
-          role: 'user',
-        })
-        .select();
-
-      console.log('Update result:', { data, error });
-      if (error) {
-        console.error('Upsert error JSON:', JSON.stringify(error));
-        throw error;
-      }
-
+        selected_countries: [], // chosen on the country-selection screen
+        is_location_shared: false,
+        role: 'user',
+      }).select();
+      if (upErr) throw upErr;
+      if (gender) { const { error: gErr } = await supabase.from('users').update({ gender }).eq('id', userId); if (gErr) console.warn('gender not saved (add a `gender` column):', gErr.message); }
       onComplete();
     } catch (err: any) {
-      const msg = err?.message || err?.error_description || JSON.stringify(err);
-      console.error('Profile save error:', msg);
-      setError(msg || 'אירעה שגיאה בשמירת הפרופיל');
-    } finally {
-      setLoading(false);
+      setError(err?.message || 'אירעה שגיאה בשמירת הפרופיל');
+    } finally { setLoading(false); }
+  };
+
+  /* ── shared bits ── */
+  const Title = ({ t, s }: { t: string; s?: string }) => (
+    <div className="mb-7">
+      <h2 className="text-[27px] font-black leading-tight" style={{ fontFamily: 'Heebo, sans-serif', color: INK }}>{t}</h2>
+      {s && <p className="text-[15px] mt-2" style={{ fontFamily: 'Rubik, sans-serif', color: GRAY }}>{s}</p>}
+    </div>
+  );
+
+  const inputStyle: React.CSSProperties = {
+    background: '#fff', border: `1px solid ${HAIRLINE}`, boxShadow: CARD_SHADOW,
+    borderRadius: 9999, fontFamily: 'Heebo, sans-serif', color: INK, // pill
+  };
+
+  const renderStep = () => {
+    switch (step) {
+      case 'name':
+        return (
+          <>
+            <Title t="איך קוראים לך?" s="ככה נציג אותך לשאר המטיילים" />
+            <input autoFocus value={displayName} onChange={e => setDisplayName(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter' && canContinue()) paginate(1); }}
+              placeholder="השם שלך" dir="rtl"
+              className="w-full text-[17px] font-semibold px-5 py-4 outline-none" style={inputStyle} />
+          </>
+        );
+
+      case 'photo':
+        return (
+          <>
+            <Title t={firstName ? `נעים להכיר, ${firstName}!` : 'תמונת פרופיל'} s="תמונה טובה מכפילה את הסיכוי להכיר אנשים" />
+            <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleImageUpload} />
+            <div className="flex justify-center pt-2">
+              <motion.button onClick={() => { haptic(8); fileInputRef.current?.click(); }} whileTap={{ scale: 0.97 }}
+                className="relative rounded-full flex items-center justify-center overflow-hidden"
+                style={{ width: 172, height: 172, background: avatarUrl ? '#fff' : '#F5F2EE', border: `1px solid ${HAIRLINE}`, boxShadow: CARD_SHADOW }}>
+                {avatarUrl
+                  ? <img src={avatarUrl} alt="" className="w-full h-full object-cover" />
+                  : <div className="flex flex-col items-center gap-2" style={{ color: '#9C9690' }}>
+                      <Camera className="w-10 h-10" strokeWidth={1.6} />
+                      <span className="text-[13px] font-bold" style={{ fontFamily: 'Heebo, sans-serif' }}>הוסף תמונה</span>
+                    </div>}
+                {isUploadingImage && <div className="absolute inset-0 flex items-center justify-center" style={{ background: 'rgba(255,255,255,0.65)' }}><Loader2 className="w-8 h-8 animate-spin" style={{ color: ORANGE }} /></div>}
+                {avatarUrl && !isUploadingImage && (
+                  <div className="absolute bottom-2 left-1/2 -translate-x-1/2 rounded-full px-3 py-1 text-[11px] font-bold text-white flex items-center gap-1" style={{ background: 'rgba(0,0,0,0.4)' }}>
+                    <Camera className="w-3 h-3" /> החלף
+                  </div>
+                )}
+              </motion.button>
+            </div>
+          </>
+        );
+
+      case 'age':
+        return (
+          <>
+            <style>{`.hf-wheel::-webkit-scrollbar{display:none}`}</style>
+            <Title t="מתי יום ההולדת שלך?" s="צריך להיות בן/בת 18 לפחות" />
+            {/* tap to open the date wheel; shows placeholder until opened */}
+            <button onClick={() => setAgeOpen(true)} className="w-full text-center text-[20px] font-black py-4 mb-3 active:scale-[0.99] transition-transform"
+              style={{ ...inputStyle, color: ageOpen ? INK : '#B8B2AB' }}>
+              {ageOpen ? `${birthD} ב${HE_MONTHS[birthM]} ${birthY}` : 'בחר גיל'}
+            </button>
+            {ageOpen && (
+              <>
+                <div className="relative">
+                  <div style={{ position: 'absolute', top: ITEM_H * 3, left: 0, right: 0, height: ITEM_H, background: '#F4F1EC', borderRadius: 12, zIndex: 0 }} />
+                  <div className="flex relative" style={{ zIndex: 1 }} dir="ltr">
+                    <Wheel items={DAYS} value={birthD - 1} onChange={i => setBirthD(i + 1)} />
+                    <Wheel items={HE_MONTHS} value={birthM} onChange={setBirthM} />
+                    <Wheel items={YEARS.map(String)} value={birthY - MIN_YEAR} onChange={i => setBirthY(MIN_YEAR + i)} />
+                  </div>
+                </div>
+                {age < 18 && <p className="text-center text-[13px] font-semibold mt-2" style={{ color: '#DC2626' }}>צריך להיות בן/בת 18 לפחות</p>}
+              </>
+            )}
+          </>
+        );
+
+      case 'gender':
+        return (
+          <>
+            <Title t="מה המגדר שלך?" s="לפרופיל שלך" />
+            <div className="flex flex-col gap-3">
+              {GENDERS.map(g => {
+                const active = gender === g.key;
+                return (
+                  <motion.button key={g.key} onClick={() => { haptic(8); setGender(g.key); }} whileTap={{ scale: 0.98 }}
+                    className="w-full flex items-center gap-3 px-6 py-4 text-[16px] font-bold"
+                    style={{ fontFamily: 'Heebo, sans-serif', borderRadius: 9999, background: '#fff', color: active ? ORANGE_DARK : INK, border: `1.5px solid ${active ? ORANGE : HAIRLINE}`, boxShadow: active ? '0 4px 14px rgba(249,115,22,0.16)' : CARD_SHADOW }}>
+                    {g.key === 'other'
+                      ? <Circle className="w-[15px] h-[15px]" strokeWidth={3.5} style={{ color: active ? ORANGE : '#9C9690' }} />
+                      : <span className="text-[22px] leading-none" style={{ color: active ? ORANGE : '#9C9690' }}>{g.icon}</span>}
+                    <span className="flex-1 text-right">{g.label}</span>
+                    {active && <Check className="w-5 h-5" style={{ color: ORANGE }} />}
+                  </motion.button>
+                );
+              })}
+            </div>
+          </>
+        );
+
+      case 'interests':
+        return (
+          <>
+            <Title t="מה מעניין אותך?" s="ככה נמצא לך אנשים ואירועים מתאימים" />
+            <div className="grid grid-cols-2 gap-2.5 overflow-y-auto pb-1" style={{ maxHeight: 340 }}>
+              {[...new Set([...SUGGESTED_INTERESTS, ...interests])].map(i => {
+                const active = interests.includes(i);
+                return (
+                  <motion.button key={i} onClick={() => { haptic(6); toggle(interests, setInterests, i); }} whileTap={{ scale: 0.96 }}
+                    className="flex items-center gap-2.5 px-4 py-3.5 text-[15px] font-bold text-right"
+                    style={{ fontFamily: 'Heebo, sans-serif', borderRadius: 16, background: active ? '#FFF3E9' : '#fff', color: active ? ORANGE_DARK : INK, border: `1.5px solid ${active ? ORANGE : HAIRLINE}`, boxShadow: active ? 'none' : CARD_SHADOW }}>
+                    <span className="text-[20px] leading-none flex-shrink-0">{emojiFor(i)}</span>
+                    <span className="flex-1 leading-tight">{i}</span>
+                  </motion.button>
+                );
+              })}
+            </div>
+          </>
+        );
+
+      case 'bio':
+        return (
+          <>
+            <Title t="ספר על עצמך" s="ביו קצר שיעזור למטיילים אחרים להכיר אותך (לא חובה)" />
+            <textarea autoFocus value={bio} maxLength={MAX_BIO} onChange={e => setBio(e.target.value)}
+              placeholder="למשל: מטייל בדרום מזרח אסיה, אוהב שקיעות וסטריט פוד 🌅" dir="rtl" rows={4}
+              className="w-full text-[15px] px-5 py-4 outline-none resize-none" style={{ ...inputStyle, borderRadius: 24, fontFamily: 'Rubik, sans-serif', lineHeight: 1.5 }} />
+            <div className="text-left text-[12px] font-semibold mt-1.5" style={{ color: '#B8B2AB' }}>{bio.length}/{MAX_BIO}</div>
+          </>
+        );
+
+      case 'instagram':
+        return (
+          <>
+            <Title t="מה האינסטגרם שלך?" s="עוזר למטיילים אחרים לוודא שאתה אמיתי (לא חובה)" />
+            <div className="w-full flex items-center gap-2 px-4 py-4" style={inputStyle}>
+              <span className="text-[16px] font-bold" style={{ color: '#B8B2AB' }}>@</span>
+              <input autoFocus value={instagram} onChange={e => setInstagram(e.target.value.replace(/^@/, ''))}
+                placeholder="שם משתמש" dir="ltr" className="flex-1 bg-transparent outline-none text-[16px] font-semibold" style={{ fontFamily: 'Rubik, sans-serif', color: INK, textAlign: 'left' }} />
+            </div>
+          </>
+        );
+
+      case 'done':
+        return <DoneCard {...{ avatarUrl, displayName, age, interests }} />;
     }
   };
 
+  // Bottom button behaviour
+  const optionalEmpty = OPTIONAL.includes(step) && !stepHasValue();
+  const btnLabel = step === 'done' ? 'צור את החשבון 🎉' : optionalEmpty ? 'דלג' : 'המשך';
+  const btnDisabled = step === 'done' ? loading : (!OPTIONAL.includes(step) && !canContinue());
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-[#FAFBFC] via-[#F8F9FB] to-[#F0F2F7] overflow-x-hidden max-w-full" dir="rtl">
-      <div className="bg-white/80 backdrop-blur-sm shadow-sm sticky top-0 z-10 border-b border-gray-100 safe-area-top">
-        <div className="px-4 pt-4 pb-4">
-          <div className="flex items-center justify-between mb-5">
-            {currentStep === 1 && onBack ? (
-              <button
-                onClick={onBack}
-                className="flex items-center gap-1.5 text-sm font-semibold text-[#6B7280] bg-gray-100 hover:bg-gray-200 active:scale-95 transition-all rounded-2xl px-4 py-2.5 min-h-[44px]"
-                style={{ fontFamily: 'Rubik, sans-serif' }}
-              >
-                <ArrowLeft className="w-4 h-4" />
-                יציאה
-              </button>
-            ) : (
-              <div className="w-[80px]" />
-            )}
-            <span
-              className="text-sm font-medium text-[#6B7280]"
-              style={{ fontFamily: 'Rubik, sans-serif' }}
-            >
-              שלב {currentStep} מתוך {STEPS.length}
+    <div className="fixed inset-0 flex flex-col overflow-hidden" dir="rtl" style={{ background: '#FFFFFF' }}>
+      {/* Header: back + logo + thin progress */}
+      <div style={{ paddingTop: 'max(14px, env(safe-area-inset-top))' }}>
+        <div className="flex items-center px-5 pt-2 pb-3">
+          <button onClick={() => paginate(-1)} aria-label="חזרה" className="w-9 h-9 flex items-center justify-center active:opacity-50" style={{ color: '#9C9690' }}>
+            <ChevronRight className="w-6 h-6" />
+          </button>
+          <div className="flex-1 flex justify-center">
+            <span style={{ fontFamily: 'Inter, system-ui, sans-serif', fontWeight: 900, letterSpacing: '-0.04em', fontSize: 23, color: INK }}>
+              <span dir="ltr">FOMO<span style={{ color: ORANGE }}>.</span></span>
             </span>
-            <div className="w-[80px]" />
           </div>
-
-          <div className="flex items-center gap-3 mb-2">
-            {STEPS.map((step, index) => (
-              <div key={step.id} className="flex items-center flex-1">
-                <div className="flex flex-col items-center gap-2 flex-1">
-                  <div className="flex items-center w-full">
-                    {index > 0 && (
-                      <div className={`h-0.5 flex-1 transition-all duration-300 ${
-                        step.id <= currentStep ? 'bg-[#F97316]' : 'bg-gray-200'
-                      }`} />
-                    )}
-                    <div className={`w-9 h-9 rounded-full flex items-center justify-center transition-all duration-300 ${
-                      step.id <= currentStep
-                        ? 'bg-gradient-to-br from-[#F97316] to-[#EA580C] text-white shadow-md'
-                        : 'bg-gray-200 text-gray-400'
-                    } ${step.id === currentStep ? 'ring-4 ring-[#FFEDD5]' : ''}`}>
-                      <step.icon className="w-4 h-4" />
-                    </div>
-                    {index < STEPS.length - 1 && (
-                      <div className={`h-0.5 flex-1 transition-all duration-300 ${
-                        step.id < currentStep ? 'bg-[#F97316]' : 'bg-gray-200'
-                      }`} />
-                    )}
-                  </div>
-                  <span className={`text-xs font-medium transition-colors ${
-                    step.id === currentStep ? 'text-[#F97316]' : 'text-gray-500'
-                  }`} style={{ fontFamily: 'Rubik, sans-serif' }}>
-                    {step.title}
-                  </span>
-                </div>
-              </div>
-            ))}
-          </div>
+          <div className="w-9" />
         </div>
-      </div>
-
-      <div className="p-6 pb-32">
-        {currentStep === 1 && (
-          <div className="space-y-6 animate-slide-in">
-            <div className="text-center mb-8 mt-4">
-              <div className="flex items-center justify-center gap-2 mb-3">
-                <h1
-                  className="text-3xl font-bold text-[#1F2937]"
-                  style={{ fontFamily: 'Heebo, sans-serif', fontWeight: 700 }}
-                >
-                  בוא נבנה את הפרופיל שלך
-                </h1>
-                <Sparkles className="w-6 h-6 text-[#EA580C]" />
-              </div>
-              <p
-                className="text-base text-[#6B7280] max-w-md mx-auto"
-                style={{ fontFamily: 'Rubik, sans-serif' }}
-              >
-                תמונה טובה ותיאור קצר יעזרו לאנשים להכיר אותך
-              </p>
-            </div>
-
-            <div className="flex flex-col items-center gap-4 mb-8">
-              <div className="relative group">
-                {avatarUrl ? (
-                  <div className="w-32 h-32 rounded-full bg-gradient-to-br from-[#F97316] to-[#EA580C] p-1 shadow-lg">
-                    <img
-                      src={avatarUrl}
-                      alt="Profile"
-                      className="w-full h-full rounded-full object-cover"
-                    />
-                  </div>
-                ) : (
-                  <div className="w-32 h-32 rounded-full bg-gradient-to-br from-[#F97316]/10 to-[#EA580C]/10 p-1 shadow-md border-2 border-dashed border-[#F97316]/30">
-                    <div className="w-full h-full rounded-full bg-white flex items-center justify-center">
-                      <Camera className="w-12 h-12 text-[#F97316]/40" />
-                    </div>
-                  </div>
-                )}
-
-                {isUploadingImage && (
-                  <div className="absolute inset-0 bg-black/50 rounded-full flex items-center justify-center">
-                    <div className="w-8 h-8 border-3 border-white border-t-transparent rounded-full animate-spin" />
-                  </div>
-                )}
-
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={isUploadingImage}
-                  aria-label="העלה תמונת פרופיל"
-                  className="absolute -bottom-1 -left-1 w-11 h-11 bg-gradient-to-br from-[#F97316] to-[#EA580C] rounded-full flex items-center justify-center shadow-lg hover:shadow-xl transition-all active:scale-95 disabled:opacity-50"
-                >
-                  <Camera className="w-5 h-5 text-white" />
-                </button>
-              </div>
-
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                onChange={handleImageUpload}
-                className="hidden"
-              />
-
-              <div className="text-center">
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={isUploadingImage}
-                  className="text-sm font-medium text-[#F97316] hover:text-[#EA580C] transition-colors disabled:opacity-50"
-                  style={{ fontFamily: 'Rubik, sans-serif' }}
-                >
-                  {avatarUrl ? 'שנה תמונה' : 'העלה תמונה'}
-                </button>
-                <p
-                  className="text-xs text-[#6B7280] mt-1"
-                  style={{ fontFamily: 'Rubik, sans-serif' }}
-                >
-                  תמונה ברורה תעזור לאנשים אחרים להכיר אותך
-                </p>
-              </div>
-            </div>
-
-            <div className="bg-white rounded-3xl shadow-sm border border-gray-100 p-6 space-y-6">
-              <div>
-                <label
-                  className="flex items-center gap-2 text-sm font-semibold text-[#374151] mb-2"
-                  style={{ fontFamily: 'Rubik, sans-serif' }}
-                >
-                  <UserCircle2 className="w-4 h-4 text-[#F97316]" />
-                  שם התצוגה
-                </label>
-                <input
-                  type="text"
-                  value={displayName}
-                  onChange={(e) => setDisplayName(e.target.value)}
-                  required
-                  className="w-full px-4 py-3.5 rounded-2xl border border-gray-200 focus:ring-2 focus:ring-[#F97316]/20 focus:border-[#F97316] outline-none transition-all bg-gray-50 focus:bg-white text-[#1F2937]"
-                  style={{ fontFamily: 'Rubik, sans-serif' }}
-                  placeholder="איך אנשים יכירו אותך?"
-                />
-                <p
-                  className="text-xs text-[#6B7280] mt-2"
-                  style={{ fontFamily: 'Rubik, sans-serif' }}
-                >
-                  השם הזה יופיע בפרופיל שלך
-                </p>
-              </div>
-
-              <div>
-                <label
-                  className="block text-sm font-semibold text-[#374151] mb-2"
-                  style={{ fontFamily: 'Rubik, sans-serif' }}
-                >
-                  עליי
-                </label>
-                <textarea
-                  value={bio}
-                  onChange={(e) => {
-                    if (e.target.value.length <= MAX_BIO_LENGTH) {
-                      setBio(e.target.value);
-                    }
-                  }}
-                  rows={4}
-                  className="w-full px-4 py-3.5 rounded-2xl border border-gray-200 focus:ring-2 focus:ring-[#F97316]/20 focus:border-[#F97316] outline-none transition-all resize-none bg-gray-50 focus:bg-white text-[#1F2937]"
-                  style={{ fontFamily: 'Rubik, sans-serif' }}
-                  placeholder="ספר בקצרה מי אתה, מה הווייב שלך ומה אתה מחפש..."
-                />
-                <div className="flex justify-between items-center mt-2">
-                  <p
-                    className="text-xs text-[#6B7280]"
-                    style={{ fontFamily: 'Rubik, sans-serif' }}
-                  >
-                    תיאור קצר ומעניין
-                  </p>
-                  <span
-                    className={`text-xs font-medium ${
-                      bio.length >= MAX_BIO_LENGTH ? 'text-[#EF4444]' : 'text-[#6B7280]'
-                    }`}
-                    style={{ fontFamily: 'Rubik, sans-serif' }}
-                  >
-                    {bio.length}/{MAX_BIO_LENGTH}
-                  </span>
-                </div>
-              </div>
-
-              <div>
-                <label
-                  className="flex items-center gap-2 text-sm font-semibold text-[#374151] mb-2"
-                  style={{ fontFamily: 'Rubik, sans-serif' }}
-                >
-                  <Cake className="w-4 h-4 text-[#F97316]" />
-                  גיל
-                </label>
-                <select
-                  value={age}
-                  onChange={(e) => setAge(e.target.value)}
-                  className="w-full px-4 py-3.5 rounded-2xl border border-gray-200 focus:ring-2 focus:ring-[#F97316]/20 focus:border-[#F97316] outline-none transition-all bg-gray-50 focus:bg-white text-[#1F2937]"
-                  style={{ fontFamily: 'Rubik, sans-serif' }}
-                >
-                  <option value="">בן כמה אתה?</option>
-                  {Array.from({ length: 63 }, (_, i) => i + 18).map(ageOption => (
-                    <option key={ageOption} value={ageOption}>
-                      {ageOption}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label
-                  className="flex items-center gap-2 text-sm font-semibold text-[#374151] mb-2"
-                  style={{ fontFamily: 'Rubik, sans-serif' }}
-                >
-                  <Instagram className="w-4 h-4 text-[#F97316]" />
-                  חשבון אינסטגרם
-                  <span className="text-xs text-[#6B7280] font-normal">(אופציונלי)</span>
-                </label>
-                <div className="relative">
-                  <span className="absolute right-4 top-1/2 -translate-y-1/2 text-[#6B7280] font-medium">@</span>
-                  <input
-                    type="text"
-                    value={instagram}
-                    onChange={(e) => setInstagram(e.target.value.replace('@', ''))}
-                    className="w-full pr-10 pl-4 py-3.5 rounded-2xl border border-gray-200 focus:ring-2 focus:ring-[#F97316]/20 focus:border-[#F97316] outline-none transition-all bg-gray-50 focus:bg-white text-[#1F2937]"
-                    style={{ fontFamily: 'Rubik, sans-serif' }}
-                    placeholder="username_שלך"
-                  />
-                </div>
-                <p
-                  className="text-xs text-[#6B7280] mt-2"
-                  style={{ fontFamily: 'Rubik, sans-serif' }}
-                >
-                  משתמשים אחרים יוכלו להתחבר אליך דרך אינסטגרם
-                </p>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {currentStep === 2 && (
-          <div className="space-y-6 animate-slide-in">
-            <div className="text-center mb-8 mt-4">
-              <h1
-                className="text-3xl font-bold text-[#1F2937] mb-3"
-                style={{ fontFamily: 'Heebo, sans-serif', fontWeight: 700 }}
-              >
-                מה מעניין אותך?
-              </h1>
-              <p
-                className="text-base text-[#6B7280] max-w-md mx-auto"
-                style={{ fontFamily: 'Rubik, sans-serif' }}
-              >
-                תחומי עניין משותפים יעזרו למצוא מטיילים מתאימים
-              </p>
-            </div>
-
-            <div className="bg-white rounded-3xl shadow-sm border border-gray-100 p-6 space-y-4">
-              <label
-                className="block text-sm font-semibold text-[#374151] mb-3"
-                style={{ fontFamily: 'Rubik, sans-serif' }}
-              >
-                בחר תחומי עניין ({interests.length} נבחרו)
-              </label>
-
-              <div className="flex flex-wrap gap-2 mb-4">
-                {SUGGESTED_INTERESTS.map((interest) => (
-                  <button
-                    key={interest}
-                    type="button"
-                    onClick={() => toggleInterest(interest)}
-                    className={`px-5 py-2.5 rounded-full text-sm font-medium transition-all ${
-                      interests.includes(interest)
-                        ? 'bg-gradient-to-r from-[#F97316] to-[#EA580C] text-white shadow-md scale-105'
-                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200 active:scale-95'
-                    }`}
-                    style={{ fontFamily: 'Rubik, sans-serif' }}
-                  >
-                    {interest}
-                  </button>
-                ))}
-              </div>
-
-              <div className="flex gap-2 pt-2">
-                <input
-                  type="text"
-                  value={customInterest}
-                  onChange={(e) => setCustomInterest(e.target.value)}
-                  onKeyPress={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault();
-                      addCustomInterest();
-                    }
-                  }}
-                  className="flex-1 px-4 py-2.5 rounded-2xl border border-gray-200 focus:ring-2 focus:ring-[#F97316]/20 focus:border-[#F97316] outline-none transition-all text-sm bg-gray-50 focus:bg-white"
-                  style={{ fontFamily: 'Rubik, sans-serif' }}
-                  placeholder="הוסף תחום עניין נוסף..."
-                />
-                <button
-                  type="button"
-                  onClick={addCustomInterest}
-                  className="px-5 py-2.5 bg-gradient-to-r from-[#F97316] to-[#EA580C] text-white rounded-2xl hover:shadow-md transition-all text-sm font-medium active:scale-95"
-                  style={{ fontFamily: 'Rubik, sans-serif' }}
-                >
-                  הוסף
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {currentStep === 3 && (
-          <div className="space-y-6 animate-slide-in">
-            <div className="text-center mb-8 mt-4">
-              <h1
-                className="text-3xl font-bold text-[#1F2937] mb-3"
-                style={{ fontFamily: 'Heebo, sans-serif', fontWeight: 700 }}
-              >
-                כמעט סיימנו!
-              </h1>
-              <p
-                className="text-base text-[#6B7280] max-w-md mx-auto"
-                style={{ fontFamily: 'Rubik, sans-serif' }}
-              >
-                עוד כמה פרטים ונוכל להתחיל
-              </p>
-            </div>
-
-            <div className="bg-white rounded-3xl shadow-sm border border-gray-100 p-6 space-y-6">
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <label
-                    className="flex items-center gap-2 text-sm font-semibold text-[#374151]"
-                    style={{ fontFamily: 'Rubik, sans-serif' }}
-                  >
-                    <MapPin className="w-4 h-4 text-[#F97316]" />
-                    מדינה נוכחית
-                  </label>
-                  {isDetectingLocation && (
-                    <span className="text-xs text-[#F97316] flex items-center gap-1">
-                      <div className="w-3 h-3 border-2 border-[#F97316] border-t-transparent rounded-full animate-spin" />
-                      מזהה מיקום...
-                    </span>
-                  )}
-                </div>
-                <select
-                  value={currentCountry}
-                  onChange={(e) => setCurrentCountry(e.target.value)}
-                  disabled={isDetectingLocation}
-                  className="w-full px-4 py-3.5 rounded-2xl border border-gray-200 focus:ring-2 focus:ring-[#F97316]/20 focus:border-[#F97316] outline-none transition-all bg-gray-50 focus:bg-white disabled:opacity-50 disabled:cursor-wait"
-                  style={{ fontFamily: 'Rubik, sans-serif' }}
-                >
-                  <option value="">בחר מדינה</option>
-                  {Object.entries(COUNTRIES).map(([code, country]) => (
-                    <option key={code} value={code}>
-                      {country.flag} {country.name}
-                    </option>
-                  ))}
-                </select>
-                {currentCountry && !isDetectingLocation && (
-                  <p
-                    className="text-xs text-[#10B981] mt-2 flex items-center gap-1"
-                    style={{ fontFamily: 'Rubik, sans-serif' }}
-                  >
-                    <Check className="w-3 h-3" />
-                    המדינה זוהתה אוטומטית לפי המיקום שלך
-                  </p>
-                )}
-              </div>
-
-              <div>
-                <label
-                  className="block text-sm font-semibold text-[#374151] mb-3"
-                  style={{ fontFamily: 'Rubik, sans-serif' }}
-                >
-                  שפות שאתה מדבר ({languages.length} נבחרו)
-                </label>
-
-                <div className="flex flex-wrap gap-2 mb-4">
-                  {SUGGESTED_LANGUAGES.map((lang) => (
-                    <button
-                      key={lang}
-                      type="button"
-                      onClick={() => toggleLanguage(lang)}
-                      className={`px-5 py-2.5 rounded-full text-sm font-medium transition-all ${
-                        languages.includes(lang)
-                          ? 'bg-gradient-to-r from-[#F97316] to-[#EA580C] text-white shadow-md scale-105'
-                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200 active:scale-95'
-                      }`}
-                      style={{ fontFamily: 'Rubik, sans-serif' }}
-                    >
-                      {lang}
-                    </button>
-                  ))}
-                </div>
-
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={customLanguage}
-                    onChange={(e) => setCustomLanguage(e.target.value)}
-                    onKeyPress={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault();
-                        addCustomLanguage();
-                      }
-                    }}
-                    className="flex-1 px-4 py-2.5 rounded-2xl border border-gray-200 focus:ring-2 focus:ring-[#F97316]/20 focus:border-[#F97316] outline-none transition-all text-sm bg-gray-50 focus:bg-white"
-                    style={{ fontFamily: 'Rubik, sans-serif' }}
-                    placeholder="הוסף שפה נוספת..."
-                  />
-                  <button
-                    type="button"
-                    onClick={addCustomLanguage}
-                    className="px-5 py-2.5 bg-gradient-to-r from-[#F97316] to-[#EA580C] text-white rounded-2xl hover:shadow-md transition-all text-sm font-medium active:scale-95"
-                    style={{ fontFamily: 'Rubik, sans-serif' }}
-                  >
-                    הוסף
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {error && (
-          <div
-            className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-xl text-sm mt-4"
-            style={{ fontFamily: 'Rubik, sans-serif' }}
-          >
-            {error}
+        {step !== 'done' && (
+          <div className="h-[3px] mx-5 rounded-full overflow-hidden" style={{ background: '#F2EEE9' }}>
+            <motion.div className="h-full rounded-full" style={{ background: ORANGE }} animate={{ width: `${(index / (FLOW.length - 1)) * 100}%` }} transition={{ duration: 0.35, ease: 'easeOut' }} />
           </div>
         )}
       </div>
 
-      <div className="fixed bottom-0 left-0 right-0 p-5 pb-safe bg-white/95 backdrop-blur-md border-t border-gray-100 shadow-2xl" style={{ paddingBottom: 'max(20px, env(safe-area-inset-bottom))' }}>
-        <div className="flex flex-col gap-3 max-w-md mx-auto">
-          <div className="flex gap-3">
-            {currentStep > 1 && (
-              <button
-                onClick={handleBack}
-                className="px-6 h-14 bg-gray-100 text-gray-700 rounded-2xl font-semibold hover:bg-gray-200 transition-all flex items-center gap-2 active:scale-95"
-                style={{ fontFamily: 'Heebo, sans-serif', fontWeight: 600 }}
-              >
-                <ArrowLeft className="w-5 h-5" />
+      {/* Content */}
+      <div className="flex-1 min-h-0 overflow-y-auto">
+        <AnimatePresence initial={false} mode="wait">
+          <motion.div key={step}
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            transition={{ duration: 0.16, ease: 'easeOut' }} className="w-full px-6 pt-8 pb-6">
+            {renderStep()}
+          </motion.div>
+        </AnimatePresence>
+      </div>
+
+      {error && <p className="text-[13px] font-semibold text-center px-6 pb-2" style={{ color: '#DC2626' }}>{error}</p>}
+
+      {/* Bottom CTA */}
+      <div className="px-6 pt-2" style={{ paddingBottom: 'max(20px, env(safe-area-inset-bottom))' }}>
+        <button
+          onClick={() => {
+            if (btnDisabled) return;
+            haptic(10);
+            if (step === 'done') handleSubmit();
+            else if (step === 'age') setAgeConfirm(true); // confirm the computed age first
+            else paginate(1);
+          }}
+          disabled={btnDisabled}
+          className="w-full h-14 rounded-full text-white text-[17px] font-black flex items-center justify-center gap-2 active:scale-[0.98] transition-transform"
+          style={{ fontFamily: 'Heebo, sans-serif', background: ORANGE, boxShadow: `0 8px 22px ${ORANGE}44`, opacity: btnDisabled ? 0.4 : 1 }}>
+          {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : btnLabel}
+        </button>
+      </div>
+
+      {/* Age confirmation dialog (compact) */}
+      {ageConfirm && (
+        <div onClick={() => setAgeConfirm(false)} style={{ position: 'fixed', inset: 0, zIndex: 60, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+          <div onClick={e => e.stopPropagation()} className="w-full text-center" style={{ background: '#fff', borderRadius: 20, padding: 20, maxWidth: 288, boxShadow: '0 16px 44px rgba(0,0,0,0.22)' }}>
+            <h3 style={{ fontFamily: 'Heebo, sans-serif', fontSize: 16, fontWeight: 800, color: INK, margin: 0 }}>אימות גיל</h3>
+            <p style={{ fontFamily: 'Rubik, sans-serif', fontSize: 14, fontWeight: 600, color: INK, margin: '10px 0 3px' }}>הגיל שלך הוא {age} 🎂</p>
+            <p style={{ fontFamily: 'Rubik, sans-serif', fontSize: 12.5, color: GRAY, margin: '0 0 16px' }}>אם זה לא נכון, חזור ותקן את התאריך</p>
+            <div className="flex gap-2">
+              <button onClick={() => setAgeConfirm(false)}
+                className="flex-1 h-11 rounded-full font-bold" style={{ fontFamily: 'Heebo, sans-serif', fontSize: 14, background: '#fff', color: '#57534E', border: `1px solid ${HAIRLINE}` }}>
                 חזור
               </button>
-            )}
-
-            <button
-              onClick={handleNext}
-              disabled={!canContinue() || loading}
-              className="flex-1 h-14 bg-gradient-to-r from-[#F97316] to-[#EA580C] text-white rounded-2xl font-bold shadow-lg hover:shadow-xl transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100 flex items-center justify-center gap-2"
-              style={{ fontFamily: 'Heebo, sans-serif', fontWeight: 700 }}
-            >
-              {loading ? (
-                <div className="flex items-center gap-2">
-                  <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                  <span>שומר...</span>
-                </div>
-              ) : currentStep < STEPS.length ? (
-                <>
-                  <span>המשך</span>
-                  <ArrowRight className="w-5 h-5" />
-                </>
-              ) : (
-                <>
-                  <span>סיים</span>
-                  <Check className="w-5 h-5" />
-                </>
-              )}
-            </button>
+              <button onClick={() => { haptic(10); setAgeConfirm(false); paginate(1); }}
+                className="flex-1 h-11 rounded-full text-white font-black" style={{ fontFamily: 'Heebo, sans-serif', fontSize: 14, background: ORANGE, boxShadow: `0 6px 18px ${ORANGE}55` }}>
+                כן, נכון
+              </button>
+            </div>
           </div>
-
-          <p
-            className="text-xs text-center text-[#6B7280]"
-            style={{ fontFamily: 'Rubik, sans-serif' }}
-          >
-            🔒 המידע שלך נשמר בצורה מאובטחת
-          </p>
         </div>
+      )}
+    </div>
+  );
+}
+
+/* Clean profile summary for the final step. */
+function DoneCard({ avatarUrl, displayName, age, interests }: { avatarUrl: string | null; displayName: string; age: number; interests: string[] }) {
+  return (
+    <div className="flex flex-col items-center text-center">
+      <h2 className="text-[27px] font-black leading-tight" style={{ fontFamily: 'Heebo, sans-serif', color: INK }}>הכל מוכן! 🎉</h2>
+      <p className="text-[15px] mt-2 mb-7" style={{ fontFamily: 'Rubik, sans-serif', color: GRAY }}>ככה הפרופיל שלך ייראה</p>
+
+      <div className="w-full rounded-[24px] px-6 py-7 flex flex-col items-center" style={{ background: '#fff', border: `1px solid ${HAIRLINE}`, boxShadow: '0 8px 30px rgba(0,0,0,0.08)' }}>
+        <div className="w-24 h-24 rounded-full overflow-hidden flex items-center justify-center mb-3" style={{ background: '#F5F2EE', border: `2px solid #fff`, boxShadow: '0 6px 18px rgba(0,0,0,0.1)' }}>
+          {avatarUrl ? <img src={avatarUrl} alt="" className="w-full h-full object-cover" /> : <span className="text-3xl">🙂</span>}
+        </div>
+        <h3 className="text-[22px] font-black" style={{ fontFamily: 'Heebo, sans-serif', color: INK }}>
+          {displayName || 'מטייל/ת'}{age ? <span style={{ color: GRAY, fontWeight: 700 }}>, {age}</span> : null}
+        </h3>
+        {interests.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 justify-center mt-4">
+            {interests.slice(0, 6).map(i => (
+              <span key={i} className="rounded-full px-3 py-1 text-[12px] font-bold" style={{ background: '#FFF3E9', color: ORANGE_DARK, fontFamily: 'Heebo, sans-serif' }}>{emojiFor(i)} {i}</span>
+            ))}
+          </div>
+        )}
       </div>
-
-      <style>{`
-        @keyframes slide-in {
-          from {
-            opacity: 0;
-            transform: translateX(20px);
-          }
-          to {
-            opacity: 1;
-            transform: translateX(0);
-          }
-        }
-
-        .animate-slide-in {
-          animation: slide-in 0.4s cubic-bezier(0.16, 1, 0.3, 1);
-        }
-
-        @keyframes spin {
-          to {
-            transform: rotate(360deg);
-          }
-        }
-
-        .animate-spin {
-          animation: spin 1s linear infinite;
-        }
-
-        @media (prefers-reduced-motion: reduce) {
-          .animate-slide-in { animation: none; }
-          .transition-all, .transition-colors { transition: none !important; }
-        }
-      `}</style>
     </div>
   );
 }

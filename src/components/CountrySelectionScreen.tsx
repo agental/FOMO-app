@@ -1,9 +1,11 @@
-import { useState, useMemo } from 'react';
-import { Search, ChevronRight } from 'lucide-react';
+import { useState, useMemo, useEffect } from 'react';
+import { Search, ChevronRight, MapPin } from 'lucide-react';
 import { COUNTRIES } from '../utils/countries';
 import { CONTINENTS, getContinentForCountry } from '../utils/continents';
+import { supabase } from '../lib/supabase';
 
 interface CountrySelectionScreenProps {
+  currentUserId?: string | null;
   selectedCountries: Set<string>;
   onToggleCountry: (code: string) => void;
   onContinue: () => void;
@@ -153,12 +155,46 @@ function ContinentRow({
 }
 
 export function CountrySelectionScreen({
+  currentUserId,
   selectedCountries,
   onToggleCountry,
   onContinue,
   onBack,
 }: CountrySelectionScreenProps) {
   const [searchQuery, setSearchQuery] = useState('');
+  const [currentLocation, setCurrentLocation] = useState<string | null>(null);
+
+  // Auto-detect the user's real country and sync it to their profile (current_country).
+  // Uses the WebView's native location bridge, with a browser-geolocation fallback.
+  useEffect(() => {
+    let done = false;
+    const apply = async (lat: number, lng: number) => {
+      if (done) return; done = true;
+      try {
+        const res = await fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lng}&localityLanguage=en`);
+        const data = await res.json();
+        const code: string | undefined = data.countryCode;
+        if (code && COUNTRIES[code]) {
+          setCurrentLocation(code);
+          if (currentUserId) supabase.from('users').update({ current_country: code }).eq('id', currentUserId);
+        }
+      } catch { /* ignore */ }
+    };
+    const onNative = (e: Event) => { const d = (e as CustomEvent).detail; if (d?.lat != null) apply(d.lat, d.lng); };
+    window.addEventListener('nativeLocation', onNative);
+    // The WebView wrapper obtains location on app start and stores it here — use it if already available.
+    const nl = (window as unknown as { _nativeLocation?: { lat: number; lng: number } })._nativeLocation;
+    if (nl?.lat != null) apply(nl.lat, nl.lng);
+    else if ('geolocation' in navigator) {
+      navigator.geolocation.getCurrentPosition(
+        p => apply(p.coords.latitude, p.coords.longitude),
+        () => {},
+        { enableHighAccuracy: false, timeout: 10000, maximumAge: 300000 }
+      );
+    }
+    return () => window.removeEventListener('nativeLocation', onNative);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUserId]);
 
   // Group countries by continent
   const byContinent = useMemo(() => {
@@ -198,16 +234,37 @@ export function CountrySelectionScreen({
           borderBottom: '1px solid rgba(0,0,0,0.06)',
         }}
       >
-        {onBack && (
-          <button
-            onClick={onBack}
-            className="flex items-center gap-1 mb-4 active:opacity-60 transition-opacity"
-            style={{ color: 'rgba(0,0,0,0.35)', fontFamily: 'Heebo, sans-serif', fontSize: 14 }}
-          >
-            <ChevronRight className="w-4 h-4" />
-            חזרה
-          </button>
-        )}
+        {/* Top row: back (right) + auto-detected current location (left corner) */}
+        <div className="flex items-center justify-between mb-4" style={{ minHeight: 26 }}>
+          {onBack ? (
+            <button
+              onClick={onBack}
+              className="flex items-center gap-1 active:opacity-60 transition-opacity"
+              style={{ color: 'rgba(0,0,0,0.35)', fontFamily: 'Heebo, sans-serif', fontSize: 14 }}
+            >
+              <ChevronRight className="w-4 h-4" />
+              חזרה
+            </button>
+          ) : <span />}
+
+          {currentLocation && COUNTRIES[currentLocation] && (
+            <button
+              onClick={() => onToggleCountry(currentLocation)}
+              title="הוסף את המיקום הנוכחי לבחירה"
+              className="flex items-center gap-1.5 rounded-full px-3 py-1.5 active:scale-95 transition-transform"
+              style={{
+                background: selectedCountries.has(currentLocation) ? 'rgba(249,115,22,0.12)' : '#F5F5F5',
+                border: `1px solid ${selectedCountries.has(currentLocation) ? ACCENT : 'rgba(0,0,0,0.08)'}`,
+                fontFamily: 'Heebo, sans-serif',
+              }}
+            >
+              <MapPin className="w-3.5 h-3.5" style={{ color: ACCENT }} />
+              <span style={{ fontSize: 11.5, fontWeight: 700, color: '#1C1C1E' }}>
+                {COUNTRIES[currentLocation].flag} {COUNTRIES[currentLocation].name}
+              </span>
+            </button>
+          )}
+        </div>
 
         <h2
           className="text-[26px] font-black text-center mb-1"

@@ -701,7 +701,6 @@ export function AdminDashboard({ currentUserId, onBack }: AdminDashboardProps) {
           instagram={viewUser.instagram || undefined}
           bio={viewUser.bio || undefined}
           age={viewUser.age || undefined}
-          languages={viewUser.languages || undefined}
           interests={viewUser.interests || undefined}
           visitedCountries={viewUser.visited_countries || undefined}
           homeBase={viewUser.home_base || undefined}

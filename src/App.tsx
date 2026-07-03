@@ -5,7 +5,6 @@ import ProfileScreen from './components/ProfileScreen';
 import { AuthScreen } from './components/AuthScreen';
 import { OnboardingScreen } from './components/OnboardingScreen';
 import { CreateProfileWizard } from './components/CreateProfileWizard';
-import { ProfileCompletionScreen } from './components/ProfileCompletionScreen';
 import { CountrySelectionScreen } from './components/CountrySelectionScreen';
 import { MapScreen } from './components/MapScreen';
 import { AdminDashboard } from './components/AdminDashboard';
@@ -20,7 +19,7 @@ import { MyEventsScreen } from './components/MyEventsScreen';
 import { supabase } from './lib/supabase';
 
 function App() {
-  type Screen = 'auth' | 'onboarding' | 'createProfile' | 'profileComplete' | 'country' | 'home' | 'profile' | 'map' | 'admin' | 'userProfile' | 'messages' | 'requests' | 'chat' | 'settings' | 'notifications' | 'privacy' | 'about' | 'myEvents';
+  type Screen = 'auth' | 'onboarding' | 'createProfile' | 'country' | 'home' | 'profile' | 'map' | 'admin' | 'userProfile' | 'messages' | 'requests' | 'chat' | 'settings' | 'notifications' | 'privacy' | 'about' | 'myEvents';
   const [splashDone, setSplashDone] = useState(false);
   const [currentScreen, setCurrentScreen] = useState<Screen>('auth');
   const [authChecked, setAuthChecked] = useState(false);
@@ -228,6 +227,10 @@ function App() {
     }
   };
 
+
+
+
+
   if (!splashDone) {
     return <SplashScreen onComplete={() => setSplashDone(true)} />;
   }
@@ -274,7 +277,20 @@ function App() {
     return (
       <CreateProfileWizard
         userId={currentUserId!}
-        onComplete={() => setCurrentScreen('profileComplete')}
+        onComplete={async () => {
+          // Profile (incl. travel countries) is saved in the wizard — go straight to the app.
+          if (currentUserId) {
+            try {
+              const { data } = await supabase.from('users').select('selected_countries').eq('id', currentUserId).maybeSingle();
+              if (data?.selected_countries && data.selected_countries.length > 0) {
+                setSelectedCountries(new Set(data.selected_countries));
+                setCurrentScreen('home');
+                return;
+              }
+            } catch { /* fall through */ }
+          }
+          setCurrentScreen('country');
+        }}
         onBack={async () => {
           await supabase.auth.signOut();
           setCurrentScreen('auth');
@@ -283,18 +299,10 @@ function App() {
     );
   }
 
-  if (currentScreen === 'profileComplete') {
-    return (
-      <ProfileCompletionScreen
-        userId={currentUserId!}
-        onContinue={() => setCurrentScreen('country')}
-      />
-    );
-  }
-
   if (currentScreen === 'country') {
     return (
       <CountrySelectionScreen
+        currentUserId={currentUserId}
         selectedCountries={selectedCountries}
         onToggleCountry={toggleCountry}
         onContinue={handleContinue}

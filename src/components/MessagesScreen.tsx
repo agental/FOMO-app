@@ -228,9 +228,19 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
   const touchStartX = useRef<number>(0);
 
   useEffect(() => {
-    loadConversations();
     loadUserCountries();
-    loadGroupChats();
+    if (_cachedInitialized) {
+      // Already have cached data — refresh both in the background, no loading state.
+      loadConversations();
+      loadGroupChats();
+    } else {
+      // First load — wait for BOTH DMs and city groups before revealing, so nothing "pops in" late.
+      Promise.all([loadConversations(), loadGroupChats()]).finally(() => {
+        _cachedInitialized = true;
+        setInitialized(true);
+        setLoading(false);
+      });
+    }
 
     const messagesChannel = supabase
       .channel('messages-changes')
@@ -455,10 +465,7 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
 
       if (!convos || convos.length === 0) {
         _cachedConversations = [];
-        _cachedInitialized = true;
         setConversations([]);
-        setInitialized(true);
-        setLoading(false);
         return;
       }
 
@@ -487,13 +494,9 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
       );
 
       _cachedConversations = conversationsWithDetails;
-      _cachedInitialized = true;
       setConversations(conversationsWithDetails);
-      setInitialized(true);
     } catch (error) {
       console.error('Error loading conversations:', error);
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -705,7 +708,7 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
         <div className="h-px bg-gray-100 mx-4 my-2" />
 
         {/* Group chats the user has joined */}
-        {groupChats.length > 0 && (
+        {initialized && groupChats.length > 0 && (
           <div>
             <button
               onClick={() => setGroupsCollapsed(p => !p)}
