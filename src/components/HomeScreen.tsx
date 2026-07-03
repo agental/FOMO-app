@@ -15,7 +15,7 @@ import { COUNTRIES } from '../utils/countries';
 import { useEvents } from '../hooks/useEvents';
 import { getNotifLastSeen } from '../utils/notificationsSeen';
 import type { Event } from '../types/event';
-import type { AdminLocation } from '../lib/supabase';
+import type { AdminLocation, Post, User } from '../lib/supabase';
 
 type FeedMode = 'events' | 'locations';
 
@@ -96,8 +96,8 @@ export function HomeScreen({
   const [userAvatarUrl, setUserAvatarUrl] = useState<string | null>(_huc?.userAvatarUrl ?? null);
   const [feedMode, setFeedMode] = useState<FeedMode>('events');
   const [adminLocations, setAdminLocations] = useState<AdminLocation[]>([]);
-  const [recommendations, setRecommendations] = useState<any[]>([]);
-  const [selectedRec, setSelectedRec] = useState<any | null>(null);
+  const [recommendations, setRecommendations] = useState<Post[]>([]);
+  const [selectedRec, setSelectedRec] = useState<Post | null>(null);
   const [recRating, setRecRating] = useState<{ avg: number | null; count: number; mine: number }>({ avg: null, count: 0, mine: 0 });
   const [ratingBump, setRatingBump] = useState(0);
   const [locationsLoaded, setLocationsLoaded] = useState(false);
@@ -598,11 +598,12 @@ export function HomeScreen({
   const showFeedSkeleton = firstOpenLoading || (logoAnimActive && events.length > 0);
 
   return (
-    <div className="min-h-screen overflow-x-hidden max-w-full" style={{ background: '#ffffff' }} dir="rtl">
+    <div className="min-h-screen overflow-x-hidden max-w-full" style={{ background: '#F8F9FB' }} dir="rtl">
 
       {/* ─── Header ─────────────────────────────────── */}
       <header
-        className="fixed top-0 left-0 right-0 z-50 bg-gradient-to-b from-white/95 to-white/80 backdrop-blur-xl border-b border-gray-100"
+        className="fixed top-0 left-0 right-0 z-50 backdrop-blur-xl border-b border-gray-100/60"
+        style={{ background: 'rgba(248,249,251,0.92)' }}
         style={{ paddingTop: 'env(safe-area-inset-top)', boxShadow: '0 2px 8px rgba(0,0,0,0.06), 0 1px 0 rgba(0,0,0,0.05)' }}
       >
         <div
@@ -898,7 +899,7 @@ export function HomeScreen({
                 <div
                   className="rounded-full p-[2.5px] transition-all duration-200"
                   style={active
-                    ? { background: 'linear-gradient(135deg, #FF9F43, #FF7E1D)', boxShadow: '0 0 0 1px rgba(255,126,29,0.25)' }
+                    ? { background: 'linear-gradient(135deg, #F97316, #EA6C0A)', boxShadow: '0 0 0 1px rgba(249,115,22,0.25)' }
                     : { background: 'transparent', boxShadow: 'inset 0 0 0 2px #e5e7eb' }}
                 >
                   <div className="w-[60px] h-[60px] rounded-full bg-white flex items-center justify-center overflow-hidden">
@@ -1130,23 +1131,26 @@ export function HomeScreen({
 
           /* No countries selected yet */
           ) : selectedCountries.length === 0 ? (
-            <div className="flex flex-col items-center px-6 pt-20 pb-12 text-center">
-              <div
-                className="w-24 h-24 mb-6 bg-white rounded-3xl flex items-center justify-center border border-gray-100"
-                style={{ boxShadow: '0 4px 24px rgba(0,0,0,0.08)' }}
-              >
-                <span className="text-5xl">🌍</span>
+            <div className="flex flex-col items-center px-6 pt-16 pb-12 text-center">
+              <div className="relative mb-8">
+                <div className="w-28 h-28 rounded-[28px] flex items-center justify-center" style={{
+                  background: 'linear-gradient(145deg, #FFF7ED, #FFEDD5)',
+                  boxShadow: '0 8px 32px rgba(249,115,22,0.15), 0 2px 8px rgba(0,0,0,0.06)',
+                }}>
+                  <span style={{ fontSize: '52px', lineHeight: 1 }}>🌍</span>
+                </div>
+                <div className="absolute -top-1 -right-1 w-7 h-7 rounded-full bg-orange-100 flex items-center justify-center text-base">✈️</div>
               </div>
-              <h3 className="text-2xl font-black text-gray-900 mb-2" style={{ fontFamily: 'Heebo, sans-serif' }}>
-                בחר מדינות תחילה
+              <h3 className="text-[22px] font-black text-gray-900 mb-2 leading-tight" style={{ fontFamily: 'Heebo, sans-serif' }}>
+                לאן אתה טס?
               </h3>
-              <p className="text-gray-400 text-sm leading-relaxed mb-6" style={{ fontFamily: 'Rubik, sans-serif' }}>
-                עדכן את הפרופיל שלך ובחר לאיזה מדינות אתה נוסע
+              <p className="text-gray-400 text-sm leading-relaxed mb-7 max-w-[260px]" style={{ fontFamily: 'Rubik, sans-serif' }}>
+                בחר מדינות יעד ונראה מה קורה שם
               </p>
               <button
                 onClick={onNavigateToProfile}
-                className="inline-flex items-center gap-2 px-7 py-3.5 bg-gradient-to-r from-brand-600 to-brand-700 text-white text-sm font-black rounded-2xl shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 transition-all duration-200"
-                style={{ fontFamily: 'Heebo, sans-serif' }}
+                className="inline-flex items-center gap-2 px-7 py-3.5 text-white text-sm font-black rounded-2xl shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 transition-all duration-200"
+                style={{ background: 'linear-gradient(135deg, #F97316, #EA580C)', fontFamily: 'Heebo, sans-serif', boxShadow: '0 6px 20px rgba(249,115,22,0.35)' }}
               >
                 עדכן פרופיל
               </button>
@@ -1154,18 +1158,28 @@ export function HomeScreen({
 
           /* Empty state — no events at all for this country (suppressed while the first-open animation runs) */
           ) : (events.length === 0 && !logoAnimActive && !firstOpenLoading) ? (
-            <div className="flex flex-col items-center px-6 pt-16 pb-12 text-center animate-fade-in">
-              <div className="text-6xl mb-5">{activeCountryData?.flag || '🌍'}</div>
-              <h3 className="text-xl font-black text-gray-900 mb-2" style={{ fontFamily: 'Heebo, sans-serif' }}>
-                אין אירועים ב{activeCountryData?.name || activeCountry} עדיין
+            <div className="flex flex-col items-center px-6 pt-14 pb-12 text-center animate-fade-in">
+              <div className="relative mb-7">
+                <div className="w-28 h-28 rounded-[28px] flex items-center justify-center" style={{
+                  background: 'linear-gradient(145deg, #F8F9FB, #F0F2F5)',
+                  boxShadow: '0 8px 32px rgba(0,0,0,0.08), 0 2px 8px rgba(0,0,0,0.04)',
+                }}>
+                  <span style={{ fontSize: '52px', lineHeight: 1 }}>{activeCountryData?.flag || '🌍'}</span>
+                </div>
+                <div className="absolute -bottom-2 -right-2 w-8 h-8 rounded-full flex items-center justify-center text-lg" style={{ background: 'linear-gradient(135deg, #F97316, #EA580C)', boxShadow: '0 3px 10px rgba(249,115,22,0.4)' }}>
+                  <Plus className="w-4 h-4 text-white" strokeWidth={3} />
+                </div>
+              </div>
+              <h3 className="text-[22px] font-black text-gray-900 mb-2 leading-tight" style={{ fontFamily: 'Heebo, sans-serif' }}>
+                {activeCountryData?.name || activeCountry} מחכה לך
               </h3>
-              <p className="text-gray-400 text-sm leading-relaxed mb-6 max-w-xs" style={{ fontFamily: 'Rubik, sans-serif' }}>
-                היה הראשון ליצור אירוע כאן ותן לאחרים לדעת מה קורה!
+              <p className="text-gray-400 text-sm leading-relaxed mb-7 max-w-[260px]" style={{ fontFamily: 'Rubik, sans-serif' }}>
+                היה הראשון ליצור אירוע כאן
               </p>
               <button
                 onClick={() => setCreateMode('event')}
-                className="inline-flex items-center gap-2 px-7 py-3.5 bg-gradient-to-r from-brand-600 to-brand-700 text-white text-sm font-black rounded-2xl shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 transition-all duration-200"
-                style={{ fontFamily: 'Heebo, sans-serif' }}
+                className="inline-flex items-center gap-2 px-7 py-3.5 text-white text-sm font-black rounded-2xl hover:scale-105 active:scale-95 transition-all duration-200"
+                style={{ background: 'linear-gradient(135deg, #F97316, #EA580C)', fontFamily: 'Heebo, sans-serif', boxShadow: '0 6px 20px rgba(249,115,22,0.35)' }}
               >
                 <Plus className="w-4 h-4" />
                 צור אירוע
