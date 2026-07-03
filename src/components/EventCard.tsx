@@ -14,6 +14,13 @@ type EventCardProps = {
   isAdmin?: boolean;
 };
 
+const CATEGORY_IMAGES: Record<string, string> = {
+  parties:   'https://images.pexels.com/photos/1105666/pexels-photo-1105666.jpeg?auto=compress&cs=tinysrgb&w=400',
+  treks:     'https://images.pexels.com/photos/2662116/pexels-photo-2662116.jpeg?auto=compress&cs=tinysrgb&w=400',
+  food:      'https://images.pexels.com/photos/1640777/pexels-photo-1640777.jpeg?auto=compress&cs=tinysrgb&w=400',
+  sports:    'https://images.pexels.com/photos/390051/surfer-wave-sunset-the-indian-ocean-390051.jpeg?auto=compress&cs=tinysrgb&w=400',
+  workshops: 'https://images.pexels.com/photos/3822622/pexels-photo-3822622.jpeg?auto=compress&cs=tinysrgb&w=400',
+};
 
 export function EventCard({
   event, currentUserId, onAttendClick, onEdit, onDelete, onUserClick, isAdmin = false,
@@ -28,7 +35,7 @@ export function EventCard({
   const accentColor  = getCategoryColor(event.event_type || '');
   const emoji        = event.emoji || getCategoryEmoji(event.event_type || '');
   const price        = (event as any).price;
-  const displayImage = event.image_url || null;
+  const displayImage = event.image_url || (event.event_type ? CATEGORY_IMAGES[event.event_type] : null);
 
   const eventDateStr = event.event_date || (event as any).date || '';
   const eventDate    = new Date(eventDateStr);
@@ -77,33 +84,18 @@ export function EventCard({
       <div className="flex gap-4 p-4" dir="rtl">
         {/* Thumbnail */}
         <div className="relative flex-shrink-0 w-[88px] h-[88px] rounded-[16px] overflow-hidden">
-          {displayImage ? (
-            <>
-              <img
-                src={displayImage} alt={event.title}
-                className="absolute inset-0 w-full h-full object-cover"
-                onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }}
-              />
-              <div className="absolute inset-0" style={{ background: `linear-gradient(135deg, ${accentColor}33, transparent)` }} />
-              <div className="absolute -bottom-1 -left-1 text-[22px] leading-none drop-shadow-md">
-                {emoji}
-              </div>
-            </>
-          ) : (
-            <>
-              <div className="absolute inset-0" style={{
-                background: `linear-gradient(145deg, ${accentColor}22 0%, ${accentColor}44 50%, ${accentColor}88 100%)`,
-              }} />
-              <div className="absolute inset-0" style={{
-                backgroundImage: `radial-gradient(circle at 30% 30%, ${accentColor}55 0%, transparent 60%)`,
-              }} />
-              <div className="absolute inset-0 flex items-center justify-center">
-                <span style={{ fontSize: '38px', lineHeight: 1, filter: 'drop-shadow(0 2px 6px rgba(0,0,0,0.15))' }}>
-                  {emoji}
-                </span>
-              </div>
-            </>
+          <div className="absolute inset-0" style={{ background: `linear-gradient(135deg, ${accentColor}cc, ${accentColor})` }} />
+          {displayImage && (
+            <img
+              src={displayImage} alt={event.title}
+              className="absolute inset-0 w-full h-full object-cover"
+              onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }}
+            />
           )}
+          {/* emoji badge */}
+          <div className="absolute -bottom-1 -left-1 text-[22px] leading-none drop-shadow-md">
+            {emoji}
+          </div>
         </div>
 
         {/* Info */}

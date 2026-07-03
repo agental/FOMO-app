@@ -91,28 +91,30 @@ export function FloatingNavBar({
           <div className="flex items-center justify-center gap-3 px-7 py-2 relative">
             <button
               onClick={onHomeClick}
-              className="p-1.5 transition-all active:scale-95 flex flex-col items-center gap-0.5"
+              className="p-1.5 transition-all active:scale-95"
               aria-label="בית"
             >
               <div className={`w-9 h-9 flex items-center justify-center rounded-full transition-all duration-300 ${
-                activeTab === 'home' ? 'scale-110' : 'hover:bg-gray-50'
+                activeTab === 'home'
+                  ? 'scale-110'
+                  : 'hover:bg-gray-50'
               }`}>
-                <Home className="w-5 h-5" strokeWidth={2.5} style={{ color: activeTab === 'home' ? '#F97316' : '#9ca3af' }} />
+                <Home className="w-5 h-5" strokeWidth={2.5} style={{ color: activeTab === 'home' ? '#FF9F43' : '#9ca3af' }} />
               </div>
-              <div className="w-1 h-1 rounded-full transition-all duration-300" style={{ background: activeTab === 'home' ? '#F97316' : 'transparent' }} />
             </button>
 
             <button
               onClick={onMapClick}
-              className="p-1.5 transition-all active:scale-95 flex flex-col items-center gap-0.5"
+              className="p-1.5 transition-all active:scale-95"
               aria-label="מפה"
             >
               <div className={`w-9 h-9 flex items-center justify-center rounded-full transition-all duration-300 ${
-                activeTab === 'map' ? 'scale-110' : 'hover:bg-gray-50'
+                activeTab === 'map'
+                  ? 'scale-110'
+                  : 'hover:bg-gray-50'
               }`}>
-                <Map className="w-4.5 h-4.5" strokeWidth={2} style={{ color: activeTab === 'map' ? '#F97316' : '#9ca3af' }} />
+                <Map className="w-4.5 h-4.5" strokeWidth={2} style={{ color: activeTab === 'map' ? '#FF9F43' : '#9ca3af' }} />
               </div>
-              <div className="w-1 h-1 rounded-full transition-all duration-300" style={{ background: activeTab === 'map' ? '#F97316' : 'transparent' }} />
             </button>
 
             <button
@@ -127,13 +129,15 @@ export function FloatingNavBar({
 
             <button
               onClick={onChatClick}
-              className="p-1.5 transition-all active:scale-95 relative flex flex-col items-center gap-0.5"
+              className="p-1.5 transition-all active:scale-95 relative"
               aria-label="צ'אט"
             >
               <div className={`w-9 h-9 flex items-center justify-center rounded-full transition-all duration-300 ${
-                activeTab === 'chat' ? 'scale-110' : 'hover:bg-gray-50'
+                activeTab === 'chat'
+                  ? 'scale-110'
+                  : 'hover:bg-gray-50'
               }`}>
-                <MessageCircle className="w-4.5 h-4.5" strokeWidth={2} style={{ color: activeTab === 'chat' ? '#F97316' : '#9ca3af' }} />
+                <MessageCircle className="w-4.5 h-4.5" strokeWidth={2} style={{ color: activeTab === 'chat' ? '#FF9F43' : '#9ca3af' }} />
               </div>
               {unreadCount > 0 && (
                 <div className="absolute -top-1 -right-1 w-4 h-4 bg-rose-500 rounded-full flex items-center justify-center border-2 border-white shadow-lg animate-pulse">
@@ -142,12 +146,11 @@ export function FloatingNavBar({
                   </span>
                 </div>
               )}
-              <div className="w-1 h-1 rounded-full transition-all duration-300" style={{ background: activeTab === 'chat' ? '#F97316' : 'transparent' }} />
             </button>
 
             <button
               onClick={onMyEventsClick}
-              className="p-1.5 transition-all active:scale-95 flex flex-col items-center gap-0.5"
+              className="p-1.5 transition-all active:scale-95"
               aria-label="האירועים שלי"
             >
               <div className={`w-9 h-9 flex items-center justify-center rounded-full transition-all duration-300 ${
@@ -155,9 +158,8 @@ export function FloatingNavBar({
                   ? 'scale-110'
                   : 'hover:bg-gray-50'
               }`}>
-                <CalendarCheck className="w-4.5 h-4.5" strokeWidth={2} style={{ color: activeTab === 'myEvents' ? '#F97316' : '#9ca3af' }} />
+                <CalendarCheck className="w-4.5 h-4.5" strokeWidth={2} style={{ color: activeTab === 'myEvents' ? '#FF9F43' : '#9ca3af' }} />
               </div>
-              <div className="w-1 h-1 rounded-full transition-all duration-300" style={{ background: activeTab === 'myEvents' ? '#F97316' : 'transparent' }} />
             </button>
           </div>
         </div>

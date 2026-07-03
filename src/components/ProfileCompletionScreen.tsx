@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { CircleCheck as CheckCircle2, Sparkles, ArrowRight } from 'lucide-react';
-import { supabase, type User } from '../lib/supabase';
+import { supabase } from '../lib/supabase';
 import { COUNTRIES } from '../utils/countries';
 
 interface ProfileCompletionScreenProps {
@@ -9,7 +9,7 @@ interface ProfileCompletionScreenProps {
 }
 
 export function ProfileCompletionScreen({ userId, onContinue }: ProfileCompletionScreenProps) {
-  const [profile, setProfile] = useState<User | null>(null);
+  const [profile, setProfile] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {

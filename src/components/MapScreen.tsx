@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { Loader as Loader2, CircleAlert as AlertCircle, Search, List, X, SlidersHorizontal } from 'lucide-react';
-import { supabase, type ChabadHouse, type AdminLocation, type Meetup, type Post } from '../lib/supabase';
+import { supabase, type ChabadHouse, type AdminLocation, type Meetup } from '../lib/supabase';
 import { FloatingNavBar } from './FloatingNavBar';
 import { EventMapBottomSheet } from './EventMapBottomSheet';
 import { ChabadHouseBottomSheet } from './ChabadHouseBottomSheet';
@@ -39,12 +39,6 @@ interface MapScreenProps {
 
 interface UserLocation { latitude: number; longitude: number; }
 
-declare global {
-  interface Window {
-    _nativeLocation?: { latitude: number; longitude: number };
-  }
-}
-
 type MapFilter = 'all' | 'events' | 'places' | 'meetups';
 
 const FILTER_TABS: { id: MapFilter; label: string; emoji: string }[] = [
@@ -57,7 +51,7 @@ const FILTER_TABS: { id: MapFilter; label: string; emoji: string }[] = [
 /* ── module-level cache (survives navigation) ── */
 let _mapChabadHouses:   ChabadHouse[]   | null = null;
 let _mapAdminLocations: AdminLocation[] | null = null;
-let _mapPosts:          Post[]          | null = null;
+let _mapPosts:          any[]           | null = null;
 let _mapMeetups:        Meetup[]        | null = null;
 let _mapLocation:       { latitude: number; longitude: number } | null = null;
 
@@ -91,7 +85,7 @@ export function MapScreen({
   /* data */
   const [chabadHouses,    setChabadHouses]    = useState<ChabadHouse[]>(_mapChabadHouses ?? []);
   const [adminLocations,  setAdminLocations]  = useState<AdminLocation[]>(_mapAdminLocations ?? []);
-  const [posts,           setPosts]           = useState<Post[]>(_mapPosts ?? []);
+  const [posts,           setPosts]           = useState<any[]>(_mapPosts ?? []);
   const [meetups,         setMeetups]         = useState<Meetup[]>(_mapMeetups ?? []);
 
   /* selected items / sheets */
@@ -241,7 +235,7 @@ export function MapScreen({
 
     // If location was already injected by React Native (e.g. user navigated back),
     // use the cached value immediately instead of waiting for the event again.
-    const cached = window._nativeLocation;
+    const cached = (window as any)._nativeLocation;
     if (cached?.lat != null && !isNaN(cached.lat)) {
       applyLocation(cached.lat, cached.lng);
       return;
