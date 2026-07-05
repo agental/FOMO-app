@@ -418,6 +418,7 @@ function App() {
         onMyEventsClick={() => setCurrentScreen('myEvents')}
         onNavigateToCountrySelection={navigateToCountrySelection}
         onOpenMapAt={(lat: number, lng: number) => { setMapFocus({ latitude: lat, longitude: lng }); setCurrentScreen('map'); }}
+        onNavigateToUserProfile={(userId: string) => { setViewingUserId(userId); setCurrentScreen('userProfile'); }}
         initialCountries={Array.from(selectedCountries)}
       />
     );

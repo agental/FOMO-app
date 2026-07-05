@@ -6,7 +6,7 @@ import { getCategoryColor, getCategoryEmoji } from './eventCategories';
  * visually distinct from round recommendation pins. The whole SVG is scaled by
  * the map zoom (see getPinScale), so the square + image grow as you zoom in.
  */
-export function createEventPinSVG(eventType: string, badgeEmoji?: string, imageUrl?: string | null): SVGElement {
+export function createEventPinSVG(eventType: string, badgeEmoji?: string, imageUrl?: string | null, isToday?: boolean): SVGElement {
   const W = 40;
   const H = 46;
 
@@ -63,6 +63,41 @@ export function createEventPinSVG(eventType: string, badgeEmoji?: string, imageU
   clip.appendChild(mk('rect', { x: String(SX + INSET), y: String(SY + INSET), width: String(SS - INSET * 2), height: String(SS - INSET * 2), rx: String(IR), ry: String(IR) }));
   defs.appendChild(clip);
   svg.appendChild(defs);
+
+  /* ── pulse rings for today's events (behind pin, at the tip) ──────────── */
+  if (isToday) {
+    const tipX = W / 2;
+    const tipY = H - 2;
+    for (let i = 0; i < 3; i++) {
+      const ring = document.createElementNS(NS, 'circle');
+      ring.setAttribute('cx', String(tipX));
+      ring.setAttribute('cy', String(tipY));
+      ring.setAttribute('r', '0');
+      ring.setAttribute('fill', 'none');
+      ring.setAttribute('stroke', color);
+      ring.setAttribute('stroke-width', i === 0 ? '2' : '1.5');
+
+      const animR = document.createElementNS(NS, 'animate');
+      animR.setAttribute('attributeName', 'r');
+      animR.setAttribute('from', '4');
+      animR.setAttribute('to', '32');
+      animR.setAttribute('dur', '2s');
+      animR.setAttribute('begin', `${i * 0.65}s`);
+      animR.setAttribute('repeatCount', 'indefinite');
+      ring.appendChild(animR);
+
+      const animO = document.createElementNS(NS, 'animate');
+      animO.setAttribute('attributeName', 'opacity');
+      animO.setAttribute('from', '0.6');
+      animO.setAttribute('to', '0');
+      animO.setAttribute('dur', '2s');
+      animO.setAttribute('begin', `${i * 0.65}s`);
+      animO.setAttribute('repeatCount', 'indefinite');
+      ring.appendChild(animO);
+
+      svg.appendChild(ring);
+    }
+  }
 
   /* ── body: colored rounded square + downward tail (under one shadow) ────── */
   const g = document.createElementNS(NS, 'g');

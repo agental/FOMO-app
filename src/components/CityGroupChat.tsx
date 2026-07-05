@@ -31,6 +31,7 @@ interface CityGroupChatProps {
   currentUserId: string; currentUserName: string; currentUserAvatar: string | null;
   onClose: () => void;
   onOpenMapAt?: (lat: number, lng: number) => void;
+  onNavigateToUserProfile?: (userId: string) => void;
 }
 
 /* ─── constants ─── */
@@ -189,6 +190,7 @@ const saveLeftChannels = () => { try { localStorage.setItem(LEFT_KEY, JSON.strin
 export function CityGroupChat({
   countryCode, countryFlag, cityName, cityEmoji,
   currentUserId, currentUserName, currentUserAvatar, onClose,
+  onNavigateToUserProfile,
 }: CityGroupChatProps) {
 
   const cityKey = `${countryCode}:${cityEmoji}`;
@@ -914,7 +916,10 @@ export function CityGroupChat({
             {/* Avatar attached to the tail (incoming only) */}
             {!mine && (
               showAvatar ? (
-                <div style={{ width: 26, height: 26, flexShrink: 0, borderRadius: '50%', overflow: 'hidden', background: colorFor(msg.display_name), display: 'flex', alignItems: 'center', justifyContent: 'center', boxSizing: 'border-box', border: `2px solid ${colorFor(msg.display_name)}`, marginBottom: -1 }}>
+                <div
+                  onClick={() => onNavigateToUserProfile?.(msg.user_id)}
+                  style={{ width: 26, height: 26, flexShrink: 0, borderRadius: '50%', overflow: 'hidden', background: colorFor(msg.display_name), display: 'flex', alignItems: 'center', justifyContent: 'center', boxSizing: 'border-box', border: `2px solid ${colorFor(msg.display_name)}`, marginBottom: -1, cursor: onNavigateToUserProfile ? 'pointer' : 'default' }}
+                >
                   {msg.avatar_url
                     ? <UserAvatar userId={msg.user_id} displayName={msg.display_name} avatarUrl={msg.avatar_url} size="small" />
                     : <span style={{ color: '#fff', fontWeight: 700, fontSize: 11 }}>{msg.display_name.charAt(0)}</span>
@@ -935,7 +940,11 @@ export function CityGroupChat({
                 /* Shared event → glass card that opens the event */
                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: mine ? 'flex-end' : 'flex-start' }}>
                   {showName && (
-                    <span style={{ display: 'block', fontSize: 10, fontWeight: 700, color: nameClr, margin: '0 4px 3px', lineHeight: 1.2 }} dir="rtl">
+                    <span
+                      onClick={() => onNavigateToUserProfile?.(msg.user_id)}
+                      style={{ display: 'block', fontSize: 10, fontWeight: 700, color: nameClr, margin: '0 4px 3px', lineHeight: 1.2, cursor: onNavigateToUserProfile ? 'pointer' : 'default' }}
+                      dir="rtl"
+                    >
                       {msg.display_name}
                     </span>
                   )}
@@ -945,7 +954,11 @@ export function CityGroupChat({
                 /* iMessage-exact bubble (single SVG path, stretchable, fixed tail) */
                 <MessageBubble mine={!mine} tail={showAvatar} color={bubbleBg} contentStyle={{ padding: showName ? '5px 14px 7px' : '7px 14px' }}>
                   {showName && (
-                    <span style={{ display: 'block', fontSize: 10, fontWeight: 700, color: nameClr, marginBottom: 2, lineHeight: 1.2 }} dir="rtl">
+                    <span
+                      onClick={() => onNavigateToUserProfile?.(msg.user_id)}
+                      style={{ display: 'block', fontSize: 10, fontWeight: 700, color: nameClr, marginBottom: 2, lineHeight: 1.2, cursor: onNavigateToUserProfile ? 'pointer' : 'default' }}
+                      dir="rtl"
+                    >
                       {msg.display_name}
                     </span>
                   )}
@@ -1270,7 +1283,7 @@ export function CityGroupChat({
       </div>
 
       {/* ── Messages area with WA-style bg (fills container; scrolls behind glass bars) ── */}
-      <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: '#F3EFE9' }}>
+      <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: '#F3EFE9', backgroundImage: 'url(/chat-bg.png)', backgroundSize: '50%', backgroundRepeat: 'repeat' }}>
         <div ref={scrollRef} style={{ position: 'absolute', inset: 0, overflowY: 'auto', paddingTop: headerH + 10, paddingBottom: inputH + 8 }}>
          <div ref={contentRef}>
 
@@ -1576,13 +1589,19 @@ export function CityGroupChat({
                 </p>
                 {pendingReqs.map((m, i) => (
                   <div key={m.user_id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', borderTop: i === 0 ? 'none' : '1px solid #F3F3F3', direction: 'rtl', background: '#FFFBF7' }}>
-                    <div style={{ width: 44, height: 44, borderRadius: '50%', overflow: 'hidden', background: '#F0F0F0', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                    <div
+                      onClick={() => onNavigateToUserProfile?.(m.user_id)}
+                      style={{ width: 44, height: 44, borderRadius: '50%', overflow: 'hidden', background: '#F0F0F0', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, cursor: onNavigateToUserProfile ? 'pointer' : 'default' }}
+                    >
                       {m.avatar_url
                         ? <UserAvatar userId={m.user_id} displayName={m.display_name} avatarUrl={m.avatar_url} size="medium" />
                         : <span style={{ color: '#555', fontWeight: 700, fontSize: 16 }}>{m.display_name.charAt(0)}</span>
                       }
                     </div>
-                    <div style={{ flex: 1 }}>
+                    <div
+                      onClick={() => onNavigateToUserProfile?.(m.user_id)}
+                      style={{ flex: 1, cursor: onNavigateToUserProfile ? 'pointer' : 'default' }}
+                    >
                       <span style={{ fontSize: 15, fontWeight: 500, color: '#111' }}>{m.display_name}</span>
                     </div>
                     <div style={{ display: 'flex', gap: 8 }}>
@@ -1620,14 +1639,11 @@ export function CityGroupChat({
 
                 const MemberRow = ({ m, i }: { m: GMember; i: number }) => {
                   const isAdmin = !!m.is_admin;
-                  return (
-                    <div style={{
-                      display: 'flex', alignItems: 'center', gap: 12,
-                      padding: '10px 16px',
-                      borderTop: i === 0 ? 'none' : '1px solid #F3F3F3',
-                      direction: 'rtl',
-                    }}>
-                      {/* Avatar — right side (RTL first) */}
+                  const isSelf  = m.user_id === currentUserId;
+                  const canNav  = !isSelf && !!onNavigateToUserProfile;
+                  const inner = (
+                    <>
+                      {/* Avatar */}
                       <div style={{ position: 'relative', flexShrink: 0 }}>
                         <div style={{ width: 44, height: 44, borderRadius: '50%', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#F0F0F0' }}>
                           {m.avatar_url
@@ -1646,14 +1662,40 @@ export function CityGroupChat({
                           </div>
                         )}
                       </div>
-                      <div style={{ flex: 1 }}>
+                      <div style={{ flex: 1, textAlign: 'right' }}>
                         <span style={{ fontSize: 15, fontWeight: 500, color: '#111' }}>{m.display_name}</span>
+                        {isSelf && <span style={{ fontSize: 11, color: '#9CA3AF', marginRight: 6 }}>אתה</span>}
                       </div>
                       {isAdmin && (
                         <span style={{ fontSize: 12, fontWeight: 600, color: '#F97316', flexShrink: 0 }}>מנהל</span>
                       )}
-                    </div>
+                      {canNav && (
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0, opacity: 0.35 }}>
+                          <path d="M6 12L10 8L6 4" stroke="#111" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+                        </svg>
+                      )}
+                    </>
                   );
+
+                  const sharedStyle: React.CSSProperties = {
+                    width: '100%', display: 'flex', alignItems: 'center', gap: 12,
+                    padding: '10px 16px',
+                    borderTop: i === 0 ? 'none' : '1px solid #F3F3F3',
+                    direction: 'rtl', textAlign: 'right', background: 'none',
+                    WebkitTapHighlightColor: 'transparent',
+                  };
+
+                  if (canNav) {
+                    return (
+                      <button
+                        onClick={() => onNavigateToUserProfile!(m.user_id)}
+                        style={{ ...sharedStyle, border: 'none', cursor: 'pointer' }}
+                      >
+                        {inner}
+                      </button>
+                    );
+                  }
+                  return <div style={sharedStyle}>{inner}</div>;
                 };
 
                 return (

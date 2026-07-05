@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Home, Map, Plus, MessageCircle, CalendarCheck } from 'lucide-react';
+import { Home, Map, Plus, MessageCircle, Ticket } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 
 type NavBarProps = {
@@ -99,7 +99,7 @@ export function FloatingNavBar({
                   ? 'scale-110'
                   : 'hover:bg-gray-50'
               }`}>
-                <Home className="w-5 h-5" strokeWidth={2.5} style={{ color: activeTab === 'home' ? '#FF9F43' : '#9ca3af' }} />
+                <Home className="w-5 h-5" strokeWidth={2.5} style={{ color: activeTab === 'home' ? '#F97316' : '#9ca3af' }} />
               </div>
             </button>
 
@@ -113,7 +113,7 @@ export function FloatingNavBar({
                   ? 'scale-110'
                   : 'hover:bg-gray-50'
               }`}>
-                <Map className="w-4.5 h-4.5" strokeWidth={2} style={{ color: activeTab === 'map' ? '#FF9F43' : '#9ca3af' }} />
+                <Map className="w-4.5 h-4.5" strokeWidth={2} style={{ color: activeTab === 'map' ? '#F97316' : '#9ca3af' }} />
               </div>
             </button>
 
@@ -137,7 +137,7 @@ export function FloatingNavBar({
                   ? 'scale-110'
                   : 'hover:bg-gray-50'
               }`}>
-                <MessageCircle className="w-4.5 h-4.5" strokeWidth={2} style={{ color: activeTab === 'chat' ? '#FF9F43' : '#9ca3af' }} />
+                <MessageCircle className="w-4.5 h-4.5" strokeWidth={2} style={{ color: activeTab === 'chat' ? '#F97316' : '#9ca3af' }} />
               </div>
               {unreadCount > 0 && (
                 <div className="absolute -top-1 -right-1 w-4 h-4 bg-rose-500 rounded-full flex items-center justify-center border-2 border-white shadow-lg animate-pulse">
@@ -158,7 +158,7 @@ export function FloatingNavBar({
                   ? 'scale-110'
                   : 'hover:bg-gray-50'
               }`}>
-                <CalendarCheck className="w-4.5 h-4.5" strokeWidth={2} style={{ color: activeTab === 'myEvents' ? '#FF9F43' : '#9ca3af' }} />
+                <Ticket className="w-4.5 h-4.5" strokeWidth={2} style={{ color: activeTab === 'myEvents' ? '#F97316' : '#9ca3af' }} />
               </div>
             </button>
           </div>

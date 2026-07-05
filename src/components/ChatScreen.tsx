@@ -384,7 +384,7 @@ export function ChatScreen({ conversationId, currentUserId, otherUserId, onBack,
       `}</style>
 
       {/* Messages area (WhatsApp bg) — scrolls behind the glass bars */}
-      <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: '#F3EFE9' }}>
+      <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: '#F3EFE9', backgroundImage: 'url(/chat-bg.png)', backgroundSize: '50%', backgroundRepeat: 'repeat' }}>
         <div ref={scrollContainerRef}
           onScroll={e => { const el = e.currentTarget; const dist = el.scrollHeight - el.scrollTop - el.clientHeight; atBottomRef.current = dist < 80; setShowScroll(dist > 100); if (dist < 80) setUnreadNew(0); }}
           style={{ position: 'absolute', inset: 0, overflowY: 'auto', paddingTop: headerH + 10, paddingBottom: inputH + 8 }}>

@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
-import { Loader as Loader2, CircleAlert as AlertCircle, Search, List, X, SlidersHorizontal } from 'lucide-react';
+import { Loader as Loader2, CircleAlert as AlertCircle, Search, List, X, Users } from 'lucide-react';
+import { getCategoryColor, getCategoryEmoji } from '../utils/eventCategories';
 import { supabase, type ChabadHouse, type AdminLocation, type Meetup } from '../lib/supabase';
 import { FloatingNavBar } from './FloatingNavBar';
 import { EventMapBottomSheet } from './EventMapBottomSheet';
@@ -76,8 +77,7 @@ export function MapScreen({
   const [mapReady,      setMapReady]      = useState(false);
 
   /* map filter */
-  const [mapFilter,       setMapFilter]       = useState<MapFilter>('all');
-  const [filterSheetOpen, setFilterSheetOpen] = useState(false);
+  const [mapFilter, setMapFilter] = useState<MapFilter>('all');
 
   /* search */
   const [searchQuery, setSearchQuery] = useState('');
@@ -87,6 +87,12 @@ export function MapScreen({
   const [adminLocations,  setAdminLocations]  = useState<AdminLocation[]>(_mapAdminLocations ?? []);
   const [posts,           setPosts]           = useState<any[]>(_mapPosts ?? []);
   const [meetups,         setMeetups]         = useState<Meetup[]>(_mapMeetups ?? []);
+
+  /* preview card (mini card above pin) */
+  const [previewEvent, setPreviewEvent] = useState<Event | null>(null);
+  const [previewPos,   setPreviewPos]   = useState<{ x: number; y: number } | null>(null);
+  const previewEventRef = useRef<Event | null>(null);
+  useEffect(() => { previewEventRef.current = previewEvent; }, [previewEvent]);
 
   /* selected items / sheets */
   const [selectedEvent,         setSelectedEvent]         = useState<Event | null>(null);
@@ -276,7 +282,7 @@ export function MapScreen({
     try {
       map = new mapboxgl.Map({
         container: mapRef.current,
-        style: 'mapbox://styles/mapbox/streets-v11',
+        style: 'mapbox://styles/mapbox/streets-v12',
         center: [location.longitude, location.latitude],
         zoom: 12,
         failIfMajorPerformanceCaveat: false,
@@ -310,8 +316,20 @@ export function MapScreen({
     };
 
     map.on('zoom', updatePinScales);
+
+    /* update preview card position when map moves/zooms */
+    const updatePreviewPos = () => {
+      const ev = previewEventRef.current;
+      if (!ev?.latitude || !ev?.longitude || !mapRef.current) return;
+      const rect = mapRef.current.getBoundingClientRect();
+      const pt   = map.project([ev.longitude, ev.latitude]);
+      setPreviewPos({ x: rect.left + pt.x, y: rect.top + pt.y });
+    };
+    map.on('move', updatePreviewPos);
+
     return () => {
       map.off('zoom', updatePinScales);
+      map.off('move', updatePreviewPos);
       map.remove();
       mapInstanceRef.current = null;
     };
@@ -352,7 +370,14 @@ export function MapScreen({
 
     nearbyEvents.forEach(event => {
       if (!event.latitude || !event.longitude) return;
-      const svg = createEventPinSVG(event.event_type || 'parties', event.emoji ?? undefined, event.image_url);
+      const today = new Date();
+      const evDate = event.event_date ? new Date(event.event_date) : null;
+      const isToday = evDate
+        ? evDate.getDate() === today.getDate() &&
+          evDate.getMonth() === today.getMonth() &&
+          evDate.getFullYear() === today.getFullYear()
+        : false;
+      const svg = createEventPinSVG(event.event_type || 'parties', event.emoji ?? undefined, event.image_url, isToday);
       const scaleWrapper = document.createElement('div');
       scaleWrapper.style.cssText = `line-height:0;transform-origin:center bottom;transition:transform 0.15s ease;transform:scale(${getPinScale('event', mapInstanceRef.current!.getZoom())});${showEvents ? '' : 'display:none;'}`;
       scaleWrapper.appendChild(svg);
@@ -364,7 +389,11 @@ export function MapScreen({
         .setLngLat([event.longitude, event.latitude])
         .addTo(mapInstanceRef.current!);
       el.addEventListener('click', () => {
-        setSelectedEvent(event);
+        if (!mapRef.current || !mapInstanceRef.current) return;
+        const rect = mapRef.current.getBoundingClientRect();
+        const pt   = mapInstanceRef.current.project([event.longitude!, event.latitude!]);
+        setPreviewEvent(event);
+        setPreviewPos({ x: rect.left + pt.x, y: rect.top + pt.y });
         setSelectedMeetup(null);
         setShowMeetup(false);
         setShowChabadHouse(false);
@@ -397,6 +426,8 @@ export function MapScreen({
         setShowChabadHouse(true);
         setSelectedChabadHouse(house);
         setSelectedEvent(null);
+        setPreviewEvent(null);
+        setPreviewPos(null);
         setSelectedMeetup(null);
         setShowMeetup(false);
         setShowAdminLocation(false);
@@ -434,6 +465,8 @@ export function MapScreen({
         setShowAdminLocation(true);
         setSelectedAdminLocation(loc);
         setSelectedEvent(null);
+        setPreviewEvent(null);
+        setPreviewPos(null);
         setSelectedMeetup(null);
         setShowMeetup(false);
         setShowChabadHouse(false);
@@ -507,6 +540,8 @@ export function MapScreen({
         setSelectedMeetup(meetup);
         setShowMeetup(true);
         setSelectedEvent(null);
+        setPreviewEvent(null);
+        setPreviewPos(null);
         setShowChabadHouse(false);
         setShowAdminLocation(false);
       });
@@ -674,96 +709,185 @@ export function MapScreen({
       {/* Map canvas */}
       <div ref={mapRef} className="absolute inset-0" />
 
+      {/* ── Event Preview Card ── */}
+      {previewEvent && previewPos && (
+        <>
+          <style>{`
+            @keyframes preview-pop {
+              0%   { opacity: 0; transform: scale(0.75) translateY(8px); }
+              70%  { transform: scale(1.04) translateY(-2px); }
+              100% { opacity: 1; transform: scale(1) translateY(0); }
+            }
+          `}</style>
+          {/* backdrop — click-outside to dismiss */}
+          <div
+            className="fixed inset-0"
+            style={{ zIndex: 44 }}
+            onClick={() => { setPreviewEvent(null); setPreviewPos(null); }}
+          />
+          <div
+            className="fixed pointer-events-none"
+            style={{
+              left: previewPos.x,
+              top:  previewPos.y,
+              transform: 'translate(-50%, calc(-100% - 54px))',
+              zIndex: 45,
+            }}
+          >
+            <div
+              className="pointer-events-auto"
+              style={{ animation: 'preview-pop 0.25s cubic-bezier(0.34,1.56,0.64,1) both' }}
+            >
+              {/* Card */}
+              <div
+                style={{
+                  background: 'white',
+                  borderRadius: 18,
+                  width: 220,
+                  overflow: 'hidden',
+                  boxShadow: '0 12px 48px rgba(0,0,0,0.28), 0 2px 8px rgba(0,0,0,0.12)',
+                }}
+              >
+                {/* Image / emoji hero */}
+                <div style={{ height: 96, position: 'relative', overflow: 'hidden', flexShrink: 0 }}>
+                  {previewEvent.image_url ? (
+                    <img
+                      src={previewEvent.image_url}
+                      alt={previewEvent.title}
+                      style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+                    />
+                  ) : (
+                    <div style={{
+                      width: '100%', height: '100%',
+                      background: `linear-gradient(135deg, ${getCategoryColor(previewEvent.event_type || '')}22, ${getCategoryColor(previewEvent.event_type || '')}55)`,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      fontSize: 38,
+                    }}>
+                      {getCategoryEmoji(previewEvent.event_type || '')}
+                    </div>
+                  )}
+                  <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to top, rgba(0,0,0,0.45) 0%, transparent 55%)' }} />
+                  {/* Attendees count overlay */}
+                  {previewEvent.attendees.length > 0 && (
+                    <div style={{
+                      position: 'absolute', bottom: 7, right: 8,
+                      background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(6px)',
+                      borderRadius: 20, padding: '3px 8px',
+                      display: 'flex', alignItems: 'center', gap: 4,
+                    }}>
+                      <Users size={11} color="white" strokeWidth={2.5} />
+                      <span style={{ fontSize: 11, fontWeight: 700, color: 'white', fontFamily: 'Heebo, sans-serif' }}>
+                        {previewEvent.attendees.length} הולכים
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Text content */}
+                <div style={{ padding: '10px 12px 12px', direction: 'rtl' }}>
+                  <p style={{
+                    fontWeight: 800, fontSize: 14, color: '#111827',
+                    fontFamily: 'Heebo, sans-serif', marginBottom: 3,
+                    lineHeight: 1.3,
+                    display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
+                  }}>
+                    {previewEvent.title}
+                  </p>
+                  <p style={{ fontSize: 11, color: '#9CA3AF', fontFamily: 'Heebo, sans-serif', marginBottom: 10 }}>
+                    {previewEvent.event_date
+                      ? new Date(previewEvent.event_date).toLocaleDateString('he-IL', { day: 'numeric', month: 'long' })
+                      : ''}
+                    {(previewEvent as any).time ? ` • ${(previewEvent as any).time}` : ''}
+                  </p>
+                  <button
+                    onClick={() => {
+                      setSelectedEvent(previewEvent);
+                      setPreviewEvent(null);
+                      setPreviewPos(null);
+                    }}
+                    style={{
+                      width: '100%',
+                      background: 'linear-gradient(135deg,#F97316,#EA580C)',
+                      color: 'white', border: 'none',
+                      borderRadius: 11, padding: '8px 0',
+                      fontSize: 13, fontWeight: 800,
+                      cursor: 'pointer', fontFamily: 'Heebo, sans-serif',
+                      boxShadow: '0 4px 14px rgba(249,115,22,0.35)',
+                      transition: 'transform 0.15s',
+                    }}
+                    onMouseDown={e => (e.currentTarget.style.transform = 'scale(0.96)')}
+                    onMouseUp={e => (e.currentTarget.style.transform = 'scale(1)')}
+                  >
+                    פרטים על האירוע →
+                  </button>
+                </div>
+              </div>
+
+              {/* Arrow pointing down to pin */}
+              <div style={{
+                width: 0, height: 0,
+                borderLeft: '9px solid transparent',
+                borderRight: '9px solid transparent',
+                borderTop: '9px solid white',
+                margin: '0 auto',
+                filter: 'drop-shadow(0 3px 4px rgba(0,0,0,0.15))',
+              }} />
+            </div>
+          </div>
+        </>
+      )}
+
       {/* ── Top UI ── */}
       {location && !loading && !error && (
         <>
-          <style>{`
-            @keyframes chip-fall {
-              0%   { opacity: 0; transform: translateY(-32px) scale(0.85); }
-              60%  { transform: translateY(4px) scale(1.03); }
-              100% { opacity: 1; transform: translateY(0) scale(1); }
-            }
-            @keyframes chip-rise {
-              0%   { opacity: 1; transform: translateY(0) scale(1); }
-              100% { opacity: 0; transform: translateY(-24px) scale(0.88); }
-            }
-            @keyframes filter-btn-spin {
-              0%   { transform: rotate(0deg); }
-              100% { transform: rotate(180deg); }
-            }
-          `}</style>
           <div className="absolute left-4 right-4 z-10" style={{ top: 'max(1rem, env(safe-area-inset-top))' }}>
 
-            {/* Search bar + filter button */}
-            <div className="flex items-center gap-2 mb-2">
-              {/* Filter button */}
-              <button
-                onClick={() => setFilterSheetOpen(v => !v)}
-                style={{
-                  width: 44, height: 44, borderRadius: '50%',
-                  background: mapFilter !== 'all' ? '#F97316' : '#fff',
-                  boxShadow: '0 2px 12px rgba(0,0,0,0.18)',
-                  border: 'none', cursor: 'pointer', flexShrink: 0,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  transition: 'background 0.25s',
-                }}
-              >
-                <SlidersHorizontal
-                  size={19}
-                  color={mapFilter !== 'all' ? '#fff' : '#374151'}
-                  strokeWidth={2.2}
-                  style={{
-                    transition: 'transform 0.35s cubic-bezier(0.34,1.56,0.64,1)',
-                    transform: filterSheetOpen ? 'rotate(90deg)' : 'rotate(0deg)',
-                  }}
-                />
-              </button>
-              <div className="relative flex-1">
-                <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={e => setSearchQuery(e.target.value)}
-                  placeholder="חיפוש אירועים ומקומות..."
-                  className="w-full bg-white text-gray-900 rounded-full h-11 pr-11 pl-4 text-sm placeholder:text-gray-400 shadow-lg focus:ring-2 focus:ring-orange-400 focus:outline-none"
-                />
-              </div>
+            {/* Search bar */}
+            <div className="relative mb-2.5">
+              <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                placeholder="חיפוש אירועים ומקומות..."
+                className="w-full bg-white text-gray-900 rounded-full h-11 pr-11 pl-4 text-sm placeholder:text-gray-400 focus:ring-2 focus:ring-orange-400 focus:outline-none"
+                style={{ boxShadow: '0 4px 20px rgba(0,0,0,0.18)' }}
+              />
             </div>
 
-            {/* Filter chips — fall in below search bar */}
-            {filterSheetOpen && (
-              <div style={{ display: 'flex', gap: 8, paddingRight: 2 }}>
-                {FILTER_TABS.map((tab, i) => {
-                  const active = mapFilter === tab.id;
-                  return (
-                    <button
-                      key={tab.id}
-                      onClick={() => setMapFilter(tab.id)}
-                      style={{
-                        display: 'flex', alignItems: 'center', gap: 5,
-                        padding: '7px 13px',
-                        borderRadius: 50,
-                        border: active ? '2px solid #F97316' : '2px solid transparent',
-                        background: active ? '#F97316' : 'rgba(255,255,255,0.95)',
-                        boxShadow: '0 2px 10px rgba(0,0,0,0.14)',
-                        cursor: 'pointer',
-                        animation: `chip-fall 0.38s cubic-bezier(0.34,1.56,0.64,1) ${i * 0.07}s both`,
-                        whiteSpace: 'nowrap',
-                      }}
-                    >
-                      <span style={{ fontSize: 15 }}>{tab.emoji}</span>
-                      <span style={{
-                        fontSize: 13, fontWeight: 700,
-                        color: active ? '#fff' : '#1F2937',
-                        fontFamily: 'Heebo, sans-serif',
-                      }}>
-                        {tab.label}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
+            {/* Filter pills — always visible */}
+            <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 2 }}>
+              {FILTER_TABS.map(tab => {
+                const active = mapFilter === tab.id;
+                return (
+                  <button
+                    key={tab.id}
+                    onClick={() => setMapFilter(tab.id)}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 5,
+                      padding: '7px 14px',
+                      borderRadius: 50,
+                      border: 'none',
+                      background: active ? 'linear-gradient(135deg,#F97316,#EA580C)' : 'rgba(255,255,255,0.95)',
+                      boxShadow: active ? '0 4px 14px rgba(249,115,22,0.4)' : '0 2px 10px rgba(0,0,0,0.14)',
+                      cursor: 'pointer',
+                      whiteSpace: 'nowrap',
+                      flexShrink: 0,
+                      transition: 'all 0.2s ease',
+                    }}
+                  >
+                    <span style={{ fontSize: 14 }}>{tab.emoji}</span>
+                    <span style={{
+                      fontSize: 13, fontWeight: 700,
+                      color: active ? '#fff' : '#1F2937',
+                      fontFamily: 'Heebo, sans-serif',
+                    }}>
+                      {tab.label}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
           {/* Events sidebar toggle */}

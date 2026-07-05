@@ -931,68 +931,6 @@ export function HomeScreen({
           </button>
         </div>
 
-        {/* ─── Category filter (pills) ──────────────────── */}
-        <div
-          className="flex gap-2.5 overflow-x-auto scrollbar-hide px-4 pb-2 mb-1"
-          style={{ WebkitOverflowScrolling: 'touch' } as React.CSSProperties}
-        >
-          {Object.entries(eventCategories).map(([key, c]) => {
-            const isActive = selectedInterest === key;
-            return (
-              <button
-                key={key}
-                onClick={() => {
-                  setSelectedInterest(prev => (prev === key ? null : key));
-                  setSelectedDateFilter(null);
-                }}
-                aria-pressed={isActive}
-                className="flex-shrink-0 flex items-center gap-1.5 px-3.5 h-10 rounded-full transition-all active:scale-95"
-                style={isActive
-                  ? { background: 'linear-gradient(135deg, #F97316, #EA580C)', color: '#fff', boxShadow: '0 6px 16px rgba(249,115,22,0.30)' }
-                  : { background: '#fff', color: '#4B5563', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}
-              >
-                <span className="text-[16px] leading-none select-none">{c.emoji}</span>
-                <span className="text-[13px] font-bold whitespace-nowrap" style={{ fontFamily: 'Heebo, sans-serif' }}>{c.label}</span>
-              </button>
-            );
-          })}
-        </div>
-
-        {/* ─── Date quick-chips (slide in once a category is picked) ── */}
-        {selectedInterest && (
-          <div
-            key={selectedInterest}
-            className="flex gap-2 overflow-x-auto scrollbar-hide px-4 pb-3 mb-1 animate-slide-down"
-            style={{ WebkitOverflowScrolling: 'touch' } as React.CSSProperties}
-          >
-            {[
-              { v: 'all',     label: 'הכל' },
-              { v: 'today',   label: 'היום' },
-              { v: 'weekend', label: 'סוף השבוע' },
-              { v: 'week',    label: 'השבוע' },
-              { v: 'month',   label: 'החודש' },
-            ].map(chip => {
-              const active = (selectedDateFilter || 'all') === chip.v;
-              return (
-                <button
-                  key={chip.v}
-                  onClick={() => setSelectedDateFilter(chip.v === 'all' ? null : chip.v)}
-                  aria-pressed={active}
-                  className="flex-shrink-0 px-4 py-2 rounded-full text-[13px] font-bold transition-all active:scale-95"
-                  style={{
-                    fontFamily: 'Heebo, sans-serif',
-                    background: active ? 'linear-gradient(135deg, #F97316, #EA580C)' : '#F3F4F6',
-                    color: active ? '#fff' : '#6B7280',
-                    boxShadow: active ? '0 4px 14px rgba(249,115,22,0.3)' : 'none',
-                  }}
-                >
-                  {chip.label}
-                </button>
-              );
-            })}
-          </div>
-        )}
-
         {/* ─── Main content ─── */}
         <div className="pb-28 animate-fade-in" key={feedMode} style={{ animationDuration: '0.22s' }}>
 
@@ -1252,7 +1190,31 @@ export function HomeScreen({
                           let offset = i - hotIdx;
                           if (offset > n / 2) offset -= n;
                           if (offset < -n / 2) offset += n;
-                          const bg = event.image_url || (event.event_type ? CATEGORY_IMAGES[event.event_type] : null);
+                          const bg = event.image_url || null;
+
+                          // Psychology signals for carousel card
+                          const evDate = new Date(event.event_date);
+                          const nowC   = new Date();
+                          const tom2   = new Date(nowC); tom2.setDate(nowC.getDate() + 1);
+                          const cIsToday    = evDate.toDateString() === nowC.toDateString();
+                          const cIsTomorrow = evDate.toDateString() === tom2.toDateString();
+                          const cIsUnlimited = event.max_attendees >= 9999;
+                          const cSpotsLeft   = cIsUnlimited ? Infinity : event.max_attendees - event.attendees.length;
+                          const cFillRate    = cIsUnlimited ? 0 : event.attendees.length / event.max_attendees;
+                          const cIsAlmostFull = !cIsUnlimited && cFillRate >= 0.7;
+                          const cIsVeryScarce = !cIsUnlimited && !cIsAlmostFull && cSpotsLeft <= 5;
+                          const cIsFree = !(event as any).price;
+
+                          const cUrgencyBadge = cIsToday
+                            ? { label: '⚡ היום!', bg: '#F97316' }
+                            : cIsTomorrow
+                              ? { label: '📅 מחר', bg: '#8B5CF6' }
+                              : cIsVeryScarce
+                                ? { label: `🔥 רק ${cSpotsLeft}!`, bg: '#ef4444' }
+                                : cIsAlmostFull
+                                  ? { label: '🔥 כמעט מלא', bg: '#ef4444' }
+                                  : null;
+
                           return (
                             <div
                               key={event.id}
@@ -1278,12 +1240,35 @@ export function HomeScreen({
                                   <div className="absolute inset-0 bg-gradient-to-br from-brand-500 via-brand-600 to-violet-700" />
                                 )}
                                 <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/20 to-transparent" />
-                                <div className="absolute top-3 inset-x-3 flex items-center justify-start">
+
+                                {/* Top row: social proof (left) + urgency badge (right) */}
+                                <div className="absolute top-3 inset-x-3 flex items-center justify-between">
+                                  {/* Social proof */}
                                   <div className="flex items-center gap-1 bg-black/40 backdrop-blur-sm text-white text-[11px] font-bold px-2.5 py-1 rounded-full">
                                     <Users className="w-3 h-3" />
-                                    <span>{event.attendees.length}</span>
+                                    <span>{event.attendees.length > 2 ? `${event.attendees.length} הולכים` : event.attendees.length}</span>
+                                  </div>
+                                  {/* Urgency / free badge */}
+                                  <div className="flex items-center gap-1">
+                                    {cIsFree && (
+                                      <span
+                                        className="text-white font-black px-2 py-0.5 rounded-full"
+                                        style={{ fontSize: '10px', background: 'linear-gradient(135deg,#10b981,#059669)', fontFamily: 'Heebo, sans-serif' }}
+                                      >
+                                        חינם!
+                                      </span>
+                                    )}
+                                    {cUrgencyBadge && (
+                                      <span
+                                        className="text-white font-black px-2 py-0.5 rounded-full"
+                                        style={{ fontSize: '10px', background: cUrgencyBadge.bg, fontFamily: 'Heebo, sans-serif' }}
+                                      >
+                                        {cUrgencyBadge.label}
+                                      </span>
+                                    )}
                                   </div>
                                 </div>
+
                                 <div className="absolute bottom-0 left-0 right-0 p-3.5">
                                   <h3
                                     className="text-white text-[16px] font-black leading-tight mb-2 line-clamp-2"
@@ -1335,6 +1320,71 @@ export function HomeScreen({
                         </div>
                       )}
                     </>
+                  )}
+                </div>
+              )}
+
+              {/* ══ CATEGORY FILTER (after carousel) ══ */}
+              {feedMode === 'events' && (
+                <div className="pb-2">
+                  <div
+                    className="flex gap-2.5 overflow-x-auto scrollbar-hide px-4 pb-2"
+                    style={{ WebkitOverflowScrolling: 'touch' } as React.CSSProperties}
+                  >
+                    {Object.entries(eventCategories).map(([key, c]) => {
+                      const isActive = selectedInterest === key;
+                      return (
+                        <button
+                          key={key}
+                          onClick={() => {
+                            setSelectedInterest(prev => (prev === key ? null : key));
+                            setSelectedDateFilter(null);
+                          }}
+                          aria-pressed={isActive}
+                          className="flex-shrink-0 flex items-center gap-1.5 px-3.5 h-10 rounded-full transition-all active:scale-95"
+                          style={isActive
+                            ? { background: 'linear-gradient(135deg, #F97316, #EA580C)', color: '#fff', boxShadow: '0 6px 16px rgba(249,115,22,0.30)' }
+                            : { background: '#fff', color: '#4B5563', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}
+                        >
+                          <span className="text-[16px] leading-none select-none">{c.emoji}</span>
+                          <span className="text-[13px] font-bold whitespace-nowrap" style={{ fontFamily: 'Heebo, sans-serif' }}>{c.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {selectedInterest && (
+                    <div
+                      key={selectedInterest}
+                      className="flex gap-2 overflow-x-auto scrollbar-hide px-4 pb-1 animate-slide-down"
+                      style={{ WebkitOverflowScrolling: 'touch' } as React.CSSProperties}
+                    >
+                      {[
+                        { v: 'all',     label: 'הכל' },
+                        { v: 'today',   label: 'היום' },
+                        { v: 'weekend', label: 'סוף השבוע' },
+                        { v: 'week',    label: 'השבוע' },
+                        { v: 'month',   label: 'החודש' },
+                      ].map(chip => {
+                        const active = (selectedDateFilter || 'all') === chip.v;
+                        return (
+                          <button
+                            key={chip.v}
+                            onClick={() => setSelectedDateFilter(chip.v === 'all' ? null : chip.v)}
+                            aria-pressed={active}
+                            className="flex-shrink-0 px-4 py-2 rounded-full text-[13px] font-bold transition-all active:scale-95"
+                            style={{
+                              fontFamily: 'Heebo, sans-serif',
+                              background: active ? 'linear-gradient(135deg, #F97316, #EA580C)' : '#F3F4F6',
+                              color: active ? '#fff' : '#6B7280',
+                              boxShadow: active ? '0 4px 14px rgba(249,115,22,0.3)' : 'none',
+                            }}
+                          >
+                            {chip.label}
+                          </button>
+                        );
+                      })}
+                    </div>
                   )}
                 </div>
               )}

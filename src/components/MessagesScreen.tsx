@@ -154,6 +154,7 @@ type MessagesScreenProps = {
   onMyEventsClick?: () => void;
   onNavigateToCountrySelection?: () => void;
   onOpenMapAt?: (lat: number, lng: number) => void;
+  onNavigateToUserProfile?: (userId: string) => void;
   initialCountries?: string[];
 };
 
@@ -165,6 +166,7 @@ let _cachedUserCountries: string[] | null = null;
 let _cachedConversations: Conversation[] = [];
 let _cachedGroupChats: GroupChat[] = [];
 let _cachedInitialized = false;
+let _cachedOpenCity: { code: string; flag: string; name: string; emoji: string } | null = null;
 
 type GroupChat = {
   channelId: string;
@@ -179,7 +181,7 @@ type GroupChat = {
   memberStatus: 'approved' | 'pending';
 };
 
-export function MessagesScreen({ currentUserId, onBack, onConversationClick, onHomeClick, onMapClick, onCreateClick, onMyEventsClick, onNavigateToCountrySelection, onOpenMapAt, initialCountries }: MessagesScreenProps) {
+export function MessagesScreen({ currentUserId, onBack, onConversationClick, onHomeClick, onMapClick, onCreateClick, onMyEventsClick, onNavigateToCountrySelection, onOpenMapAt, onNavigateToUserProfile, initialCountries }: MessagesScreenProps) {
   const [conversations,   setConversations]   = useState<Conversation[]>(_cachedConversations);
   const [groupChats,      setGroupChats]      = useState<GroupChat[]>(_cachedGroupChats);
   const [loading,         setLoading]         = useState(!_cachedInitialized);
@@ -216,7 +218,8 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
   }, [expandedCountry]);
   const [currentUserName, setCurrentUserName] = useState('');
   const [currentUserAvatar, setCurrentUserAvatar] = useState<string | null>(null);
-  const [openCity, setOpenCity] = useState<{ code: string; flag: string; name: string; emoji: string } | null>(null);
+  const [openCity, setOpenCity] = useState<{ code: string; flag: string; name: string; emoji: string } | null>(_cachedOpenCity);
+  useEffect(() => { _cachedOpenCity = openCity; }, [openCity]);
   const [groupsCollapsed, setGroupsCollapsed] = useState(false);
   const [chatsCollapsed,  setChatsCollapsed]  = useState(false);
   const [pinnedIds,  setPinnedIds]  = useState<Set<string>>(() => new Set(JSON.parse(localStorage.getItem('pinned_convos') || '[]')));
@@ -981,6 +984,7 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
           currentUserAvatar={currentUserAvatar}
           onClose={() => { setOpenCity(null); loadGroupChats(); }}
           onOpenMapAt={onOpenMapAt}
+          onNavigateToUserProfile={onNavigateToUserProfile}
         />
       )}
     </div>
