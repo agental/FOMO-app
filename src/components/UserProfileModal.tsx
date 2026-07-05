@@ -11,7 +11,6 @@ interface UserProfileModalProps {
   instagram?: string;
   bio?: string;
   age?: number;
-  languages?: string[];
   interests?: string[];
   visitedCountries?: string[];
   homeBase?: string;
@@ -25,7 +24,6 @@ export function UserProfileModal({
   instagram,
   bio,
   age,
-  languages = [],
   interests = [],
   visitedCountries = [],
   homeBase,
@@ -166,24 +164,6 @@ export function UserProfileModal({
             </div>
           )}
 
-          {languages.length > 0 && (
-            <div>
-              <h3 className="text-sm font-bold text-gray-700 mb-2" style={{ fontFamily: 'Heebo, sans-serif' }}>
-                שפות
-              </h3>
-              <div className="flex flex-wrap gap-2">
-                {languages.map((language, idx) => (
-                  <div
-                    key={idx}
-                    className="inline-flex items-center px-3 py-1.5 bg-gray-100 rounded-full text-sm font-medium text-gray-700"
-                    style={{ fontFamily: 'Rubik, sans-serif' }}
-                  >
-                    {language}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
 
           {visitedCountries.length > 0 && (
             <div>

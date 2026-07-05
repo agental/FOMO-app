@@ -234,12 +234,28 @@ export function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
     finally { setLoading(false); }
   };
 
-  // OAuth sign-in (Google / Apple / Facebook). On success Supabase redirects;
-  // if the provider isn't enabled in the project it returns an error instead.
+  // OAuth sign-in (Google / Apple / Facebook).
+  // • Plain browser  → normal Supabase redirect flow.
+  // • Inside the Expo app (WebView) → Google/Apple BLOCK OAuth in embedded webviews,
+  //   so we hand the auth URL to the native layer (App.js), which opens it in the
+  //   system browser. With implicit flow the redirect returns access_token +
+  //   refresh_token in the fragment; the wrapper reads them and calls
+  //   `__fomoSetSession` (defined in App.tsx) to establish the session here.
   const handleOAuth = async (provider: 'google' | 'apple' | 'facebook') => {
     setError(null); setSuccess(null);
     const names: Record<typeof provider, string> = { google: 'Google', apple: 'Apple', facebook: 'Facebook' };
+    const rn = (window as unknown as { ReactNativeWebView?: { postMessage: (m: string) => void } }).ReactNativeWebView;
+    const nativeRedirect = (window as unknown as { __fomoRedirectUri?: string }).__fomoRedirectUri;
     try {
+      if (rn && nativeRedirect) {
+        const { data, error } = await supabase.auth.signInWithOAuth({
+          provider,
+          options: { skipBrowserRedirect: true, redirectTo: nativeRedirect },
+        });
+        if (error || !data?.url) { setError(`ההתחברות עם ${names[provider]} אינה זמינה כרגע`); return; }
+        rn.postMessage(JSON.stringify({ type: 'oauth', url: data.url }));
+        return;
+      }
       const { error } = await supabase.auth.signInWithOAuth({
         provider,
         options: { redirectTo: `${window.location.origin}/` },

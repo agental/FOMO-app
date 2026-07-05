@@ -168,6 +168,10 @@ const TailRight = () => (
 const _msgCache:     Record<string, GMessage[]> = {};
 const _channelCache: Record<string, string>     = {}; // `${countryCode}:${cityEmoji}` → channelId
 const _countCache:   Record<string, number>     = {}; // channelId → approved member count
+// channelId → last-confirmed membership status. Used so we only OPTIMISTICALLY treat the user as an
+// approved member when a prior DB check actually confirmed it — never merely because the channel is
+// cached (that would let a *pending* request be silently upgraded to approved by markSeen()).
+const _memberStatusCache: Record<string, 'none' | 'pending' | 'approved' | 'left'> = {};
 
 // Channels the user explicitly left — persisted so opening the city again shows a rejoin screen
 // instead of silently auto-joining.
@@ -196,7 +200,12 @@ export function CityGroupChat({
   const [unreadReady, setUnreadReady] = useState(false);
   const [channelId,    setChannelId]    = useState<string | null>(_initChannelId);
   const [memberStatus, setMemberStatus] = useState<'loading' | 'none' | 'pending' | 'approved' | 'just_approved' | 'left'>(
-    _initChannelId ? (_leftChannels.has(_initChannelId) ? 'left' : 'approved') : 'loading'
+    // Only skip straight to 'approved' when a previous DB check CONFIRMED approval (cached below).
+    // A cached channelId alone must NOT imply membership — otherwise a pending user re-opening the
+    // group would trigger markSeen() and be auto-approved without the admin.
+    _initChannelId
+      ? (_leftChannels.has(_initChannelId) ? 'left' : (_memberStatusCache[_initChannelId] ?? 'loading'))
+      : 'loading'
   );
   const [messages,     setMessages]     = useState<GMessage[]>(_initMsgs);
   const [msgsLoading,  setMsgsLoading]  = useState(_initMsgs.length === 0);
@@ -310,12 +319,14 @@ export function CityGroupChat({
   /* ── check membership status after channel resolves ── */
   useEffect(() => {
     if (!channelId) return;
-    if (_leftChannels.has(channelId)) { setMemberStatus('left'); return; } // user left → require an explicit rejoin
+    if (_leftChannels.has(channelId)) { _memberStatusCache[channelId] = 'left'; setMemberStatus('left'); return; } // user left → require an explicit rejoin
     (async () => {
       const { data } = await supabase.from('group_members')
         .select('status').eq('channel_id', channelId).eq('user_id', currentUserId).maybeSingle();
-      if (!data) { setMemberStatus('none'); return; }
-      setMemberStatus((data.status ?? 'approved') as 'pending' | 'approved' | 'left');
+      if (!data) { _memberStatusCache[channelId] = 'none'; setMemberStatus('none'); return; }
+      const st = (data.status ?? 'approved') as 'pending' | 'approved' | 'left';
+      _memberStatusCache[channelId] = st;
+      setMemberStatus(st);
     })();
   }, [channelId]);
 
@@ -329,11 +340,20 @@ export function CityGroupChat({
     // message — only THEN mark the chat as seen (overwriting last_seen_at to now).
     (async () => {
       const { data: me } = await supabase.from('group_members')
-        .select('last_seen_at').eq('channel_id', channelId).eq('user_id', currentUserId).maybeSingle();
+        .select('last_seen_at, status').eq('channel_id', channelId).eq('user_id', currentUserId).maybeSingle();
+      // Safety net: never let an (optimistic) 'approved' UI state promote a real pending/left row.
+      // A row that exists but isn't approved means the admin hasn't approved yet — bail out and
+      // correct the UI to the pending/left screen instead of running markSeen (which sets approved).
+      if (me && me.status && me.status !== 'approved') {
+        _memberStatusCache[channelId] = me.status as 'pending' | 'left';
+        setMemberStatus(me.status as 'pending' | 'left');
+        return;
+      }
       setLastRead(me?.last_seen_at ?? null);
       setUnreadReady(true);
-      const isNewJoin = !me; // no prior membership row → this open is a fresh (auto-)join
+      const isNewJoin = !me; // no prior membership row → this open is a fresh join
       await markSeen();
+      _memberStatusCache[channelId] = 'approved';
       if (isNewJoin) {
         // WhatsApp-style "X joined the group" notice
         await supabase.from('group_messages').insert({ channel_id: channelId, user_id: currentUserId, display_name: currentUserName, avatar_url: currentUserAvatar, content: `${SYS_MARK}${currentUserName} הצטרף/ה לקבוצה`, type: 'text' });
@@ -474,6 +494,7 @@ export function CityGroupChat({
     // user from the approved count + members list, and the group-mem subscription pushes it live.
     const { error: updErr } = await supabase.from('group_members').update({ status: 'left' }).eq('channel_id', channelId).eq('user_id', currentUserId);
     if (updErr) console.error('leave: status update failed', updErr);
+    _memberStatusCache[channelId] = 'left';
     _leftChannels.add(channelId); saveLeftChannels(); // remember: don't auto-rejoin on next open
     setLeaving(false);
     onClose(); // exit back to the messages list
@@ -1027,113 +1048,141 @@ export function CityGroupChat({
       { channel_id: channelId, user_id: currentUserId, display_name: currentUserName, avatar_url: currentUserAvatar, last_seen_at: new Date().toISOString(), status: 'pending' },
       { onConflict: 'channel_id,user_id' }
     );
+    _memberStatusCache[channelId] = 'pending';
     setMemberStatus('pending');
   };
 
   const hasText = text.trim().length > 0;
 
-  /* ── Pending / Join screens ── */
-  if ((memberStatus === 'none' || memberStatus === 'pending' || memberStatus === 'just_approved' || memberStatus === 'left') && channelId) {
+  /* ── Loading / Pending / Join screens — the main chat renders ONLY for approved members ── */
+  if (memberStatus !== 'approved') {
     const isPending      = memberStatus === 'pending';
-    const isLoading      = false;
+    const isLoading      = memberStatus === 'loading' || !channelId; // still resolving channel/membership
     const isJustApproved = memberStatus === 'just_approved';
     const isLeft         = memberStatus === 'left';
+
+    // Reusable "orb": the city emoji (or a status glyph) in a white disc with a pulsing
+    // halo + gentle bob — gives the screen life without needing a coloured header bar.
+    const heroOrb = (emoji: string, ring: string = '#F97316', pulse: boolean = true) => (
+      <div style={{ position: 'relative', width: 132, height: 132, display: 'grid', placeItems: 'center', marginBottom: 24 }}>
+        {pulse && <span style={{ position: 'absolute', inset: 13, borderRadius: '50%', background: ring, opacity: 0.18, animation: 'fomo-ring 2.6s ease-out infinite' }} />}
+        {pulse && <span style={{ position: 'absolute', inset: 13, borderRadius: '50%', background: ring, opacity: 0.18, animation: 'fomo-ring 2.6s ease-out 1.3s infinite' }} />}
+        <div style={{ width: 106, height: 106, borderRadius: '50%', background: '#fff', display: 'grid', placeItems: 'center', fontSize: 52, boxShadow: `0 12px 30px ${ring}2E, 0 3px 10px rgba(0,0,0,0.06)`, animation: 'fomo-bob 4s ease-in-out infinite' }}>{emoji}</div>
+      </div>
+    );
+
     return (
-      <div style={{
+      <div className="fomo-join" style={{
         position: 'fixed', inset: 0, zIndex: 120,
         display: 'flex', flexDirection: 'column',
         fontFamily: "'Rubik','Heebo',sans-serif",
-        background: '#fff',
-        animation: 'gchat-slide 0.28s cubic-bezier(0.25,1,0.5,1)',
+        background: 'radial-gradient(125% 85% at 50% -10%, #FFF4E8 0%, #FFFFFF 55%)',
+        overflow: 'hidden', direction: 'rtl',
+        animation: 'gchat-slide 0.3s cubic-bezier(0.25,1,0.5,1)',
       }}>
         <style>{`
           @keyframes gchat-slide { from { transform: translateY(100%); } to { transform: translateY(0); } }
           @keyframes gchat-spin  { to { transform: rotate(360deg); } }
+          @keyframes fomo-float-a { 0%,100%{transform:translate(0,0) scale(1)} 50%{transform:translate(-16px,20px) scale(1.08)} }
+          @keyframes fomo-float-b { 0%,100%{transform:translate(0,0) scale(1)} 50%{transform:translate(20px,-16px) scale(1.1)} }
+          @keyframes fomo-ring { 0%{transform:scale(0.72);opacity:0.3} 80%{opacity:0} 100%{transform:scale(1.55);opacity:0} }
+          @keyframes fomo-bob  { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-7px)} }
+          @keyframes fomo-rise { from{opacity:0;transform:translateY(14px)} to{opacity:1;transform:translateY(0)} }
+          @keyframes fomo-dot  { 0%,100%{transform:scale(0.6);opacity:0.35} 50%{transform:scale(1);opacity:1} }
+          @keyframes approved-pop { from{transform:scale(0.4);opacity:0} to{transform:scale(1);opacity:1} }
+          .fomo-btn { transition: transform .12s ease, box-shadow .12s ease; }
+          .fomo-btn:active { transform: scale(0.97); }
+          @media (prefers-reduced-motion: reduce){ .fomo-join *{animation-duration:.001ms!important;animation-iteration-count:1!important} }
         `}</style>
 
-        {/* Header — matches main chat header with safe-area top */}
-        <div style={{
-          background: 'linear-gradient(135deg,#F97316,#EA580C)',
-          paddingTop: 'max(14px, env(safe-area-inset-top))',
-          paddingBottom: 14,
-          paddingLeft: 16,
-          paddingRight: 16,
-          display: 'flex', alignItems: 'center', gap: 12,
-          flexShrink: 0,
-        }}>
-          <BackButton onClick={onClose} variant="dark" />
-          <span style={{ fontSize: 20 }}>{cityEmoji}</span>
-          <span style={{ fontSize: 17, fontWeight: 700, color: '#fff', flex: 1 }} dir="rtl">{cityName}</span>
+        {/* Soft floating background — alive, no coloured header bar */}
+        <div aria-hidden style={{ position: 'absolute', inset: 0, overflow: 'hidden', pointerEvents: 'none' }}>
+          <div style={{ position: 'absolute', top: '-12%', right: '-16%', width: 300, height: 300, borderRadius: '50%', background: 'radial-gradient(circle, rgba(253,186,116,0.38), rgba(253,186,116,0))', filter: 'blur(6px)', animation: 'fomo-float-a 9s ease-in-out infinite' }} />
+          <div style={{ position: 'absolute', bottom: '-14%', left: '-20%', width: 340, height: 340, borderRadius: '50%', background: 'radial-gradient(circle, rgba(251,146,60,0.24), rgba(251,146,60,0))', filter: 'blur(8px)', animation: 'fomo-float-b 12s ease-in-out infinite' }} />
+          <div style={{ position: 'absolute', top: '34%', left: '6%', width: 150, height: 150, borderRadius: '50%', background: 'radial-gradient(circle, rgba(56,189,248,0.14), rgba(56,189,248,0))', filter: 'blur(6px)', animation: 'fomo-float-a 14s ease-in-out infinite' }} />
         </div>
 
-        {/* Body — safe-area bottom padding */}
+        {/* Floating back button (RTL → top-right) */}
+        <div style={{ position: 'absolute', top: 'max(14px, env(safe-area-inset-top))', right: 14, zIndex: 3, borderRadius: '50%', background: 'rgba(255,255,255,0.72)', backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)', boxShadow: '0 2px 10px rgba(0,0,0,0.07)' }}>
+          <BackButton onClick={onClose} variant="light" />
+        </div>
+
+        {/* Body */}
         <div style={{
-          flex: 1,
+          position: 'relative', zIndex: 1, flex: 1,
           display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-          padding: '32px 32px max(32px, env(safe-area-inset-bottom))',
-          gap: 20, direction: 'rtl',
+          padding: '40px 30px max(34px, env(safe-area-inset-bottom))',
+          textAlign: 'center',
         }}>
           {isLoading ? (
-            <div style={{ width: 40, height: 40, borderRadius: '50%', border: '3px solid #FFE4CC', borderTopColor: '#F97316', animation: 'gchat-spin 0.8s linear infinite' }} />
+            <div style={{ width: 54, height: 54, borderRadius: '50%', border: '3px solid #FCE3CC', borderTopColor: '#F97316', animation: 'gchat-spin 0.8s linear infinite' }} />
           ) : isJustApproved ? (
             <>
-              <div style={{
-                width: 90, height: 90, borderRadius: '50%',
-                background: 'linear-gradient(135deg,#D1FAE5,#A7F3D0)',
-                display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 42,
-                boxShadow: '0 4px 20px rgba(16,185,129,0.3)',
-                animation: 'approved-pop 0.5s cubic-bezier(0.175,0.885,0.32,1.275)',
-              }}>🎉</div>
-              <style>{`@keyframes approved-pop { from{transform:scale(0.4);opacity:0} to{transform:scale(1);opacity:1} }`}</style>
-              <h2 style={{ fontSize: 22, fontWeight: 800, color: '#059669', margin: 0, textAlign: 'center' }}>אושרת לקבוצה!</h2>
-              <p style={{ fontSize: 15, color: '#555', margin: 0, textAlign: 'center', lineHeight: 1.6 }}>
-                המנהל אישר את בקשתך להצטרף לקבוצת <strong>{cityName}</strong>.
+              <div style={{ animation: 'approved-pop 0.5s cubic-bezier(0.175,0.885,0.32,1.275)' }}>
+                {heroOrb('🎉', '#10B981')}
+              </div>
+              <h2 style={{ fontSize: 25, fontWeight: 800, color: '#059669', margin: '0 0 10px', animation: 'fomo-rise .5s both .05s' }}>אושרת לקבוצה!</h2>
+              <p style={{ fontSize: 15.5, color: '#57534E', margin: '0 0 26px', lineHeight: 1.65, maxWidth: 300, animation: 'fomo-rise .5s both .12s' }}>
+                המנהל אישר את בקשתך להצטרף לקבוצת <strong style={{ color: '#1C1C1E' }}>{cityName}</strong> 🎊
               </p>
-              <button
-                onClick={() => setMemberStatus('approved')}
-                style={{ marginTop: 12, padding: '13px 40px', borderRadius: 26, border: 'none', background: 'linear-gradient(135deg,#10B981,#059669)', color: '#fff', fontSize: 16, fontWeight: 700, cursor: 'pointer', boxShadow: '0 4px 14px rgba(16,185,129,0.4)' }}>
+              <button className="fomo-btn"
+                onClick={() => { if (channelId) _memberStatusCache[channelId] = 'approved'; setMemberStatus('approved'); }}
+                style={{ width: '100%', maxWidth: 300, padding: '15px 24px', borderRadius: 16, border: 'none', background: 'linear-gradient(135deg,#34D399,#059669)', color: '#fff', fontSize: 16.5, fontWeight: 700, cursor: 'pointer', boxShadow: '0 8px 22px rgba(16,185,129,0.35)', animation: 'fomo-rise .5s both .2s' }}>
                 כניסה לקבוצה
               </button>
             </>
           ) : isLeft ? (
             <>
-              <div style={{ fontSize: 56 }}>{cityEmoji}</div>
-              <h2 style={{ fontSize: 20, fontWeight: 700, color: '#111', margin: 0, textAlign: 'center' }}>עזבת את קבוצת {cityName}</h2>
-              <p style={{ fontSize: 15, color: '#666', margin: 0, textAlign: 'center', lineHeight: 1.6 }}>
-                כבר לא קיבלת הודעות מהקבוצה הזו. אפשר להצטרף שוב בכל רגע.
+              {heroOrb(cityEmoji, '#F97316', false)}
+              <h2 style={{ fontSize: 22, fontWeight: 800, color: '#1C1C1E', margin: '0 0 10px', animation: 'fomo-rise .5s both .05s' }}>עזבת את קבוצת {cityName}</h2>
+              <p style={{ fontSize: 15.5, color: '#6B7280', margin: '0 0 26px', lineHeight: 1.65, maxWidth: 300, animation: 'fomo-rise .5s both .12s' }}>
+                כבר לא מגיעות אליך הודעות מהקבוצה. אפשר להצטרף שוב בכל רגע.
               </p>
-              <button
+              <button className="fomo-btn"
                 onClick={rejoinGroup}
-                style={{ marginTop: 8, padding: '12px 36px', borderRadius: 24, border: 'none', background: 'linear-gradient(135deg,#F97316,#EA580C)', color: '#fff', fontSize: 16, fontWeight: 700, cursor: 'pointer', boxShadow: '0 3px 10px rgba(234,88,12,0.35)' }}>
+                style={{ width: '100%', maxWidth: 300, padding: '15px 24px', borderRadius: 16, border: 'none', background: 'linear-gradient(135deg,#FB923C,#F97316)', color: '#fff', fontSize: 16.5, fontWeight: 700, cursor: 'pointer', boxShadow: '0 8px 22px rgba(249,115,22,0.32)', animation: 'fomo-rise .5s both .2s' }}>
                 הצטרף מחדש
               </button>
-              <button onClick={onClose} style={{ background: 'none', border: 'none', color: '#999', fontSize: 14, cursor: 'pointer' }}>חזרה</button>
+              <button onClick={onClose} style={{ marginTop: 14, background: 'none', border: 'none', color: '#9CA3AF', fontSize: 14.5, fontWeight: 600, cursor: 'pointer', animation: 'fomo-rise .5s both .26s' }}>חזרה</button>
             </>
           ) : isPending ? (
             <>
-              <div style={{ width: 80, height: 80, borderRadius: '50%', background: '#FFF3E0', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 36 }}>⏳</div>
-              <h2 style={{ fontSize: 20, fontWeight: 700, color: '#111', margin: 0, textAlign: 'center' }}>בקשתך נשלחה!</h2>
-              <p style={{ fontSize: 15, color: '#666', margin: 0, textAlign: 'center', lineHeight: 1.6 }}>
-                הבקשה שלך להצטרף לקבוצת <strong>{cityName}</strong> ממתינה לאישור מנהל הקבוצה.
+              {heroOrb('⏳', '#F59E0B')}
+              <h2 style={{ fontSize: 23, fontWeight: 800, color: '#1C1C1E', margin: '0 0 10px', animation: 'fomo-rise .5s both .05s' }}>בקשתך נשלחה!</h2>
+              <p style={{ fontSize: 15.5, color: '#6B7280', margin: '0 0 18px', lineHeight: 1.65, maxWidth: 300, animation: 'fomo-rise .5s both .12s' }}>
+                הבקשה שלך להצטרף לקבוצת <strong style={{ color: '#1C1C1E' }}>{cityName}</strong> ממתינה לאישור המנהל.
               </p>
-              <p style={{ fontSize: 13, color: '#999', margin: 0, textAlign: 'center' }}>תקבל גישה ברגע שהמנהל יאשר</p>
-              <button onClick={onClose} style={{ marginTop: 8, padding: '10px 28px', borderRadius: 24, border: '1.5px solid #F97316', background: '#fff', color: '#F97316', fontSize: 15, fontWeight: 600, cursor: 'pointer' }}>
+              <div style={{ display: 'flex', gap: 7, marginBottom: 20, animation: 'fomo-rise .5s both .18s' }}>
+                {[0, 1, 2].map(i => <span key={i} style={{ width: 9, height: 9, borderRadius: '50%', background: '#F59E0B', animation: `fomo-dot 1.2s ease-in-out ${i * 0.18}s infinite` }} />)}
+              </div>
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '8px 14px', borderRadius: 999, background: 'rgba(255,255,255,0.75)', border: '1px solid #F3E8DD', fontSize: 13, color: '#78716C', fontWeight: 600, marginBottom: 26, animation: 'fomo-rise .5s both .24s' }}>
+                🔔 תקבל גישה ברגע שהמנהל יאשר
+              </div>
+              <button className="fomo-btn" onClick={onClose}
+                style={{ width: '100%', maxWidth: 300, padding: '14px 24px', borderRadius: 16, border: '1.5px solid #FED7AA', background: '#fff', color: '#EA580C', fontSize: 15.5, fontWeight: 700, cursor: 'pointer', animation: 'fomo-rise .5s both .3s' }}>
                 חזרה
               </button>
             </>
           ) : (
             <>
-              <div style={{ fontSize: 56 }}>{cityEmoji}</div>
-              <h2 style={{ fontSize: 20, fontWeight: 700, color: '#111', margin: 0, textAlign: 'center' }}>קבוצת {cityName}</h2>
-              <p style={{ fontSize: 15, color: '#666', margin: 0, textAlign: 'center', lineHeight: 1.6 }}>
-                כדי להצטרף לקבוצה, שלח בקשה למנהל הקבוצה.
+              {heroOrb(cityEmoji)}
+              <h2 style={{ fontSize: 26, fontWeight: 800, color: '#1C1C1E', margin: '0 0 10px', animation: 'fomo-rise .5s both .05s' }}>קבוצת {cityName}</h2>
+              <p style={{ fontSize: 15.5, color: '#6B7280', margin: '0 0 22px', lineHeight: 1.65, maxWidth: 305, animation: 'fomo-rise .5s both .12s' }}>
+                הצטרף לטיילים ב{cityName} — שתפו חוויות, קבלו המלצות ומצאו חברים לדרך.
               </p>
-              <button
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center', marginBottom: 30, animation: 'fomo-rise .5s both .19s' }}>
+                {([['💬', "צ'אט חי"], ['📍', 'המלצות מקומיות'], ['🤝', 'חברים לדרך']] as [string, string][]).map(([e, t]) => (
+                  <span key={t} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 13px', borderRadius: 999, background: 'rgba(255,255,255,0.82)', border: '1px solid #F3E8DD', fontSize: 13, fontWeight: 600, color: '#57534E', boxShadow: '0 1px 4px rgba(0,0,0,0.04)' }}>
+                    <span style={{ fontSize: 15 }}>{e}</span>{t}
+                  </span>
+                ))}
+              </div>
+              <button className="fomo-btn"
                 onClick={handleRequestJoin}
-                style={{ marginTop: 8, padding: '12px 36px', borderRadius: 24, border: 'none', background: 'linear-gradient(135deg,#F97316,#EA580C)', color: '#fff', fontSize: 16, fontWeight: 700, cursor: 'pointer', boxShadow: '0 3px 10px rgba(234,88,12,0.35)' }}>
+                style={{ width: '100%', maxWidth: 300, padding: '15px 24px', borderRadius: 16, border: 'none', background: 'linear-gradient(135deg,#FB923C,#F97316)', color: '#fff', fontSize: 16.5, fontWeight: 700, cursor: 'pointer', boxShadow: '0 8px 22px rgba(249,115,22,0.35)', animation: 'fomo-rise .5s both .26s' }}>
                 בקש להצטרף
               </button>
-              <button onClick={onClose} style={{ background: 'none', border: 'none', color: '#999', fontSize: 14, cursor: 'pointer' }}>ביטול</button>
+              <button onClick={onClose} style={{ marginTop: 14, background: 'none', border: 'none', color: '#9CA3AF', fontSize: 14.5, fontWeight: 600, cursor: 'pointer', animation: 'fomo-rise .5s both .32s' }}>ביטול</button>
             </>
           )}
         </div>

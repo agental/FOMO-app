@@ -228,9 +228,19 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
   const touchStartX = useRef<number>(0);
 
   useEffect(() => {
-    loadConversations();
     loadUserCountries();
-    loadGroupChats();
+    if (_cachedInitialized) {
+      // Already have cached data — refresh both in the background, no loading state.
+      loadConversations();
+      loadGroupChats();
+    } else {
+      // First load — wait for BOTH DMs and city groups before revealing, so nothing "pops in" late.
+      Promise.all([loadConversations(), loadGroupChats()]).finally(() => {
+        _cachedInitialized = true;
+        setInitialized(true);
+        setLoading(false);
+      });
+    }
 
     const messagesChannel = supabase
       .channel('messages-changes')
@@ -405,6 +415,7 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
         lastMessage: preview,
         lastMessageAt: lastMsg?.created_at ?? null,
         unreadCount: unreadRes.count ?? 0,
+        memberStatus: mStatus,
       };
     }));
 
@@ -455,10 +466,7 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
 
       if (!convos || convos.length === 0) {
         _cachedConversations = [];
-        _cachedInitialized = true;
         setConversations([]);
-        setInitialized(true);
-        setLoading(false);
         return;
       }
 
@@ -487,13 +495,9 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
       );
 
       _cachedConversations = conversationsWithDetails;
-      _cachedInitialized = true;
       setConversations(conversationsWithDetails);
-      setInitialized(true);
     } catch (error) {
       console.error('Error loading conversations:', error);
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -705,7 +709,7 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
         <div className="h-px bg-gray-100 mx-4 my-2" />
 
         {/* Group chats the user has joined */}
-        {groupChats.length > 0 && (
+        {initialized && groupChats.length > 0 && (
           <div>
             <button
               onClick={() => setGroupsCollapsed(p => !p)}
@@ -756,10 +760,14 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
                       {gc.countryFlag} {gc.cityName}
                     </h3>
                     <span className="text-[12px] text-gray-400 flex-shrink-0 ml-2">
-                      {gc.lastMessageAt ? formatTime(gc.lastMessageAt) : ''}
+                      {gc.memberStatus === 'pending' ? '' : (gc.lastMessageAt ? formatTime(gc.lastMessageAt) : '')}
                     </span>
                   </div>
-                  {typingChats[gc.channelId] ? (
+                  {gc.memberStatus === 'pending' ? (
+                    <p className="text-[13px] truncate text-right font-semibold" style={{ color: '#F97316' }}>
+                      ⏳ ממתין לאישור מנהל הקבוצה
+                    </p>
+                  ) : typingChats[gc.channelId] ? (
                     <p className="text-[13px] truncate text-right font-semibold" style={{ color: '#F97316' }}>
                       {typingChats[gc.channelId].name ? `${typingChats[gc.channelId].name} מקליד/ה…` : 'מקליד/ה…'}
                     </p>
@@ -771,7 +779,7 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
                 </div>
 
                 {/* Unread badge */}
-                {gc.unreadCount > 0 && (
+                {gc.unreadCount > 0 && gc.memberStatus !== 'pending' && (
                   <div style={{
                     minWidth: 20, height: 20, borderRadius: 10, padding: '0 5px',
                     background: 'linear-gradient(135deg, #F97316, #EA580C)',

@@ -4,7 +4,7 @@ import { BackButton } from './BackButton';
 import { supabase, type User } from '../lib/supabase';
 import { flagEmoji } from '../utils/flags';
 import { COUNTRIES } from '../utils/countries';
-import { SUGGESTED_LANGUAGES, SUGGESTED_INTERESTS } from '../utils/suggestions';
+import { SUGGESTED_INTERESTS } from '../utils/suggestions';
 import { FloatingNavBar } from './FloatingNavBar';
 import { CountriesVisitedCard } from './CountriesVisitedCard';
 
@@ -65,8 +65,7 @@ function calcCompletion(p: User): number {
   if (p.bio)               s += 15;
   if (p.age)               s += 10;
   if (p.current_country)   s += 10;
-  if (p.languages?.length) s += 15;
-  if (p.interests?.length) s += 10;
+  if (p.interests?.length) s += 25;
   return Math.min(s, 100);
 }
 
@@ -141,7 +140,7 @@ export default function ProfileScreen({
   const [selectedCountries,    setSelectedCountries]    = useState<string[]>(_cached?.selectedCountries ?? []);
   const [countrySearch,        setCountrySearch]        = useState('');
   const [uploadingAvatar,      setUploadingAvatar]      = useState(false);
-  const [editField,            setEditField]            = useState<'languages' | 'interests' | null>(null);
+  const [editField,            setEditField]            = useState<'interests' | null>(null);
   const [editValues,           setEditValues]           = useState<string[]>([]);
   const [editCustom,           setEditCustom]           = useState('');
   const avatarInputRef = useRef<HTMLInputElement>(null);
@@ -218,10 +217,10 @@ export default function ProfileScreen({
     setIsSelectingCountries(false);
   };
 
-  /* ── Section editor (languages / interests) ── */
-  const openEditor = (field: 'languages' | 'interests') => {
+  /* ── Section editor (interests) ── */
+  const openEditor = (field: 'interests') => {
     setEditField(field);
-    setEditValues((field === 'languages' ? profile?.languages : profile?.interests) || []);
+    setEditValues(profile?.interests || []);
     setEditCustom('');
   };
   const toggleEditValue = (v: string) =>
@@ -600,11 +599,10 @@ export default function ProfileScreen({
 
         {/* Languages + Interests — bento pair (editable) */}
         {(() => {
-          const showLang = isOwnProfile || (profile.languages?.length ?? 0) > 0;
           const showInterests = isOwnProfile || (profile.interests?.length ?? 0) > 0;
-          if (!showLang && !showInterests) return null;
+          if (!showInterests) return null;
 
-          const addPrompt = (field: 'languages' | 'interests', text: string) => (
+          const addPrompt = (field: 'interests', text: string) => (
             <button onClick={() => openEditor(field)} className="fomo-press" style={{
               display: 'inline-flex', alignItems: 'center', gap: 6,
               padding: '8px 14px', borderRadius: 30, cursor: 'pointer',
@@ -620,31 +618,11 @@ export default function ProfileScreen({
               className="animate-card-entrance fomo-animated"
               style={{
                 display: 'grid',
-                gridTemplateColumns: (showLang && showInterests) ? '1fr 1fr' : '1fr',
+                gridTemplateColumns: '1fr',
                 gap: 12, marginBottom: 12, alignItems: 'stretch',
                 animationDelay: '120ms',
               }}
             >
-              {showLang && (
-                <SectionCard noMargin label="שפות" icon={<MessageCircle size={16} style={{ color: 'var(--color-primary)' }} />} onEdit={isOwnProfile ? () => openEditor('languages') : undefined}>
-                  {profile.languages && profile.languages.length > 0 ? (
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                      {profile.languages.map((lang: string) => (
-                        <span key={lang} style={{
-                          padding: '8px 16px', borderRadius: 30,
-                          background: 'var(--gradient-primary)',
-                          color: 'white', fontSize: 13, fontWeight: 700,
-                          fontFamily: 'Heebo, sans-serif',
-                          boxShadow: '0 3px 12px rgba(249,115,22,0.32)',
-                        }}>
-                          {lang}
-                        </span>
-                      ))}
-                    </div>
-                  ) : addPrompt('languages', 'הוסף שפות')}
-                </SectionCard>
-              )}
-
               {showInterests && (
                 <SectionCard noMargin label="תחומי עניין" icon={<Heart size={16} style={{ color: 'var(--color-primary)' }} />} onEdit={isOwnProfile ? () => openEditor('interests') : undefined}>
                   {profile.interests && profile.interests.length > 0 ? (
@@ -870,7 +848,7 @@ export default function ProfileScreen({
                 <X size={18} style={{ color: '#6B7280' }} />
               </button>
               <h3 style={{ margin: 0, fontSize: 19, fontWeight: 900, color: 'var(--color-text-heading)', fontFamily: 'Heebo, sans-serif' }}>
-                {editField === 'languages' ? 'עריכת שפות' : 'עריכת תחומי עניין'}
+                עריכת תחומי עניין
               </h3>
             </div>
 
@@ -890,7 +868,7 @@ export default function ProfileScreen({
                   type="text" value={editCustom}
                   onChange={e => setEditCustom(e.target.value)}
                   onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addEditCustom(); } }}
-                  placeholder={editField === 'languages' ? 'הוסף שפה...' : 'הוסף תחום עניין...'}
+                  placeholder="הוסף תחום עניין..."
                   style={{ flex: 1, height: 44, borderRadius: 14, background: '#F3F4F6', border: 'none', outline: 'none', padding: '0 16px', fontSize: 14, fontFamily: 'Heebo, sans-serif', boxSizing: 'border-box' }}
                 />
                 <button onClick={addEditCustom} className="fomo-press" style={{ padding: '0 18px', height: 44, borderRadius: 14, border: 'none', cursor: 'pointer', background: 'var(--gradient-primary)', color: '#fff', fontSize: 14, fontWeight: 800, fontFamily: 'Heebo, sans-serif' }}>
@@ -900,7 +878,7 @@ export default function ProfileScreen({
 
               <p style={{ margin: '0 0 10px', fontSize: 11, fontWeight: 800, color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.1em', fontFamily: 'Heebo, sans-serif' }}>הצעות</p>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                {(editField === 'languages' ? SUGGESTED_LANGUAGES : SUGGESTED_INTERESTS).map(s => {
+                {SUGGESTED_INTERESTS.map(s => {
                   const sel = editValues.includes(s);
                   return (
                     <button key={s} onClick={() => toggleEditValue(s)} className="fomo-press" style={{ padding: '8px 14px', borderRadius: 30, cursor: 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'Heebo, sans-serif', border: sel ? '1.5px solid var(--color-primary)' : '1.5px solid var(--color-border)', background: sel ? 'var(--color-primary-tint)' : '#FAFAFA', color: sel ? 'var(--color-primary-dark)' : 'var(--color-text-secondary)', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
