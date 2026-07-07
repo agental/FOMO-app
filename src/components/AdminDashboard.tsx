@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { supabase, type Event, type User, type AdminAction, type ChabadHouse } from '../lib/supabase';
-import { Shield, TrendingUp, Users, FileText, Calendar, TriangleAlert as AlertTriangle, Trash2, Eye, Hop as Home, Flag, Search, ShieldCheck, ShieldOff } from 'lucide-react';
+import { type MapArea } from '../services/mapAreaService';
+import { Shield, TrendingUp, Users, FileText, Calendar, TriangleAlert as AlertTriangle, Trash2, Eye, Hop as Home, Flag, Search, ShieldCheck, ShieldOff, MapPin } from 'lucide-react';
 import { EventCard } from './EventCard';
 import { BackButton } from './BackButton';
 import { UserAvatar } from './UserAvatar';
@@ -11,7 +12,7 @@ interface AdminDashboardProps {
   onBack: () => void;
 }
 
-type TabType = 'overview' | 'events' | 'users' | 'locations' | 'logs' | 'reports';
+type TabType = 'overview' | 'events' | 'users' | 'locations' | 'areas' | 'logs' | 'reports';
 
 type ReportRow = {
   id: string;
@@ -33,12 +34,14 @@ export function AdminDashboard({ currentUserId, onBack }: AdminDashboardProps) {
     totalEvents: 0,
     totalUsers: 0,
     totalLocations: 0,
+    totalAreas: 0,
     recentActions: 0,
     openReports: 0,
   });
   const [events, setEvents] = useState<Event[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [locations, setLocations] = useState<ChabadHouse[]>([]);
+  const [areas, setAreas] = useState<MapArea[]>([]);
   const [adminActions, setAdminActions] = useState<AdminAction[]>([]);
   const [reports, setReports] = useState<ReportRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -56,6 +59,7 @@ export function AdminDashboard({ currentUserId, onBack }: AdminDashboardProps) {
       if (activeTab === 'events') loadEvents();
       if (activeTab === 'users') loadUsers();
       if (activeTab === 'locations') loadLocations();
+      if (activeTab === 'areas') loadAreas();
       if (activeTab === 'logs') loadAdminActions();
       if (activeTab === 'reports') loadReports();
     }
@@ -78,10 +82,11 @@ export function AdminDashboard({ currentUserId, onBack }: AdminDashboardProps) {
   const loadStats = async () => {
     setLoading(true);
     try {
-      const [eventsCount, usersCount, locationsCount, actionsCount, reportsCount] = await Promise.all([
+      const [eventsCount, usersCount, locationsCount, areasCount, actionsCount, reportsCount] = await Promise.all([
         supabase.from('events').select('*', { count: 'exact', head: true }),
         supabase.from('users').select('*', { count: 'exact', head: true }),
         supabase.from('admin_locations').select('*', { count: 'exact', head: true }),
+        supabase.from('map_areas').select('*', { count: 'exact', head: true }),
         supabase.from('admin_actions').select('*', { count: 'exact', head: true }),
         supabase.from('message_reports').select('*', { count: 'exact', head: true }).eq('status', 'open'),
       ]);
@@ -90,6 +95,7 @@ export function AdminDashboard({ currentUserId, onBack }: AdminDashboardProps) {
         totalEvents: eventsCount.count || 0,
         totalUsers: usersCount.count || 0,
         totalLocations: locationsCount.count || 0,
+        totalAreas: areasCount.count || 0,
         recentActions: actionsCount.count || 0,
         openReports: reportsCount.count || 0,
       });
@@ -279,6 +285,43 @@ export function AdminDashboard({ currentUserId, onBack }: AdminDashboardProps) {
     }
   };
 
+  const loadAreas = async () => {
+    setLoading(true);
+    try {
+      const { data } = await supabase
+        .from('map_areas')
+        .select('*')
+        .order('created_at', { ascending: false });
+      setAreas((data as MapArea[]) || []);
+    } catch (error) {
+      console.error('Error loading areas:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDeleteArea = async (areaId: string) => {
+    if (!confirm('למחוק את האזור? הוא ייעלם מהמפה אצל כל המשתמשים.')) return;
+
+    try {
+      const { error } = await supabase.from('map_areas').delete().eq('id', areaId);
+      if (error) throw error;
+
+      await supabase.rpc('log_admin_action', {
+        p_action_type: 'delete_map_area',
+        p_target_type: 'map_area',
+        p_target_id: areaId,
+        p_target_user_id: null,
+      });
+
+      loadAreas();
+      loadStats();
+    } catch (error) {
+      console.error('Error deleting area:', error);
+      alert('שגיאה במחיקת האזור');
+    }
+  };
+
   if (!currentUser || currentUser.role !== 'admin') {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-50 to-gray-100 flex items-center justify-center p-4" dir="rtl">
@@ -308,6 +351,7 @@ export function AdminDashboard({ currentUserId, onBack }: AdminDashboardProps) {
     { id: 'events' as const, label: 'אירועים', icon: Calendar },
     { id: 'reports' as const, label: 'דיווחים', icon: Flag },
     { id: 'locations' as const, label: 'מקומות', icon: Home },
+    { id: 'areas' as const, label: 'אזורים', icon: MapPin },
     { id: 'users' as const, label: 'משתמשים', icon: Users },
     { id: 'logs' as const, label: 'לוג פעולות', icon: Eye },
   ];
@@ -372,11 +416,12 @@ export function AdminDashboard({ currentUserId, onBack }: AdminDashboardProps) {
 
       <div className="max-w-7xl mx-auto px-4 py-6">
         {activeTab === 'overview' && (
-          <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+          <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
             {([
               { label: 'אירועים',        value: stats.totalEvents,    icon: Calendar, tint: '#F97316', bg: '#FFF3E9', tab: 'events' as TabType },
               { label: 'משתמשים',        value: stats.totalUsers,     icon: Users,    tint: '#2563EB', bg: '#EAF1FE', tab: 'users' as TabType },
               { label: 'מקומות',         value: stats.totalLocations, icon: Home,     tint: '#16A34A', bg: '#E7F7EE', tab: 'locations' as TabType },
+              { label: 'אזורים',         value: stats.totalAreas,     icon: MapPin,   tint: '#0EA5E9', bg: '#E0F2FE', tab: 'areas' as TabType },
               { label: 'פעולות מנהל',    value: stats.recentActions,  icon: Eye,      tint: '#9333EA', bg: '#F3EAFE', tab: 'logs' as TabType },
               { label: 'דיווחים פתוחים', value: stats.openReports,    icon: Flag,     tint: '#EF4444', bg: '#FDECEC', tab: 'reports' as TabType },
             ]).map((c) => (
@@ -641,6 +686,52 @@ export function AdminDashboard({ currentUserId, onBack }: AdminDashboardProps) {
                   </div>
                 ))}
               </div>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'areas' && (
+          <div className="space-y-3">
+            {loading ? (
+              <div className="text-center py-16">
+                <div className="inline-block w-12 h-12 border-4 border-sky-500 border-t-transparent rounded-full animate-spin"></div>
+              </div>
+            ) : areas.length === 0 ? (
+              <div className="bg-white rounded-3xl p-16 text-center shadow-lg">
+                <MapPin className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+                <p className="text-gray-600 text-lg font-semibold" style={{ fontFamily: 'Heebo, sans-serif' }}>
+                  אין אזורים מסומנים
+                </p>
+                <p className="text-gray-400 text-sm mt-1" style={{ fontFamily: 'Rubik, sans-serif' }}>
+                  סמנו אזור מדף המפה עם הכפתור "סמן אזור מרכזי"
+                </p>
+              </div>
+            ) : (
+              areas.map((area) => (
+                <div key={area.id} className="bg-white rounded-2xl shadow-sm border border-gray-100 flex items-center gap-4 px-4 py-3">
+                  {/* colour swatch */}
+                  <div className="w-10 h-10 rounded-xl flex-shrink-0 border border-black/5" style={{ background: area.color || '#F97316' }} />
+
+                  {/* info */}
+                  <div className="flex-1 min-w-0">
+                    <p className="font-bold text-gray-900 truncate" style={{ fontFamily: 'Heebo, sans-serif' }}>
+                      {area.name}
+                    </p>
+                    <p className="text-sm text-gray-500 truncate" style={{ fontFamily: 'Rubik, sans-serif' }}>
+                      📐 {Array.isArray(area.polygon) ? area.polygon.length : 0} נקודות · 📅 {new Date(area.created_at).toLocaleDateString('he-IL')}
+                    </p>
+                  </div>
+
+                  {/* delete */}
+                  <button
+                    onClick={() => handleDeleteArea(area.id)}
+                    title="מחק אזור"
+                    className="flex-shrink-0 w-9 h-9 rounded-full bg-red-50 hover:bg-red-100 flex items-center justify-center transition-colors active:scale-90"
+                  >
+                    <Trash2 className="w-4 h-4 text-red-500" />
+                  </button>
+                </div>
+              ))
             )}
           </div>
         )}

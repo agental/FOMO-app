@@ -3,6 +3,7 @@ import { Search, MessageCircle, Plus, X, Users, ChevronDown, Trash2, Pin, BellOf
 import { supabase } from '../lib/supabase';
 import { UserAvatar } from './UserAvatar';
 import { COUNTRIES } from '../utils/countries';
+import { emojiColor } from '../utils/emojiColor';
 import { FloatingNavBar } from './FloatingNavBar';
 import { CityGroupChat } from './CityGroupChat';
 import { messagePreview } from '../utils/eventMessage';
@@ -611,42 +612,49 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
               0%, 100% { box-shadow: 0 0 0 0 rgba(249,115,22,0.5); }
               50%       { box-shadow: 0 0 0 5px rgba(249,115,22,0); }
             }
+            @media (prefers-reduced-motion: reduce){ [style*="city-chip-fall"], [style*="country-ring-pulse"] { animation: none !important; } }
           `}</style>
 
-          <p className="text-[13px] font-bold text-gray-400 px-4 mb-3 tracking-wide">קבוצות</p>
+          {/* Section header */}
+          <div className="px-4 mb-3" dir="rtl">
+            <h2 className="text-[16px] font-extrabold text-[#1C1917] leading-tight" style={{ fontFamily: 'Heebo, sans-serif' }}>קבוצות ערים</h2>
+            <p className="text-[12px] text-[#78716C] mt-0.5">בחרו יעד והצטרפו לטיילים</p>
+          </div>
 
-          {/* Country circles row */}
+          {/* Country selector */}
           <div className="overflow-x-auto scrollbar-hide" style={{ touchAction: 'pan-x', overscrollBehaviorX: 'contain' }}>
-            <div className="flex gap-3 px-4 pb-1" style={{ width: 'max-content' }}>
+            <div className="flex gap-3.5 px-4 pb-1" style={{ width: 'max-content' }}>
               {userCountries.map((code) => {
                 const country = COUNTRIES[code];
                 if (!country) return null;
                 const isExpanded = expandedCountry === code;
-                const hasCities  = !!COUNTRY_CITIES[code];
                 return (
                   <button
                     key={code}
                     onClick={() => setExpandedCountry(isExpanded ? null : code)}
-                    className="flex flex-col items-center gap-1.5 flex-shrink-0"
-                    style={{ background: 'none', border: 'none', cursor: hasCities ? 'pointer' : 'default', padding: 0 }}
+                    className="flex flex-col items-center gap-1.5 flex-shrink-0 active:scale-95 transition-transform"
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
                   >
                     <div
-                      className="w-14 h-14 rounded-full flex items-center justify-center p-[2.5px]"
+                      className="rounded-full flex items-center justify-center"
                       style={{
-                        background: isExpanded
-                          ? 'linear-gradient(135deg, #F97316, #EA580C)'
-                          : 'linear-gradient(135deg, #F97316, #EA580C)',
-                        animation: isExpanded ? 'country-ring-pulse 1.4s ease-in-out infinite' : 'none',
-                        transition: 'background 0.25s',
+                        width: 58, height: 58, padding: isExpanded ? 2.5 : 0,
+                        background: isExpanded ? 'linear-gradient(135deg,#F97316,#EA580C)' : 'transparent',
+                        animation: isExpanded ? 'country-ring-pulse 1.5s ease-in-out infinite' : 'none',
+                        transform: isExpanded ? 'scale(1.05)' : 'none',
+                        transition: 'transform 0.2s',
                       }}
                     >
-                      <div className="w-full h-full bg-white rounded-full flex items-center justify-center text-2xl">
+                      <div
+                        className="w-full h-full bg-white rounded-full flex items-center justify-center text-2xl"
+                        style={{ border: isExpanded ? 'none' : '1.5px solid #EFEBE6', boxShadow: isExpanded ? 'none' : '0 1px 3px rgba(0,0,0,0.05)' }}
+                      >
                         {country.flag}
                       </div>
                     </div>
                     <span
-                      className="text-[11px] font-medium max-w-[56px] text-center truncate"
-                      style={{ color: isExpanded ? '#F97316' : '#6B7280' }}
+                      className="text-[11px] max-w-[58px] text-center truncate"
+                      style={{ color: isExpanded ? '#EA580C' : '#78716C', fontWeight: isExpanded ? 800 : 500 }}
                     >
                       {country.name}
                     </span>
@@ -660,7 +668,7 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
                 className="flex flex-col items-center gap-1.5 flex-shrink-0 active:scale-95 transition-transform"
                 style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}
               >
-                <div className="w-14 h-14 rounded-full bg-gray-100 flex items-center justify-center border-2 border-dashed border-gray-300">
+                <div className="rounded-full flex items-center justify-center" style={{ width: 58, height: 58, background: '#F5F3F0', border: '1.5px dashed #D6D3D1' }}>
                   <Plus className="w-5 h-5 text-gray-400" strokeWidth={2.5} />
                 </div>
                 <span className="text-[11px] text-gray-400 font-medium">הוסף</span>
@@ -672,7 +680,9 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
           {expandedCountry && COUNTRY_CITIES[expandedCountry] && (
             <div ref={cityRowRef} className="overflow-x-auto scrollbar-hide mt-3" style={{ touchAction: 'pan-x', overscrollBehaviorX: 'contain' }}>
               <div className="flex gap-2 px-4 pb-1" style={{ width: 'max-content' }}>
-                {COUNTRY_CITIES[expandedCountry].map((city, i) => (
+                {COUNTRY_CITIES[expandedCountry].map((city, i) => {
+                  const accent = emojiColor(city.emoji); // frame + tint colour matched to the emoji
+                  return (
                   <button
                     key={city.name}
                     onClick={() => {
@@ -683,9 +693,9 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
                       display: 'flex', alignItems: 'center', gap: 6,
                       padding: '8px 14px',
                       borderRadius: 50,
-                      border: '1.5px solid #FED7AA',
-                      background: 'white',
-                      boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
+                      border: `1.5px solid ${accent}`,
+                      background: `${accent}14`,
+                      boxShadow: `0 2px 8px ${accent}26`,
                       cursor: 'pointer',
                       animation: `city-chip-fall 0.4s cubic-bezier(0.34,1.56,0.64,1) ${i * 0.06}s both`,
                       whiteSpace: 'nowrap',
@@ -700,9 +710,10 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
                     }}>
                       {city.name}
                     </span>
-                    <Users size={12} color="#F97316" strokeWidth={2.5} />
+                    <Users size={12} color={accent} strokeWidth={2.5} />
                   </button>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}
@@ -716,9 +727,10 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
           <div>
             <button
               onClick={() => setGroupsCollapsed(p => !p)}
-              className="w-full flex items-center gap-1 px-4 mb-1 mt-3"
+              className="w-full flex items-center gap-2 px-4 mb-1.5 mt-3"
             >
-              <p className="text-[13px] font-bold text-gray-400 tracking-wide">קבוצות שלי</p>
+              <p className="text-[14px] font-extrabold text-[#1C1917] tracking-tight" style={{ fontFamily: 'Heebo, sans-serif' }}>קבוצות שלי</p>
+              <span style={{ background: '#FFF1E7', color: '#EA580C', fontSize: 11, fontWeight: 800, borderRadius: 999, padding: '1px 8px', minWidth: 20, textAlign: 'center' }}>{groupChats.length}</span>
               <ChevronDown
                 size={16}
                 color="#9CA3AF"
@@ -736,12 +748,12 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
                 <div style={{ position: 'relative', flexShrink: 0 }}>
                   <div style={{
                     width: 52, height: 52, borderRadius: '50%',
-                    background: gc.unreadCount > 0 ? 'linear-gradient(135deg, #F97316, #EA580C)' : 'linear-gradient(135deg, #E5E7EB, #D1D5DB)',
+                    background: gc.unreadCount > 0 ? 'linear-gradient(135deg, #F97316, #EA580C)' : `${emojiColor(gc.cityEmoji)}1F`,
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
                     fontSize: 24,
-                    boxShadow: gc.unreadCount > 0 ? '0 3px 10px rgba(249,115,22,0.35)' : 'none',
+                    boxShadow: gc.unreadCount > 0 ? '0 3px 10px rgba(249,115,22,0.35)' : `inset 0 0 0 2px ${emojiColor(gc.cityEmoji)}, 0 2px 8px ${emojiColor(gc.cityEmoji)}26`,
                   }}>
-                    {gc.cityEmoji}
+                    <span>{gc.cityEmoji}</span>
                   </div>
                   {/* Member count badge */}
                   <div style={{

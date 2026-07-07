@@ -237,6 +237,8 @@ export function CityGroupChat({
   const [descDraft,    setDescDraft]    = useState('');
   const [showMenu,     setShowMenu]     = useState(false);
   const [showGuide,    setShowGuide]    = useState(false);
+  const [guideOpen,    setGuideOpen]    = useState<Set<string>>(() => new Set(['crit-0', 'isr-0'])); // expanded accordion cards in the destination guide
+  const toggleGuide = (k: string) => setGuideOpen(s => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n; });
   const [confirmLeave, setConfirmLeave] = useState(false);
   const [leaving,      setLeaving]      = useState(false);
 
@@ -270,7 +272,7 @@ export function CityGroupChat({
     if (headerRef.current) ro.observe(headerRef.current);
     if (inputBarRef.current) ro.observe(inputBarRef.current);
     return () => ro.disconnect();
-  }, []);
+  }, [memberStatus]); // re-run once the chat (and its refs) actually renders (first open starts as 'loading')
 
   /* ── channel init (skip if already cached) ── */
   useEffect(() => {
@@ -662,17 +664,15 @@ export function CityGroupChat({
     const t2 = setTimeout(pin, 350);
     const t3 = setTimeout(pin, 700);
     return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); };
-  }, [msgsLoading]);
+  }, [msgsLoading, memberStatus]); // also pin once the chat renders (first open starts as 'loading')
 
-  // Once the previous last-seen is known, jump up to the first unread (if any).
+  // Always open at the BOTTOM — same as re-entering the chat. (We used to jump up to the first
+  // unread message here, but on first open that left the newest message — e.g. the "joined the
+  // group" notice — behind the floating input bar. Opening at the bottom keeps first open === re-open.)
   useLayoutEffect(() => {
     if (!unreadReady || unreadHandled.current) return;
     unreadHandled.current = true;
-    if (firstUnreadId && firstUnreadRef.current) {
-      scrollToUnread();
-      stickRef.current = false;
-      keepUnreadRef.current = true; // hold here while images above settle
-    }
+    // Intentionally no unread-jump: stay stuck to the bottom.
   }, [unreadReady]);
 
   // The floating header / input bar heights are measured AFTER first paint, which
@@ -710,7 +710,7 @@ export function CityGroupChat({
       el.removeEventListener('touchmove', markGesture);
       el.removeEventListener('keydown', markGesture);
     };
-  }, []);
+  }, [memberStatus]); // re-attach once the chat renders (first open starts as 'loading', refs null)
 
   // While content grows (images / map snapshots loading after open) keep the view
   // anchored — to the bottom if the user is there, or to the unread divider on open.
@@ -724,7 +724,7 @@ export function CityGroupChat({
     });
     ro.observe(content);
     return () => ro.disconnect();
-  }, []);
+  }, [memberStatus]); // re-attach once the chat renders (first open starts as 'loading', refs null)
 
   const sendText = async () => {
     if (!text.trim() || !channelId || sending) return;
@@ -859,7 +859,7 @@ export function CityGroupChat({
       const selfText = sysText.includes('הצטרף') ? 'הצטרפת לקבוצה' : 'עזבת את הקבוצה';
       return (
         <div key={msg.id} style={{ display: 'flex', justifyContent: 'center', margin: '10px 14px' }}>
-          <span dir="rtl" style={{ background: 'rgba(60,55,50,0.10)', color: '#555', fontSize: 12.5, fontWeight: 500, padding: '5px 14px', borderRadius: 14, textAlign: 'center', maxWidth: '85%' }}>
+          <span dir="rtl" style={{ background: 'rgba(60,55,50,0.10)', color: '#555', fontSize: 11, fontWeight: 500, padding: '4px 11px', borderRadius: 12, textAlign: 'center', maxWidth: '85%' }}>
             {msg.user_id === currentUserId ? selfText : sysText}
           </span>
         </div>
@@ -893,8 +893,8 @@ export function CityGroupChat({
             <span style={{
               background: 'rgba(60,55,50,0.55)',
               color: '#FFFFFF',
-              fontSize: 12, fontWeight: 600,
-              padding: '5px 14px', borderRadius: 20,
+              fontSize: 11, fontWeight: 600,
+              padding: '4px 11px', borderRadius: 16,
               boxShadow: '0 1px 4px rgba(0,0,0,0.12)',
               backdropFilter: 'blur(8px)',
               WebkitBackdropFilter: 'blur(8px)',
@@ -1412,73 +1412,98 @@ export function CityGroupChat({
       {/* ── City Guide Screen ── */}
       {showGuide && (() => {
         const g = CITY_GUIDES[`${countryCode}:${cityEmoji}`] ?? DEFAULT_CITY_GUIDE;
+        // Collapsible guide card (accordion) — keeps a long guide scannable.
+        const accordion = (item: { emoji: string; title: string; body: string }, key: string, accentSoft: string) => {
+          const open = guideOpen.has(key);
+          return (
+            <div key={key} style={{ background: '#fff', borderRadius: 16, overflow: 'hidden', boxShadow: '0 1px 2px rgba(0,0,0,0.04), 0 6px 18px rgba(0,0,0,0.05)' }}>
+              <button onClick={() => toggleGuide(key)} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 11, padding: '12px 13px', background: 'none', border: 'none', cursor: 'pointer', direction: 'rtl', textAlign: 'right' }}>
+                <span style={{ width: 34, height: 34, borderRadius: 11, flexShrink: 0, background: accentSoft, display: 'grid', placeItems: 'center', fontSize: 18 }}>{item.emoji}</span>
+                <span style={{ flex: 1, fontSize: 14.5, fontWeight: 700, color: '#1C1917', lineHeight: 1.3 }}>{item.title}</span>
+                <ChevronDown size={17} style={{ color: '#A8A29E', flexShrink: 0, transition: 'transform 0.25s ease', transform: open ? 'rotate(180deg)' : 'none' }} />
+              </button>
+              {open && (
+                <div style={{ padding: '0 14px 14px', direction: 'rtl' }}>
+                  <div style={{ height: 1, background: '#F1EEE9', margin: '0 0 10px' }} />
+                  <p style={{ fontSize: 13.5, color: '#57534E', margin: 0, lineHeight: 1.75 }}>{item.body}</p>
+                </div>
+              )}
+            </div>
+          );
+        };
         return (
           <div style={{
             position: 'absolute', inset: 0, zIndex: 50,
             display: 'flex', flexDirection: 'column',
             fontFamily: "'Rubik','Heebo',sans-serif",
             animation: 'ginfo-slide 0.28s cubic-bezier(0.25,1,0.5,1)',
-            background: '#F4F6F9',
+            background: '#F6F3EE',
           }}>
-            {/* Header */}
-            <div style={{ background: 'rgba(255,255,255,0.95)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)', borderBottom: '1px solid rgba(0,0,0,0.08)', paddingTop: 'env(safe-area-inset-top)', flexShrink: 0 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px 10px' }}>
+            <style>{`
+              @keyframes guide-rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+              @keyframes guide-float { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
+              @media (prefers-reduced-motion: reduce){ [style*="guide-rise"], [style*="guide-float"] { animation: none !important; } }
+            `}</style>
+
+            {/* Header — glass, brand eyebrow (no coloured bar) */}
+            <div style={{ background: 'rgba(246,243,238,0.85)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)', borderBottom: '1px solid rgba(0,0,0,0.06)', paddingTop: 'env(safe-area-inset-top)', flexShrink: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px 10px' }}>
                 <BackButton onClick={() => setShowGuide(false)} />
-                <h2 style={{ flex: 1, fontSize: 17, fontWeight: 700, color: '#111', margin: 0, textAlign: 'right' }} dir="rtl">
-                  מדריך {cityEmoji} {cityName}
-                </h2>
+                <div style={{ flex: 1, textAlign: 'right' }} dir="rtl">
+                  <p style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.08em', color: '#EA580C', margin: 0 }}>מדריך היעד</p>
+                  <h2 style={{ fontSize: 17, fontWeight: 800, color: '#1C1917', margin: 0 }}>{cityName}</h2>
+                </div>
               </div>
             </div>
 
             {/* Body */}
-            <div style={{ flex: 1, overflowY: 'auto', padding: '14px 14px', paddingBottom: 'max(24px, env(safe-area-inset-bottom))', display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div style={{ flex: 1, overflowY: 'auto', padding: '14px', paddingBottom: 'max(24px, env(safe-area-inset-bottom))', display: 'flex', flexDirection: 'column', gap: 20 }}>
 
               {/* Hero */}
-              <div style={{ background: 'linear-gradient(135deg,#F97316,#EA580C)', borderRadius: 20, padding: '22px 20px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
-                <span style={{ fontSize: 52, lineHeight: 1 }}>{cityEmoji}</span>
-                <h3 style={{ fontSize: 20, fontWeight: 700, color: '#fff', margin: 0, textAlign: 'center' }} dir="rtl">{countryFlag} {cityName}</h3>
-                <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.8)', margin: 0, textAlign: 'center' }} dir="rtl">{g.subtitle}</p>
+              <div style={{ position: 'relative', borderRadius: 24, overflow: 'hidden', padding: '26px 22px 24px', background: 'linear-gradient(140deg, #FB923C 0%, #EA580C 52%, #9A3412 100%)', boxShadow: '0 12px 34px rgba(234,88,12,0.32)', animation: 'guide-rise 0.5s both' }}>
+                <div aria-hidden style={{ position: 'absolute', top: -50, right: -30, width: 190, height: 190, borderRadius: '50%', background: 'radial-gradient(circle, rgba(255,255,255,0.28), rgba(255,255,255,0))' }} />
+                <div aria-hidden style={{ position: 'absolute', bottom: -60, left: -40, width: 200, height: 200, borderRadius: '50%', background: 'radial-gradient(circle, rgba(0,0,0,0.14), rgba(0,0,0,0))' }} />
+                <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+                  <div style={{ width: 88, height: 88, borderRadius: '50%', background: '#fff', display: 'grid', placeItems: 'center', fontSize: 48, lineHeight: 1, boxShadow: '0 8px 22px rgba(0,0,0,0.18)', animation: 'guide-float 4s ease-in-out infinite' }}>{cityEmoji}</div>
+                  <h3 style={{ fontSize: 23, fontWeight: 800, color: '#fff', margin: '6px 0 0', textAlign: 'center', textShadow: '0 1px 10px rgba(0,0,0,0.15)' }} dir="rtl">{countryFlag} {cityName}</h3>
+                  <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.92)', margin: 0, textAlign: 'center', lineHeight: 1.55, maxWidth: 290 }} dir="rtl">{g.subtitle}</p>
+                </div>
               </div>
 
               {/* Quick facts */}
-              <div style={{ background: '#fff', borderRadius: 16, overflow: 'hidden' }}>
-                {g.quickFacts.map((f, i) => (
-                  <div key={i} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderBottom: i < g.quickFacts.length - 1 ? '1px solid #F0F0F0' : 'none', direction: 'rtl' }}>
-                    <span style={{ fontSize: 13, color: '#888' }}>{f.label}</span>
-                    <span style={{ fontSize: 13, fontWeight: 600, color: '#111', textAlign: 'left' }}>{f.value}</span>
-                  </div>
-                ))}
+              <div style={{ animation: 'guide-rise 0.5s both', animationDelay: '0.06s' }}>
+                <p style={{ fontSize: 12.5, fontWeight: 800, color: '#78716C', margin: '0 0 11px', direction: 'rtl' }}>מבט מהיר</p>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                  {g.quickFacts.map((f, i) => (
+                    <div key={i} style={{ background: '#fff', borderRadius: 14, padding: '11px 12px', direction: 'rtl', boxShadow: '0 1px 2px rgba(0,0,0,0.04), 0 6px 16px rgba(0,0,0,0.04)' }}>
+                      <p style={{ fontSize: 12, fontWeight: 700, color: '#EA580C', margin: '0 0 3px' }}>{f.label}</p>
+                      <p style={{ fontSize: 12.5, fontWeight: 600, color: '#292524', margin: 0, lineHeight: 1.45 }}>{f.value}</p>
+                    </div>
+                  ))}
+                </div>
               </div>
 
               {/* Critical */}
-              <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10, direction: 'rtl' }}>
-                  <AlertTriangle size={15} style={{ color: '#EF4444' }} />
-                  <p style={{ fontSize: 13, fontWeight: 700, color: '#EF4444', margin: 0 }}>דברים קריטיים לדעת</p>
+              <div style={{ animation: 'guide-rise 0.5s both', animationDelay: '0.12s' }}>
+                <div style={{ marginBottom: 11, direction: 'rtl' }}>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, background: '#FEF2F2', color: '#DC2626', fontSize: 12.5, fontWeight: 800, padding: '5px 12px', borderRadius: 999 }}>
+                    <AlertTriangle size={13} /> קריטי לדעת
+                  </span>
                 </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  {g.critical.map((item, i) => (
-                    <div key={i} style={{ background: '#fff', borderRadius: 14, padding: '14px 16px', direction: 'rtl' }}>
-                      <p style={{ fontSize: 14, fontWeight: 700, color: '#111', margin: '0 0 4px' }}>{item.emoji} {item.title}</p>
-                      <p style={{ fontSize: 13, color: '#555', margin: 0, lineHeight: 1.6 }}>{item.body}</p>
-                    </div>
-                  ))}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
+                  {g.critical.map((item, i) => accordion(item, `crit-${i}`, '#FEF2F2'))}
                 </div>
               </div>
 
               {/* Israeli tips */}
-              <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10, direction: 'rtl' }}>
-                  <span style={{ fontSize: 15 }}>🇮🇱</span>
-                  <p style={{ fontSize: 13, fontWeight: 700, color: '#1565C0', margin: 0 }}>רלוונטי לישראלים</p>
+              <div style={{ animation: 'guide-rise 0.5s both', animationDelay: '0.18s' }}>
+                <div style={{ marginBottom: 11, direction: 'rtl' }}>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, background: '#ECFEFF', color: '#0E7490', fontSize: 12.5, fontWeight: 800, padding: '5px 12px', borderRadius: 999 }}>
+                    🇮🇱 רלוונטי לישראלים
+                  </span>
                 </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  {g.israeli.map((item, i) => (
-                    <div key={i} style={{ background: '#fff', borderRadius: 14, padding: '14px 16px', direction: 'rtl', borderRight: '3px solid #1565C0' }}>
-                      <p style={{ fontSize: 14, fontWeight: 700, color: '#111', margin: '0 0 4px' }}>{item.emoji} {item.title}</p>
-                      <p style={{ fontSize: 13, color: '#555', margin: 0, lineHeight: 1.6 }}>{item.body}</p>
-                    </div>
-                  ))}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
+                  {g.israeli.map((item, i) => accordion(item, `isr-${i}`, '#ECFEFF'))}
                 </div>
               </div>
 

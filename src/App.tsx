@@ -249,6 +249,11 @@ function App() {
 
 
 
+
+
+
+
+
   if (!splashDone) {
     return <SplashScreen onComplete={() => setSplashDone(true)} />;
   }

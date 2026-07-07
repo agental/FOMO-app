@@ -24,6 +24,8 @@ type EventDetailsModalProps = {
   onNavigateToUserProfile?: (userId: string) => void;
   onOpenMapAt?: (lat: number, lng: number) => void;
   onMessageUser?: (userId: string) => void;
+  /** 'modal' (default) = full-screen; 'sheet' = Chabad-style bottom sheet (opens half, drag up to full). */
+  variant?: 'modal' | 'sheet';
 };
 
 const CATEGORY_CONFIG: Record<string, { gradient: string; accent: string; light: string; image: string; label: string }> = {
@@ -36,7 +38,7 @@ const CATEGORY_CONFIG: Record<string, { gradient: string; accent: string; light:
 };
 const DEFAULT_CONFIG = { gradient: 'from-slate-500 via-gray-500 to-zinc-600', accent: '#F97316', light: '#fff7ed', image: '', label: 'אירוע 📅' };
 
-export function EventDetailsModal({ event, onClose, currentUserId: propUserId, onNavigateToUserProfile, onOpenMapAt, onMessageUser }: EventDetailsModalProps) {
+export function EventDetailsModal({ event, onClose, currentUserId: propUserId, onNavigateToUserProfile, onOpenMapAt, onMessageUser, variant = 'modal' }: EventDetailsModalProps) {
   const [attendees, setAttendees]     = useState<Attendee[]>([]);
   const [isJoined, setIsJoined]       = useState(false);
   const [requestStatus, setRequestStatus] = useState<'none' | 'pending' | 'approved' | 'rejected'>('none');
@@ -46,6 +48,51 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
   const [showNav, setShowNav] = useState(false);
   const [showShare, setShowShare] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  /* ── bottom-sheet mode (variant='sheet'): opens to half, drag up to full, drag down to close ── */
+  const winH = typeof window !== 'undefined' ? window.innerHeight : 800;
+  const SHEET_FULL = Math.round(winH * 0.92);
+  const SHEET_HALF = Math.round(winH * 0.55);
+  const COLLAPSED  = SHEET_FULL - SHEET_HALF; // translateY offset that leaves the half visible
+  const [snap, setSnap]       = useState<'half' | 'full'>('half');
+  const [dragDy, setDragDy]   = useState(0);
+  const [dragging, setDragging] = useState(false);
+  const [entered, setEntered] = useState(false);
+  const dragStartY = useRef(0);
+
+  useEffect(() => {
+    if (variant !== 'sheet') return;
+    const id = requestAnimationFrame(() => setEntered(true));
+    return () => cancelAnimationFrame(id);
+  }, [variant]);
+
+  const closeSheet = () => { setEntered(false); setTimeout(onClose, 320); };
+
+  const basePx = snap === 'full' ? 0 : COLLAPSED;
+  const sheetTranslate = !entered ? SHEET_FULL : Math.min(SHEET_FULL, Math.max(0, basePx + dragDy));
+
+  const onDragStart = (y: number) => { dragStartY.current = y; setDragging(true); };
+  const onDragMove  = (y: number) => { if (dragging) setDragDy(y - dragStartY.current); };
+  const onDragEnd   = () => {
+    const d = dragDy;
+    setDragging(false);
+    setDragDy(0);
+    if (snap === 'half') {
+      if (d <= -55) setSnap('full');
+      else if (d >= 90) closeSheet();
+    } else {
+      if (d >= 120) setSnap('half');
+    }
+  };
+
+  useEffect(() => {
+    if (!dragging) return;
+    const mm = (e: MouseEvent) => onDragMove(e.clientY);
+    const mu = () => onDragEnd();
+    document.addEventListener('mousemove', mm);
+    document.addEventListener('mouseup', mu);
+    return () => { document.removeEventListener('mousemove', mm); document.removeEventListener('mouseup', mu); };
+  }, [dragging, dragDy, snap]);
 
   const currentUserId = propUserId || '00000000-0000-0000-0000-000000000001';
   const isOwner  = event.user_id === currentUserId;
@@ -182,77 +229,10 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
   const joinDisabled = (isFull && !isJoined) || joining ||
     (isPrivate && (requestStatus === 'pending' || requestStatus === 'rejected'));
 
-  return (
-    <div
-      className="fixed inset-0 z-50 bg-white"
-      dir="rtl"
-      style={{ animation: 'edm-up 0.38s cubic-bezier(0.16,1,0.3,1)' }}
-    >
-      <style>{`
-        @keyframes edm-up { from { transform: translateY(100%) } to { transform: translateY(0) } }
-      `}</style>
-
-      {/* ── Nav bar ── */}
-      <div
-        className="flex items-center justify-between px-4 bg-white"
-        style={{
-          paddingTop: 'max(14px, env(safe-area-inset-top))',
-          paddingBottom: 12,
-          borderBottom: 'none',
-        }}
-      >
-        {/* right: close */}
-        <button
-          onClick={onClose}
-          aria-label="סגור"
-          className="w-10 h-10 flex items-center justify-center rounded-full active:bg-gray-100 transition-colors"
-          style={{ touchAction: 'manipulation' }}
-        >
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#111827" strokeWidth="2.2" strokeLinecap="round">
-            <path d="M9 18l6-6-6-6" />
-          </svg>
-        </button>
-
-        {/* center: title */}
-        <span className="text-[16px] font-black text-gray-900" style={{ fontFamily: 'Heebo, sans-serif' }}>
-          פרטי האירוע
-        </span>
-
-        {/* left: share + bookmark */}
-        <div className="flex items-center gap-1">
-          <button
-            onClick={handleShare}
-            aria-label="שתף אירוע"
-            className="w-10 h-10 flex items-center justify-center rounded-full active:bg-gray-100 transition-colors"
-            style={{ touchAction: 'manipulation' }}
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6B7280" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <line x1="22" y1="2" x2="11" y2="13" />
-              <polygon points="22 2 15 22 11 13 2 9 22 2" />
-            </svg>
-          </button>
-          <button
-            onClick={() => setSaved(s => !s)}
-            aria-label={saved ? 'הסר משמורים' : 'שמור אירוע'}
-            aria-pressed={saved}
-            className="w-10 h-10 flex items-center justify-center rounded-full active:bg-gray-100 transition-colors"
-            style={{ touchAction: 'manipulation' }}
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill={saved ? '#F97316' : 'none'} stroke={saved ? '#F97316' : '#6B7280'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
-            </svg>
-          </button>
-        </div>
-      </div>
-
-      {/* ── Scroll body ── */}
-      <div
-        ref={scrollRef}
-        className="overflow-y-auto overscroll-contain"
-        style={{ height: 'calc(100% - 57px)', paddingBottom: isOwner ? 24 : 100 }}
-      >
-
-        {/* Hero image with padding */}
+  /* ── shared detail body (identical in modal + sheet so the design is 1:1) ── */
+  const detailBody = (
+    <>
+      {/* Hero image with padding */}
         <div className="px-4 pt-4 pb-5">
           <div
             className="relative rounded-[20px] overflow-hidden"
@@ -473,6 +453,184 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
           )}
 
         </div>
+    </>
+  );
+
+  const joinButton = (
+    <button
+      onClick={handleJoin}
+      disabled={joinDisabled}
+      className="w-full font-black text-[17px] text-white active:scale-[0.97] transition-transform disabled:opacity-60"
+      style={{
+        fontFamily: 'Heebo, sans-serif',
+        height: 56,
+        borderRadius: 28,
+        background: isJoined
+          ? 'linear-gradient(135deg,#ef4444,#dc2626)'
+          : joinDisabled ? '#D1D5DB'
+          : `linear-gradient(135deg, ${'#F97316'}, ${'#F97316'}bb)`,
+        boxShadow: joinDisabled || isJoined ? 'none' : `0 8px 24px ${'#F97316'}55`,
+      }}
+    >
+      {joining ? '...' : joinLabel}
+    </button>
+  );
+
+  const extras = (
+    <>
+      {showPayment && (
+        <BookingFlow
+          event={event}
+          price={price || 0}
+          currentUserId={currentUserId}
+          onClose={() => setShowPayment(false)}
+          onComplete={completePayment}
+        />
+      )}
+      {showShare && (
+        <ShareEventSheet event={event} currentUserId={currentUserId} onClose={() => setShowShare(false)} />
+      )}
+      {showNav && event.latitude != null && event.longitude != null && (
+        <OpenLocationSheet
+          lat={event.latitude}
+          lng={event.longitude}
+          name={event.title || event.city || 'מיקום האירוע'}
+          onClose={() => setShowNav(false)}
+        />
+      )}
+    </>
+  );
+
+  /* ── Bottom-sheet variant (Chabad-style frame; opens to half, drag up to full) ── */
+  if (variant === 'sheet') {
+    return (
+      <>
+        <div
+          className="fixed inset-0 bg-black/40 z-50"
+          style={{ opacity: entered ? 1 : 0, transition: 'opacity 0.3s ease' }}
+          onClick={closeSheet}
+        />
+        <div
+          dir="rtl"
+          className="fixed left-0 right-0 bottom-0 bg-white rounded-t-3xl shadow-2xl z-50 overflow-hidden"
+          style={{
+            height: SHEET_FULL,
+            transform: `translateY(${sheetTranslate}px)`,
+            transition: dragging ? 'none' : 'transform 0.34s cubic-bezier(0.22,1,0.3,1)',
+          }}
+        >
+          {/* drag handle (drag up to expand, down to close) */}
+          <div
+            className="w-full pt-3 pb-2 flex justify-center cursor-grab active:cursor-grabbing"
+            style={{ touchAction: 'none' }}
+            onMouseDown={(e) => onDragStart(e.clientY)}
+            onTouchStart={(e) => onDragStart(e.touches[0].clientY)}
+            onTouchMove={(e) => onDragMove(e.touches[0].clientY)}
+            onTouchEnd={onDragEnd}
+          >
+            <div className="w-11 h-1.5 bg-gray-300 rounded-full" />
+          </div>
+
+          <button
+            onClick={closeSheet}
+            aria-label="סגור"
+            className="absolute top-3 left-4 w-9 h-9 bg-gray-100 rounded-full flex items-center justify-center z-10"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#6B7280" strokeWidth="2.2" strokeLinecap="round">
+              <path d="M6 6l12 12M18 6L6 18" />
+            </svg>
+          </button>
+
+          <div
+            ref={scrollRef}
+            className="overflow-y-auto overscroll-contain"
+            style={{ height: 'calc(100% - 34px)', paddingBottom: isOwner ? 24 : 104 }}
+          >
+            {detailBody}
+          </div>
+        </div>
+
+        {/* CTA pinned to the viewport (sibling of the sheet, so it stays visible even at half —
+            a position:fixed child of the translated sheet would anchor to the sheet, not the screen) */}
+        <div
+          className="fixed bottom-0 left-0 right-0 z-[60] bg-white px-5"
+          style={{
+            paddingTop: 14,
+            paddingBottom: 'max(20px, env(safe-area-inset-bottom))',
+            boxShadow: '0 -2px 16px rgba(0,0,0,0.08)',
+            transform: entered ? 'translateY(0)' : 'translateY(100%)',
+            transition: 'transform 0.34s cubic-bezier(0.22,1,0.3,1)',
+          }}
+        >
+          {joinButton}
+        </div>
+        {extras}
+      </>
+    );
+  }
+
+  /* ── Full-screen modal variant (default; Events tab, Home, Chat, …) ── */
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-white"
+      dir="rtl"
+      style={{ animation: 'edm-up 0.38s cubic-bezier(0.16,1,0.3,1)' }}
+    >
+      <style>{`
+        @keyframes edm-up { from { transform: translateY(100%) } to { transform: translateY(0) } }
+      `}</style>
+
+      {/* ── Nav bar ── */}
+      <div
+        className="flex items-center justify-between px-4 bg-white"
+        style={{ paddingTop: 'max(14px, env(safe-area-inset-top))', paddingBottom: 12 }}
+      >
+        <button
+          onClick={onClose}
+          aria-label="סגור"
+          className="w-10 h-10 flex items-center justify-center rounded-full active:bg-gray-100 transition-colors"
+          style={{ touchAction: 'manipulation' }}
+        >
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#111827" strokeWidth="2.2" strokeLinecap="round">
+            <path d="M9 18l6-6-6-6" />
+          </svg>
+        </button>
+        <span className="text-[16px] font-black text-gray-900" style={{ fontFamily: 'Heebo, sans-serif' }}>
+          פרטי האירוע
+        </span>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={handleShare}
+            aria-label="שתף אירוע"
+            className="w-10 h-10 flex items-center justify-center rounded-full active:bg-gray-100 transition-colors"
+            style={{ touchAction: 'manipulation' }}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6B7280" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="22" y1="2" x2="11" y2="13" />
+              <polygon points="22 2 15 22 11 13 2 9 22 2" />
+            </svg>
+          </button>
+          <button
+            onClick={() => setSaved(s => !s)}
+            aria-label={saved ? 'הסר משמורים' : 'שמור אירוע'}
+            aria-pressed={saved}
+            className="w-10 h-10 flex items-center justify-center rounded-full active:bg-gray-100 transition-colors"
+            style={{ touchAction: 'manipulation' }}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill={saved ? '#F97316' : 'none'} stroke={saved ? '#F97316' : '#6B7280'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      {/* ── Scroll body ── */}
+      <div
+        ref={scrollRef}
+        className="overflow-y-auto overscroll-contain"
+        style={{ height: 'calc(100% - 57px)', paddingBottom: isOwner ? 24 : 100 }}
+      >
+        {detailBody}
       </div>
 
       {/* ── Sticky bottom ── */}
@@ -484,50 +642,10 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
           boxShadow: '0 -2px 16px rgba(0,0,0,0.08)',
         }}
       >
-        <button
-          onClick={handleJoin}
-          disabled={joinDisabled}
-          className="w-full font-black text-[17px] text-white active:scale-[0.97] transition-transform disabled:opacity-60"
-          style={{
-            fontFamily: 'Heebo, sans-serif',
-            height: 56,
-            borderRadius: 28,
-            background: isJoined
-              ? 'linear-gradient(135deg,#ef4444,#dc2626)'
-              : joinDisabled ? '#D1D5DB'
-              : `linear-gradient(135deg, ${'#F97316'}, ${'#F97316'}bb)`,
-            boxShadow: joinDisabled || isJoined ? 'none' : `0 8px 24px ${'#F97316'}55`,
-          }}
-        >
-          {joining ? '...' : joinLabel}
-        </button>
+        {joinButton}
       </div>
 
-      {/* ── Booking + payment flow ── */}
-      {showPayment && (
-        <BookingFlow
-          event={event}
-          price={price || 0}
-          currentUserId={currentUserId}
-          onClose={() => setShowPayment(false)}
-          onComplete={completePayment}
-        />
-      )}
-
-      {/* ── Share event to chats ── */}
-      {showShare && (
-        <ShareEventSheet event={event} currentUserId={currentUserId} onClose={() => setShowShare(false)} />
-      )}
-
-      {/* ── Navigation picker — real Apple/Google/Waze logos, opens the native app ── */}
-      {showNav && event.latitude != null && event.longitude != null && (
-        <OpenLocationSheet
-          lat={event.latitude}
-          lng={event.longitude}
-          name={event.title || event.city || 'מיקום האירוע'}
-          onClose={() => setShowNav(false)}
-        />
-      )}
+      {extras}
     </div>
   );
 }

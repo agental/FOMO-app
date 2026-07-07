@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
-import { MapPin, X, Navigation, Phone, Globe, Palette, Link, Loader, CircleCheck as CheckCircle, CircleAlert as AlertCircle, Upload, Star, Camera, Clock } from 'lucide-react';
+import { MapPin, X, Navigation, Phone, Globe, Link, Loader, CircleCheck as CheckCircle, CircleAlert as AlertCircle, Upload, Star, Camera, Clock, Smile } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { COUNTRIES } from '../utils/countries';
-import { LOCATION_PIN_COLORS, createLocationPinSVG } from '../utils/createLocationPin';
+import { createPlacePinSVG } from '../utils/createLocationPin';
+import { placePinColor, PLACE_COLORS } from '../utils/placePinColor';
+import { EmojiPickerSheet } from './EmojiPickerSheet';
 import { reverseGeocode } from '../utils/geocoding';
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
@@ -33,15 +35,6 @@ interface PlaceData {
 
 type FetchStatus = 'idle' | 'loading' | 'success' | 'error';
 
-const EMOJI_CATEGORIES = [
-  { id: 'food',     icon: '🍔', label: 'אוכל',    emojis: ['🍕','🍔','🍣','🍜','🍱','🍝','☕','🍺','🍷','🧃','🍰','🧁','🍩','🥐','🥩','🥗','🌮','🍦','🫕','🥑'] },
-  { id: 'activity', icon: '⚽', label: 'פעילות',  emojis: ['⚽','🏋️','🏊','🧘','🚴','🎾','🏀','🎯','🥋','⛷️','🏄','🎮','🎵','🎭','🎨','🎪','🎳','🏆','🎬','🎤'] },
-  { id: 'travel',   icon: '🏖️', label: 'נסיעות',  emojis: ['🏖️','✈️','🏛️','🗺️','🏔️','🌴','🗼','🏰','🚢','🧳','🌍','⛵','🚗','🌅','🏕️','🌃','🛳️','🌋','🏟️','🗽'] },
-  { id: 'shopping', icon: '🛍️', label: 'קניות',   emojis: ['🛍️','💊','✂️','⛽','🅿️','💇','💆','👗','👠','💄','💍','🧴','🛒','💰','🏪','🏬','💳','👜','🎁','🧹'] },
-  { id: 'religion', icon: '🕍', label: 'דת',      emojis: ['🕍','⛪','🕌','🌿','📿','✡️','✝️','☪️','🕯️','🙏','📖','⚖️','🔯','☮️','🕎','🛐'] },
-  { id: 'misc',     icon: '⭐', label: 'שונות',   emojis: ['⭐','🔥','❤️','💎','🏆','✅','🎉','🎀','🌺','🌈','💡','🔑','🏠','🏥','🏦','🏫','🚨','📍','🔔','💬'] },
-] as const;
-
 export function CreateLocationForm({ onSuccess, onCancel, currentUserId }: CreateLocationFormProps) {
   const [googleMapsUrl, setGoogleMapsUrl] = useState('');
   const [fetchStatus, setFetchStatus] = useState<FetchStatus>('idle');
@@ -54,10 +47,12 @@ export function CreateLocationForm({ onSuccess, onCancel, currentUserId }: Creat
   const [city, setCity] = useState('');
   const [phone, setPhone] = useState('');
   const [manualRating, setManualRating] = useState<number>(0);
-  const [pinColor, setPinColor] = useState('#EF4444');
-  const [emoji, setEmoji] = useState('');
-  const [emojiCategory, setEmojiCategory] = useState<string>('food');
+  const [emoji, setEmoji] = useState('📍');
+  const [emojiSheetOpen, setEmojiSheetOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  // the pin colour is derived from the chosen emoji (so colour + icon always match)
+  // pick a colour from the palette; picking an emoji suggests its colour, which can be overridden
+  const [pinColor, setPinColor] = useState<string>(placePinColor('📍'));
   const [latitude, setLatitude] = useState<number | null>(null);
   const [longitude, setLongitude] = useState<number | null>(null);
   const [showMapPicker, setShowMapPicker] = useState(false);
@@ -263,7 +258,7 @@ export function CreateLocationForm({ onSuccess, onCancel, currentUserId }: Creat
       }
 
       const photoUrl = customImageUrl || placeData?.photoUrl || placeData?.photos?.[0] || null;
-      const emojiValue = emoji.trim() || null;
+      const emojiValue = emoji.trim() || '📍';
       const finalRating = manualRating > 0 ? manualRating : (placeData?.rating ?? null);
 
       const corePayload: Record<string, unknown> = {
@@ -271,7 +266,7 @@ export function CreateLocationForm({ onSuccess, onCancel, currentUserId }: Creat
         country:    finalCountry,
         latitude:   latitude!,
         longitude:  longitude!,
-        pin_color:  emojiValue ? `${pinColor}|${emojiValue}` : pinColor,
+        pin_color:  `${pinColor}|${emojiValue}`,
         created_by: currentUserId,
         description:    description || null,
         city:           city || placeData?.city || null,
@@ -690,98 +685,59 @@ export function CreateLocationForm({ onSuccess, onCancel, currentUserId }: Creat
             )}
           </div>
 
-          {/* Pin color */}
+          {/* Place icon + colour — pick an emoji, then a colour from the palette */}
           <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-3">
-              <Palette className="inline w-4 h-4 ml-1" />
-              צבע הסמן על המפה
+            <label className="block text-sm font-semibold text-gray-700 mb-2">
+              <Smile className="inline w-4 h-4 ml-1" />
+              אייקון וצבע המקום
             </label>
-            <div className="grid grid-cols-5 gap-3">
-              {LOCATION_PIN_COLORS.map((color) => (
+            <div
+              className="rounded-2xl p-4 border border-gray-200"
+              style={{ background: `linear-gradient(135deg, ${pinColor}18, ${pinColor}06)` }}
+            >
+              <div className="flex items-center gap-4">
+                {/* live pin preview (exactly how it appears on the map) */}
+                <div className="flex items-center justify-center flex-shrink-0" style={{ width: 66, height: 80 }}>
+                  <div
+                    style={{ transform: 'scale(1.7)', transformOrigin: 'center bottom' }}
+                    dangerouslySetInnerHTML={{ __html: createPlacePinSVG(emoji || '📍', pinColor).outerHTML }}
+                  />
+                </div>
                 <button
-                  key={color.value}
                   type="button"
-                  onClick={() => setPinColor(color.value)}
-                  className={`relative h-11 rounded-xl transition-all hover:scale-105 active:scale-95 ${
-                    pinColor === color.value ? 'ring-4 ring-offset-2' : 'ring-2 ring-gray-200'
-                  }`}
-                  style={{ backgroundColor: color.value }}
-                  title={color.name}
+                  onClick={() => setEmojiSheetOpen(true)}
+                  className="flex-1 py-3 rounded-xl font-bold text-white transition-all active:scale-[0.98] flex items-center justify-center gap-2"
+                  style={{ background: pinColor, boxShadow: `0 6px 18px ${pinColor}55` }}
                 >
-                  {pinColor === color.value && (
-                    <div className="absolute inset-0 flex items-center justify-center">
-                      <div className="w-5 h-5 bg-white rounded-full flex items-center justify-center">
-                        <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: color.value }} />
-                      </div>
-                    </div>
-                  )}
+                  <span className="text-lg leading-none">{emoji || '📍'}</span>
+                  בחר אימוג׳י
                 </button>
-              ))}
+              </div>
+
+              {/* colour palette — pick any colour (starts on the emoji's suggested colour) */}
+              <p className="text-xs font-semibold text-gray-600 mt-4 mb-2">צבע הפין</p>
+              <div className="flex flex-wrap gap-2.5">
+                {PLACE_COLORS.map((c) => {
+                  const active = pinColor.toLowerCase() === c.toLowerCase();
+                  return (
+                    <button
+                      key={c}
+                      type="button"
+                      onClick={() => setPinColor(c)}
+                      aria-label={c}
+                      className="rounded-full transition-transform"
+                      style={{
+                        width: 30, height: 30, background: c, padding: 0, cursor: 'pointer',
+                        border: active ? '3px solid #111827' : '2px solid #ffffff',
+                        boxShadow: active ? '0 0 0 2px #ffffff, 0 2px 6px rgba(0,0,0,0.25)' : '0 1px 4px rgba(0,0,0,0.2)',
+                        transform: active ? 'scale(1.12)' : 'scale(1)',
+                      }}
+                    />
+                  );
+                })}
+              </div>
             </div>
           </div>
-
-          {/* Emoji badge */}
-          <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-2">אימוג'י לסמן (אופציונלי)</label>
-            <div className="flex items-center gap-3 mb-3">
-              <div className={`w-14 h-14 rounded-2xl flex items-center justify-center text-3xl flex-shrink-0 transition-all ${
-                emoji ? 'bg-blue-50 ring-2 ring-blue-400' : 'bg-gray-100 border-2 border-dashed border-gray-300'
-              }`}>
-                {emoji || <span className="text-gray-300 text-base">?</span>}
-              </div>
-              <div className="flex flex-col gap-1">
-                <p className="text-xs text-gray-500">
-                  {emoji ? 'אימוג׳י נבחר — יופיע על הסמן במפה' : 'לחץ על אימוג׳י כדי לבחור'}
-                </p>
-                {emoji && (
-                  <button type="button" onClick={() => setEmoji('')} className="text-xs text-red-400 hover:text-red-600 text-right w-fit">
-                    הסר
-                  </button>
-                )}
-              </div>
-            </div>
-
-            <div className="flex gap-1.5 mb-3 overflow-x-auto pb-1 scrollbar-none">
-              {EMOJI_CATEGORIES.map(cat => (
-                <button
-                  key={cat.id}
-                  type="button"
-                  onClick={() => setEmojiCategory(cat.id)}
-                  className={`flex flex-col items-center gap-0.5 px-3 py-2 rounded-xl flex-shrink-0 transition-all ${
-                    emojiCategory === cat.id ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                  }`}
-                >
-                  <span className="text-lg leading-none">{cat.icon}</span>
-                  <span className="text-[10px] font-medium leading-none">{cat.label}</span>
-                </button>
-              ))}
-            </div>
-
-            <div className="grid grid-cols-7 gap-1.5">
-              {EMOJI_CATEGORIES.find(c => c.id === emojiCategory)?.emojis.map(e => (
-                <button
-                  key={e}
-                  type="button"
-                  onClick={() => setEmoji(e)}
-                  className={`h-11 flex items-center justify-center rounded-xl text-2xl transition-all active:scale-90 ${
-                    emoji === e ? 'bg-blue-100 ring-2 ring-blue-500 scale-110' : 'bg-gray-100 hover:bg-gray-200 hover:scale-110'
-                  }`}
-                >
-                  {e}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Pin preview */}
-          {displayImage && (
-            <div>
-              <label className="block text-sm font-semibold text-gray-700 mb-2">תצוגה מקדימה של הסמן</label>
-              <div className="bg-gradient-to-br from-gray-50 to-gray-100 rounded-xl p-8 flex items-center justify-center">
-                <div dangerouslySetInnerHTML={{ __html: createLocationPinSVG(displayImage, pinColor, emoji || undefined).outerHTML }} />
-              </div>
-            </div>
-          )}
 
           <div className="flex gap-3 pt-2">
             <button
@@ -801,6 +757,13 @@ export function CreateLocationForm({ onSuccess, onCancel, currentUserId }: Creat
           </div>
         </form>
       </div>
+
+      <EmojiPickerSheet
+        isOpen={emojiSheetOpen}
+        onClose={() => setEmojiSheetOpen(false)}
+        selectedEmoji={emoji}
+        onSelect={(e) => { setEmoji(e); setPinColor(placePinColor(e)); }}
+      />
     </div>
   );
 }

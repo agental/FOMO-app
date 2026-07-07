@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo, type CSSProperties } from 'react';
 import { Loader as Loader2, CircleAlert as AlertCircle, Search, List, X, Users } from 'lucide-react';
 import { getCategoryColor, getCategoryEmoji } from '../utils/eventCategories';
 import { supabase, type ChabadHouse, type AdminLocation, type Meetup } from '../lib/supabase';
@@ -14,12 +14,15 @@ import { MapCreateActionSheet } from './MapCreateActionSheet';
 import { MapCreateEventFlow } from './MapCreateEventFlow';
 import { CreateMeetupFlow } from './CreateMeetupFlow';
 import { createEventPinSVG } from '../utils/createEventPin';
-import { createLocationPinSVG } from '../utils/createLocationPin';
+import { createCirclePin } from '../utils/createCirclePin';
 import { createChabadPinSVG } from '../utils/createChabadPin';
-import { createMeetupPinSVG } from '../utils/createMeetupPin';
+import { createPlacePinSVG } from '../utils/createLocationPin';
+import { getMeetupPinColor } from '../utils/meetupPinColor';
+import { buildAreasFC, polygonCentroid, type AreaShape } from '../utils/areaHighlights';
+import { loadMapAreas, insertMapArea, deleteMapArea, type MapArea } from '../services/mapAreaService';
 import { buildCountryFilterArray } from '../utils/countryFilters';
 import { useEvents } from '../hooks/useEvents';
-import { getPinScale, type PinType } from '../utils/pinScale';
+import { getPinScale, labelVisibleAtZoom } from '../utils/pinScale';
 import type { Event } from '../types/event';
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
@@ -42,12 +45,28 @@ interface UserLocation { latitude: number; longitude: number; }
 
 type MapFilter = 'all' | 'events' | 'places' | 'meetups';
 
+/* ── unified point model for the pin manager (clustering removed — every pin shows on its own) ── */
+type LeafType = 'event' | 'chabad' | 'admin' | 'post' | 'meetup';
+interface MapPoint { id: string; type: LeafType; lng: number; lat: number; title: string; data: any; }
+interface MarkerEntry { marker: mapboxgl.Marker; el: HTMLElement; kind: 'leaf' | 'cluster'; }
+
 const FILTER_TABS: { id: MapFilter; label: string; emoji: string }[] = [
   { id: 'all',     label: 'הכל',    emoji: '🌐' },
   { id: 'events',  label: 'אירועים', emoji: '📅' },
   { id: 'places',  label: 'מקומות',  emoji: '📍' },
   { id: 'meetups', label: 'ישיבות',  emoji: '☕' },
 ];
+
+/* palette an admin can pick from when marking an area (first = default) */
+const AREA_COLORS = ['#F97316', '#EF4444', '#EC4899', '#8B5CF6', '#2563EB', '#06B6D4', '#16A34A', '#F59E0B'];
+
+/* below this zoom an isolated leaf pin collapses to a small colour dot; above it the full pin
+   shows and grows toward zoom-in (Apple-style). */
+const PIN_DOT_ZOOM = 12;
+const PIN_DOT_D = 13; // dot diameter in px
+const CHABAD_PURPLE = '#972689'; // matches the Chabad pin's outer frame
+// place teardrop is 36×41; scale it up to the Chabad pin's height (54) so they match in size
+const PLACE_PIN_SCALE = 54 / 41;
 
 /* ── module-level cache (survives navigation) ── */
 let _mapChabadHouses:   ChabadHouse[]   | null = null;
@@ -79,6 +98,26 @@ export function MapScreen({
   /* map filter */
   const [mapFilter, setMapFilter] = useState<MapFilter>('all');
 
+  /* admin-drawn central areas (polygons in `map_areas`, shown to everyone, updated live) */
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [mapAreas, setMapAreas] = useState<MapArea[]>([]);
+  const areaLabelsRef = useRef<mapboxgl.Marker[]>([]);
+  const updateAreaLabelsRef = useRef<() => void>(() => {});
+  const isAdminRef = useRef(false);
+  useEffect(() => { isAdminRef.current = isAdmin; }, [isAdmin]);
+
+  /* admin draw-area tool state */
+  const [drawing, setDrawing]         = useState(false); // actively tapping polygon vertices
+  const [draftPoints, setDraftPoints] = useState<[number, number][]>([]);
+  const [naming, setNaming]           = useState(false); // shape done → typing the name
+  const [areaName, setAreaName]       = useState('');
+  const [areaColor, setAreaColor]     = useState(AREA_COLORS[0]); // admin-picked colour for the area
+  const [savingArea, setSavingArea]   = useState(false);
+  const [pendingDeleteArea, setPendingDeleteArea] = useState<{ id: string; name: string } | null>(null);
+  const drawingRef   = useRef(false);
+  const addVertexRef = useRef<(lngLat: mapboxgl.LngLat) => void>(() => {});
+  useEffect(() => { drawingRef.current = drawing; }, [drawing]);
+
   /* search */
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -97,6 +136,7 @@ export function MapScreen({
   /* selected items / sheets */
   const [selectedEvent,         setSelectedEvent]         = useState<Event | null>(null);
   const [detailsEvent,          setDetailsEvent]          = useState<Event | null>(null);
+  const [sheetEvent,            setSheetEvent]            = useState<Event | null>(null); // event pin → Chabad-style half-sheet
   const [showChabadHouse,       setShowChabadHouse]       = useState(false);
   const [selectedChabadHouse,   setSelectedChabadHouse]   = useState<ChabadHouse | null>(null);
   const [showAdminLocation,     setShowAdminLocation]     = useState(false);
@@ -114,17 +154,16 @@ export function MapScreen({
   const [eventsSheetExpanded, setEventsSheetExpanded] = useState(false);
 
   /* refs */
-  const mapRef                   = useRef<HTMLDivElement>(null);
-  const mapInstanceRef           = useRef<mapboxgl.Map | null>(null);
-  const markersRef               = useRef<mapboxgl.Marker[]>([]);
-  const chabadMarkersRef         = useRef<mapboxgl.Marker[]>([]);
-  const adminLocationMarkersRef  = useRef<mapboxgl.Marker[]>([]);
-  const postMarkersRef           = useRef<mapboxgl.Marker[]>([]);
-  const meetupMarkersRef         = useRef<mapboxgl.Marker[]>([]);
-  const eventElsRef              = useRef<HTMLDivElement[]>([]);
-  const chabadElsRef             = useRef<HTMLDivElement[]>([]);
-  const adminElsRef              = useRef<HTMLDivElement[]>([]);
-  const meetupElsRef             = useRef<HTMLDivElement[]>([]);
+  const mapRef         = useRef<HTMLDivElement>(null);
+  const mapInstanceRef = useRef<mapboxgl.Map | null>(null);
+
+  /* pin manager (no clustering — each point renders as its own marker) */
+  const pointByIdRef    = useRef<Map<string, MapPoint>>(new Map());
+  const markerMapRef    = useRef<Map<string, MarkerEntry>>(new Map());
+  const selectedIdRef   = useRef<string | null>(null);
+  const renderRef       = useRef<() => void>(() => {});
+  const zoomRef         = useRef<() => void>(() => {});
+  const clearRef        = useRef<() => void>(() => {});
 
   const countriesToFilter = buildCountryFilterArray(selectedCountries);
 
@@ -210,6 +249,25 @@ export function MapScreen({
     const ch = supabase
       .channel('meetups-sync')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'meetups' }, () => loadMeetups())
+      .subscribe();
+    return () => { supabase.removeChannel(ch); };
+  }, []);
+
+  /* Am I an admin? (gates the draw-area tool + delete) */
+  useEffect(() => {
+    let alive = true;
+    supabase.from('users').select('role').eq('id', userId).single()
+      .then(({ data }) => { if (alive) setIsAdmin(data?.role === 'admin'); });
+    return () => { alive = false; };
+  }, [userId]);
+
+  /* Admin-drawn areas: initial load + realtime so everyone sees changes live */
+  const refreshAreas = async () => { setMapAreas(await loadMapAreas()); };
+  useEffect(() => {
+    refreshAreas();
+    const ch = supabase
+      .channel('map-areas-sync')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'map_areas' }, () => refreshAreas())
       .subscribe();
     return () => { supabase.removeChannel(ch); };
   }, []);
@@ -305,18 +363,6 @@ export function MapScreen({
     mapInstanceRef.current = map;
     setMapReady(true);
 
-    const updatePinScales = () => {
-      const zoom = map.getZoom();
-      const apply = (els: HTMLDivElement[], type: PinType) =>
-        els.forEach(el => { el.style.transform = `scale(${getPinScale(type, zoom)})`; });
-      apply(eventElsRef.current,  'event');
-      apply(chabadElsRef.current, 'meetup');
-      apply(adminElsRef.current,  'admin');
-      apply(meetupElsRef.current, 'yeshiva');
-    };
-
-    map.on('zoom', updatePinScales);
-
     /* update preview card position when map moves/zooms */
     const updatePreviewPos = () => {
       const ev = previewEventRef.current;
@@ -328,8 +374,9 @@ export function MapScreen({
     map.on('move', updatePreviewPos);
 
     return () => {
-      map.off('zoom', updatePinScales);
       map.off('move', updatePreviewPos);
+      markerMapRef.current.forEach(e => e.marker.remove());
+      markerMapRef.current.clear();
       map.remove();
       mapInstanceRef.current = null;
     };
@@ -340,174 +387,383 @@ export function MapScreen({
   const showPlaces  = mapFilter === 'all' || mapFilter === 'places';
   const showMeetups = mapFilter === 'all' || mapFilter === 'meetups';
 
-  useEffect(() => {
-    markersRef.current.forEach(m => {
-      const el = (m as any)._element as HTMLElement;
-      if (el) el.style.display = showEvents ? '' : 'none';
-    });
-  }, [mapFilter, markersRef.current.length]);
-
-  useEffect(() => {
-    [...chabadMarkersRef.current, ...adminLocationMarkersRef.current, ...postMarkersRef.current].forEach(m => {
-      const el = (m as any)._element as HTMLElement;
-      if (el) el.style.display = showPlaces ? '' : 'none';
-    });
-  }, [mapFilter, chabadMarkersRef.current.length, adminLocationMarkersRef.current.length, postMarkersRef.current.length]);
-
-  useEffect(() => {
-    meetupMarkersRef.current.forEach(m => {
-      const el = (m as any)._element as HTMLElement;
-      if (el) el.style.display = showMeetups ? '' : 'none';
-    });
-  }, [mapFilter, meetupMarkersRef.current.length]);
-
-  /* ── Event pins ── */
-  useEffect(() => {
-    if (!mapInstanceRef.current || !location) return;
-    markersRef.current.forEach(m => m.remove());
-    markersRef.current = [];
-    eventElsRef.current = [];
-
-    nearbyEvents.forEach(event => {
-      if (!event.latitude || !event.longitude) return;
-      const today = new Date();
-      const evDate = event.event_date ? new Date(event.event_date) : null;
-      const isToday = evDate
-        ? evDate.getDate() === today.getDate() &&
-          evDate.getMonth() === today.getMonth() &&
-          evDate.getFullYear() === today.getFullYear()
-        : false;
-      const svg = createEventPinSVG(event.event_type || 'parties', event.emoji ?? undefined, event.image_url, isToday);
-      const scaleWrapper = document.createElement('div');
-      scaleWrapper.style.cssText = `line-height:0;transform-origin:center bottom;transition:transform 0.15s ease;transform:scale(${getPinScale('event', mapInstanceRef.current!.getZoom())});${showEvents ? '' : 'display:none;'}`;
-      scaleWrapper.appendChild(svg);
-      const el = document.createElement('div');
-      el.style.cssText = 'cursor:pointer;line-height:0;user-select:none;';
-      el.appendChild(scaleWrapper);
-      eventElsRef.current.push(scaleWrapper);
-      const marker = new mapboxgl.Marker({ element: el, anchor: 'bottom' })
-        .setLngLat([event.longitude, event.latitude])
-        .addTo(mapInstanceRef.current!);
-      el.addEventListener('click', () => {
-        if (!mapRef.current || !mapInstanceRef.current) return;
-        const rect = mapRef.current.getBoundingClientRect();
-        const pt   = mapInstanceRef.current.project([event.longitude!, event.latitude!]);
-        setPreviewEvent(event);
-        setPreviewPos({ x: rect.left + pt.x, y: rect.top + pt.y });
-        setSelectedMeetup(null);
-        setShowMeetup(false);
-        setShowChabadHouse(false);
-        setShowAdminLocation(false);
+  /* ── Unified point set (respects the active filter) ── */
+  const mapPoints = useMemo<MapPoint[]>(() => {
+    const pts: MapPoint[] = [];
+    if (showEvents) {
+      nearbyEvents.forEach(e => {
+        if (e.latitude == null || e.longitude == null) return;
+        pts.push({ id: `event:${e.id}`, type: 'event', lng: e.longitude, lat: e.latitude, title: e.title || 'אירוע', data: e });
       });
-      markersRef.current.push(marker);
-    });
-  }, [nearbyEvents, location, mapReady]);
-
-  /* ── Chabad pins ── */
-  useEffect(() => {
-    if (!mapInstanceRef.current || chabadHouses.length === 0) return;
-    chabadMarkersRef.current.forEach(m => m.remove());
-    chabadMarkersRef.current = [];
-    chabadElsRef.current = [];
-
-    chabadHouses.forEach(house => {
-      const svg = createChabadPinSVG();
-      const scaleWrapper = document.createElement('div');
-      scaleWrapper.style.cssText = `line-height:0;transform-origin:center bottom;transition:transform 0.15s ease;transform:scale(${getPinScale('meetup', mapInstanceRef.current!.getZoom())});${showPlaces ? '' : 'display:none;'}`;
-      scaleWrapper.appendChild(svg);
-      const el = document.createElement('div');
-      el.style.cssText = 'cursor:pointer;line-height:0;user-select:none;';
-      el.appendChild(scaleWrapper);
-      chabadElsRef.current.push(scaleWrapper);
-      const marker = new mapboxgl.Marker({ element: el, anchor: 'bottom' })
-        .setLngLat([house.longitude, house.latitude])
-        .addTo(mapInstanceRef.current!);
-      el.addEventListener('click', () => {
-        setShowChabadHouse(true);
-        setSelectedChabadHouse(house);
-        setSelectedEvent(null);
-        setPreviewEvent(null);
-        setPreviewPos(null);
-        setSelectedMeetup(null);
-        setShowMeetup(false);
-        setShowAdminLocation(false);
+    }
+    if (showPlaces) {
+      chabadHouses.forEach(h => {
+        if (h.latitude == null || h.longitude == null) return;
+        pts.push({ id: `chabad:${h.id}`, type: 'chabad', lng: h.longitude, lat: h.latitude, title: h.name || 'בית חב״ד', data: h });
       });
-      chabadMarkersRef.current.push(marker);
-    });
-  }, [chabadHouses]);
-
-  /* ── Admin location pins ── */
-  useEffect(() => {
-    if (!mapInstanceRef.current || adminLocations.length === 0) return;
-    adminLocationMarkersRef.current.forEach(m => m.remove());
-    adminLocationMarkersRef.current = [];
-    adminElsRef.current = [];
-
-    adminLocations.forEach(loc => {
-      const imageUrl = loc.image_url || '/cropped-ChabadThaiLogo-3.png';
-      const rawColor = loc.pin_color || '#EF4444';
-      const pipeIdx  = rawColor.indexOf('|');
-      const pinColor = pipeIdx !== -1 ? rawColor.slice(0, pipeIdx) : rawColor;
-      const pinEmoji = pipeIdx !== -1 ? rawColor.slice(pipeIdx + 1) : undefined;
-      const svg = createLocationPinSVG(imageUrl, pinColor, pinEmoji);
-
-      const scaleWrapper = document.createElement('div');
-      scaleWrapper.style.cssText = `line-height:0;transform-origin:center bottom;transition:transform 0.15s ease;transform:scale(${getPinScale('admin', mapInstanceRef.current!.getZoom())});${showPlaces ? '' : 'display:none;'}`;
-      scaleWrapper.appendChild(svg);
-      const el = document.createElement('div');
-      el.style.cssText = 'cursor:pointer;line-height:0;user-select:none;';
-      el.appendChild(scaleWrapper);
-      adminElsRef.current.push(scaleWrapper);
-      const marker = new mapboxgl.Marker({ element: el, anchor: 'bottom' })
-        .setLngLat([loc.longitude, loc.latitude])
-        .addTo(mapInstanceRef.current!);
-      el.addEventListener('click', () => {
-        setShowAdminLocation(true);
-        setSelectedAdminLocation(loc);
-        setSelectedEvent(null);
-        setPreviewEvent(null);
-        setPreviewPos(null);
-        setSelectedMeetup(null);
-        setShowMeetup(false);
-        setShowChabadHouse(false);
+      adminLocations.forEach(l => {
+        if (l.latitude == null || l.longitude == null) return;
+        pts.push({ id: `admin:${l.id}`, type: 'admin', lng: l.longitude, lat: l.latitude, title: l.name || 'מקום', data: l });
       });
-      adminLocationMarkersRef.current.push(marker);
-    });
-  }, [adminLocations]);
+      posts.forEach(r => {
+        if (r.latitude == null || r.longitude == null) return;
+        pts.push({ id: `post:${r.id}`, type: 'post', lng: r.longitude, lat: r.latitude, title: r.place_name || 'המלצה', data: r });
+      });
+    }
+    if (showMeetups) {
+      meetups.forEach(m => {
+        if (m.latitude == null || m.longitude == null) return;
+        pts.push({ id: `meetup:${m.id}`, type: 'meetup', lng: m.longitude, lat: m.latitude, title: m.text || 'מפגש', data: m });
+      });
+    }
+    return pts;
+  }, [nearbyEvents, chabadHouses, adminLocations, posts, meetups, showEvents, showPlaces, showMeetups]);
 
-  /* ── Recommendation (post) pins ── */
-  useEffect(() => {
-    if (!mapInstanceRef.current || posts.length === 0) return;
-    postMarkersRef.current.forEach(m => m.remove());
-    postMarkersRef.current = [];
+  /* ── Pin builders / interaction (used by the cluster manager) ── */
+  const isTodayDate = (dateStr?: string | null) => {
+    if (!dateStr) return false;
+    const d = new Date(dateStr), n = new Date();
+    return d.getDate() === n.getDate() && d.getMonth() === n.getMonth() && d.getFullYear() === n.getFullYear();
+  };
 
+  /* Append a colour dot to a pin root — shown (instead of the pin) when zoomed out. `atBottom`
+     places it on the anchor point for bottom-anchored pins (Chabad); others anchor 'center'. */
+  function appendPinDot(root: HTMLElement, color: string, atBottom: boolean) {
+    const dot = document.createElement('div');
+    dot.className = 'fomo-pin-dot';
+    dot.style.cssText = [
+      'position:absolute', 'left:50%', atBottom ? 'top:100%' : 'top:50%',
+      'transform:translate(-50%,-50%)', 'transform-origin:center',
+      `width:${PIN_DOT_D}px`, `height:${PIN_DOT_D}px`, 'border-radius:50%',
+      `background:${color}`, 'box-shadow:0 0 0 2px #fff, 0 1px 4px rgba(0,0,0,0.4)',
+      'display:none', 'pointer-events:none', 'transition:width 0.12s linear,height 0.12s linear',
+    ].join(';');
+    root.appendChild(dot);
+  }
+
+  /* Wrap a teardrop SVG pin (Chabad / place) in the manager's .fomo-pin > .fomo-pin-scale so it
+     zoom-scales, gets the colour dot, and anchors its tip on the coordinate ('bottom'). */
+  function wrapTeardrop(inner: HTMLElement): HTMLElement {
+    const root = document.createElement('div');
+    root.className = 'fomo-pin';
+    root.style.cssText = 'position:absolute;cursor:pointer;user-select:none;line-height:0;';
+    const scaleEl = document.createElement('div');
+    scaleEl.className = 'fomo-pin-scale';
+    scaleEl.style.cssText = 'transform-origin:center bottom;line-height:0;';
+    scaleEl.appendChild(inner);
+    root.appendChild(scaleEl);
+    return root;
+  }
+
+  /* Swap between the full pin and its colour dot based on the current zoom (a selected pin
+     always shows the full pin so its morph + sheet work). */
+  function setLeafDotMode(el: HTMLElement, selected: boolean) {
+    const z = mapInstanceRef.current?.getZoom() ?? 20;
+    const asDot = z < PIN_DOT_ZOOM && !selected;
+    const scaleEl = el.querySelector('.fomo-pin-scale') as HTMLElement | null;
+    const dotEl   = el.querySelector('.fomo-pin-dot') as HTMLElement | null;
+    if (scaleEl) scaleEl.style.display = asDot ? 'none' : '';
+    if (dotEl)   dotEl.style.display   = asDot ? 'block' : 'none';
+  }
+
+  function buildLeafPin(pt: MapPoint): HTMLElement {
+    let el: HTMLElement;
+    let dotColor = '#F97316';
+    let dotAtBottom = false;
+
+    if (pt.type === 'event') {
+      const e = pt.data as Event;
+      el = createEventPinSVG(e.event_type || 'parties', e.emoji ?? undefined, e.image_url, isTodayDate(e.event_date), e.title || 'אירוע');
+      dotColor = getCategoryColor(e.event_type || '');
+    } else if (pt.type === 'chabad') {
+      // Restored original Chabad pin (the exact teardrop + menorah SVG). Wrapped in the
+      // manager's .fomo-pin / .fomo-pin-scale so it still zoom-scales & clusters; it uses
+      // anchor 'bottom' (tip on the coordinate) and does not do the circle-morph.
+      const root = document.createElement('div');
+      root.className = 'fomo-pin';
+      root.style.cssText = 'position:absolute;cursor:pointer;user-select:none;line-height:0;';
+      const scaleEl = document.createElement('div');
+      scaleEl.className = 'fomo-pin-scale';
+      scaleEl.style.cssText = 'transform-origin:center bottom;line-height:0;';
+      scaleEl.appendChild(createChabadPinSVG());
+      root.appendChild(scaleEl);
+      el = root;
+      dotColor = CHABAD_PURPLE;
+      dotAtBottom = true;
+    } else if (pt.type === 'admin') {
+      // restored previous place pin — the Figma teardrop marker (photo + colour badge)
+      const l = pt.data as AdminLocation;
+      const raw = l.pin_color || '#EF4444';
+      const pipe = raw.indexOf('|');
+      const pinColor = pipe !== -1 ? raw.slice(0, pipe) : raw;
+      const pinEmoji = (pipe !== -1 ? raw.slice(pipe + 1) : (l.emoji || undefined)) || '📍';
+      const adminPin = createPlacePinSVG(pinEmoji, pinColor);
+      adminPin.style.transformOrigin = 'bottom center';
+      adminPin.style.transform = `scale(${PLACE_PIN_SCALE})`;
+      el = wrapTeardrop(adminPin);
+      dotColor = pinColor;
+      dotAtBottom = true;
+    } else if (pt.type === 'post') {
+      const postPin = createPlacePinSVG('⭐', '#F97316');
+      postPin.style.transformOrigin = 'bottom center';
+      postPin.style.transform = `scale(${PLACE_PIN_SCALE})`;
+      el = wrapTeardrop(postPin);
+      dotColor = '#F97316';
+      dotAtBottom = true;
+    } else {
+      /* meetup */
+      const m = pt.data as Meetup;
+      dotColor = getMeetupPinColor(m.emoji);
+      el = createCirclePin({ size: 42, color: dotColor, label: m.text || 'מפגש', variant: 'color', emoji: m.emoji });
+    }
+
+    appendPinDot(el, dotColor, dotAtBottom);
+    return el;
+  }
+
+  /* Drive the circle→pin morph directly in JS (inline transforms) so it never depends on
+     CSS custom properties / calc() / the <style> block — which some WebViews mis-handle. */
+  // Apple-style single continuous morph: the balloon (persistent) grows ~8% + lifts while the
+  // exact tail + dot stretch out to the coordinate; a one-shot ~4° wobble plays via CSS.
+  // GROW = subtle overshoot spring (select); SHRINK = smooth decel, no overshoot (deselect →
+  // the collapsing tail never flips to a negative scale).
+  const GROW_EASE    = 'cubic-bezier(0.34, 1.42, 0.5, 1)';
+  const SHRINK_EASE  = 'cubic-bezier(0.4, 0, 0.2, 1)';
+  const SELECT_SCALE = 1.08; // the "slight grow" (5–10%)
+  function setPinSelected(el: HTMLElement, selected: boolean) {
+    const body = el.querySelector('.fomo-pin-body') as HTMLElement | null;
+    const tail = el.querySelector('.fomo-pin-tail') as HTMLElement | null;
+    const ddy  = Number(el.dataset.ddy) || 40;
+    if (selected) {
+      el.classList.add('selected', 'show-label');
+      el.style.zIndex = '6';
+      // if we were showing the dot (zoomed out), reveal the full pin so the morph is visible
+      const scaleEl = el.querySelector('.fomo-pin-scale') as HTMLElement | null;
+      const dotEl   = el.querySelector('.fomo-pin-dot') as HTMLElement | null;
+      if (scaleEl) scaleEl.style.display = '';
+      if (dotEl)   dotEl.style.display = 'none';
+      const lift = ddy * SELECT_SCALE; // keeps the dot exactly on the coordinate after growing
+      if (body) { body.style.transitionTimingFunction = GROW_EASE; body.style.transform = `translateY(-${lift}px) scale(${SELECT_SCALE})`; }
+      if (tail) { tail.style.transitionTimingFunction = GROW_EASE; tail.style.opacity = '1'; tail.style.transform = 'translateX(-50%) scaleY(1)'; }
+    } else {
+      el.classList.remove('selected');
+      el.style.zIndex = '';
+      if (body) { body.style.transitionTimingFunction = SHRINK_EASE; body.style.transform = 'scale(1)'; }
+      if (tail) { tail.style.transitionTimingFunction = SHRINK_EASE; tail.style.opacity = '0'; tail.style.transform = 'translateX(-50%) scaleY(0)'; }
+      setLeafDotMode(el, false); // restore pin/dot for the current zoom
+    }
+  }
+
+  function applyLeafScale(el: HTMLElement, scale: number, showLabels: boolean, selected: boolean) {
+    const scaleEl = el.querySelector('.fomo-pin-scale') as HTMLElement | null;
+    if (scaleEl) scaleEl.style.transform = `scale(${scale})`;
+    el.classList.toggle('show-label', showLabels || selected);
+    setPinSelected(el, selected);
+  }
+
+  function selectLeaf(id: string, el: HTMLElement) {
+    const prevId = selectedIdRef.current;
+    if (prevId && prevId !== id) {
+      const prev = markerMapRef.current.get(prevId);
+      if (prev) {
+        setPinSelected(prev.el, false);
+        if (!labelVisibleAtZoom(mapInstanceRef.current?.getZoom() ?? 0)) prev.el.classList.remove('show-label');
+      }
+    }
+    selectedIdRef.current = id;
+    setPinSelected(el, true);
+  }
+
+  function clearSelection() {
+    const id = selectedIdRef.current;
+    if (id) {
+      const entry = markerMapRef.current.get(id);
+      if (entry) {
+        setPinSelected(entry.el, false);
+        if (!labelVisibleAtZoom(mapInstanceRef.current?.getZoom() ?? 0)) entry.el.classList.remove('show-label');
+      }
+    }
+    selectedIdRef.current = null;
+    setPreviewEvent(null);
+    setPreviewPos(null);
+  }
+
+  function openPostPopup(rec: any) {
+    const map = mapInstanceRef.current;
+    if (!map || rec.latitude == null || rec.longitude == null) return;
     const esc = (s: string) => (s || '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] || c));
+    new mapboxgl.Popup({ offset: 26, closeButton: true, maxWidth: '240px' })
+      .setLngLat([rec.longitude, rec.latitude])
+      .setHTML(`<div dir="rtl" style="font-family:Heebo,sans-serif;text-align:right">
+        <div style="font-weight:800;font-size:14px;color:#111827">⭐ ${esc(rec.place_name || 'המלצה')}</div>
+        <div style="font-size:12px;color:#6B7280;margin-top:4px;line-height:1.4">${esc(rec.content || '')}</div>
+        ${rec.city ? `<div style="font-size:11px;color:#9CA3AF;margin-top:5px">📍 ${esc(rec.city)}</div>` : ''}
+      </div>`)
+      .addTo(map);
+  }
 
-    posts.forEach(rec => {
-      if (rec.latitude == null || rec.longitude == null) return;
-      const svg = createLocationPinSVG(rec.image_url || '', '#F97316', '⭐');
-      const scaleWrapper = document.createElement('div');
-      scaleWrapper.style.cssText = `line-height:0;transform-origin:center bottom;transition:transform 0.15s ease;transform:scale(${getPinScale('admin', mapInstanceRef.current!.getZoom())});${showPlaces ? '' : 'display:none;'}`;
-      scaleWrapper.appendChild(svg);
-      const el = document.createElement('div');
-      el.style.cssText = 'cursor:pointer;line-height:0;user-select:none;';
-      el.appendChild(scaleWrapper);
-      const marker = new mapboxgl.Marker({ element: el, anchor: 'bottom' })
-        .setLngLat([rec.longitude, rec.latitude])
-        .addTo(mapInstanceRef.current!);
-      el.addEventListener('click', () => {
-        new mapboxgl.Popup({ offset: 34, closeButton: true, maxWidth: '240px' })
-          .setLngLat([rec.longitude, rec.latitude])
-          .setHTML(`<div dir="rtl" style="font-family:Heebo,sans-serif;text-align:right">
-            <div style="font-weight:800;font-size:14px;color:#111827">⭐ ${esc(rec.place_name || 'המלצה')}</div>
-            <div style="font-size:12px;color:#6B7280;margin-top:4px;line-height:1.4">${esc(rec.content || '')}</div>
-            ${rec.city ? `<div style="font-size:11px;color:#9CA3AF;margin-top:5px">📍 ${esc(rec.city)}</div>` : ''}
-          </div>`)
-          .addTo(mapInstanceRef.current!);
-      });
-      postMarkersRef.current.push(marker);
+  function handleLeafClick(pt: MapPoint, el: HTMLElement) {
+    if (drawingRef.current) return; // ignore pin taps while drawing an area
+    selectLeaf(pt.id, el);
+    if (pt.type === 'event') {
+      // Open the events-tab event design directly in a Chabad-style half-sheet (opens half,
+      // drag up to full). No mini preview card anymore — the pin morph + sheet, like place pins.
+      setSheetEvent(pt.data as Event);
+      setPreviewEvent(null); setPreviewPos(null);
+      setSelectedMeetup(null); setShowMeetup(false); setShowChabadHouse(false); setShowAdminLocation(false);
+    } else if (pt.type === 'chabad') {
+      setShowChabadHouse(true); setSelectedChabadHouse(pt.data as ChabadHouse);
+      setSelectedEvent(null); setPreviewEvent(null); setPreviewPos(null);
+      setSelectedMeetup(null); setShowMeetup(false); setShowAdminLocation(false);
+    } else if (pt.type === 'admin') {
+      setShowAdminLocation(true); setSelectedAdminLocation(pt.data as AdminLocation);
+      setSelectedEvent(null); setPreviewEvent(null); setPreviewPos(null);
+      setSelectedMeetup(null); setShowMeetup(false); setShowChabadHouse(false);
+    } else if (pt.type === 'meetup') {
+      setSelectedMeetup(pt.data as Meetup); setShowMeetup(true);
+      setSelectedEvent(null); setPreviewEvent(null); setPreviewPos(null);
+      setShowChabadHouse(false); setShowAdminLocation(false);
+    } else {
+      openPostPopup(pt.data);
+    }
+  }
+
+  // No clustering: render every in-view point as its own pin (which itself collapses to a colour
+  // dot when zoomed out). Culled to the current viewport for performance.
+  function renderClusters() {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+    const b = map.getBounds();
+    if (!b) return;
+    // Cull to a PADDED viewport so pins are created a bit before they scroll into view — no
+    // pop-in during a pan, and they're already present as you drag toward them.
+    const w = b.getWest(), s = b.getSouth(), e = b.getEast(), n = b.getNorth();
+    const padX = (e - w) * 0.4, padY = (n - s) * 0.4;
+    const inView = (lng: number, lat: number) => lng >= w - padX && lng <= e + padX && lat >= s - padY && lat <= n + padY;
+    const z = map.getZoom();
+    const scale = getPinScale('event', z);
+    const showLabels = labelVisibleAtZoom(z);
+    const next = new Set<string>();
+
+    pointByIdRef.current.forEach((pt, key) => {
+      if (!inView(pt.lng, pt.lat)) return; // padded viewport culling
+      next.add(key);
+      if (!markerMapRef.current.has(key)) {
+        const el = buildLeafPin(pt);
+        applyLeafScale(el, scale, showLabels, key === selectedIdRef.current);
+        el.addEventListener('click', (ev) => { ev.stopPropagation(); handleLeafClick(pt, el); });
+        // Teardrop pins (Chabad + places) anchor at their tip ('bottom'); circle pins (events,
+        // meetups) at 'center'.
+        const anchor = (pt.type === 'chabad' || pt.type === 'admin' || pt.type === 'post') ? 'bottom' : 'center';
+        const marker = new mapboxgl.Marker({ element: el, anchor }).setLngLat([pt.lng, pt.lat]).addTo(map);
+        markerMapRef.current.set(key, { marker, el, kind: 'leaf' });
+      }
     });
-  }, [posts, mapReady]);
+
+    markerMapRef.current.forEach((entry, key) => {
+      if (!next.has(key)) { entry.marker.remove(); markerMapRef.current.delete(key); }
+    });
+
+    if (selectedIdRef.current && !next.has(selectedIdRef.current)) clearSelection();
+  }
+
+  function updateScalesAndLabels() {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+    const scale = getPinScale('event', map.getZoom());
+    const showLabels = labelVisibleAtZoom(map.getZoom());
+    markerMapRef.current.forEach((entry, key) => {
+      if (entry.kind !== 'leaf') return;
+      const scaleEl = entry.el.querySelector('.fomo-pin-scale') as HTMLElement | null;
+      if (scaleEl) scaleEl.style.transform = `scale(${scale})`;
+      entry.el.classList.toggle('show-label', showLabels || key === selectedIdRef.current);
+      setLeafDotMode(entry.el, key === selectedIdRef.current); // pin ↔ colour dot by zoom
+    });
+  }
+
+  /* Area name labels react to zoom: full name → shrinks → collapses to a coloured dot → hidden. */
+  function updateAreaLabels() {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+    const z = map.getZoom();
+    areaLabelsRef.current.forEach(mk => {
+      const el  = mk.getElement();
+      const txt = el.querySelector('.fomo-area-name') as HTMLElement | null;
+      const dot = el.querySelector('.fomo-area-dot') as HTMLElement | null;
+      if (!txt || !dot) return;
+      if (z >= 11.5) {
+        // full name (+ area marking), shrinking as we near the collapse point (z 11.5 → 12.5)
+        const scale = Math.max(0.7, Math.min(1, 0.7 + (z - 11.5) * 0.3));
+        txt.style.display = '';
+        txt.style.transform = `scale(${scale})`;
+        dot.style.display = 'none';
+      } else if (z >= 9.5) {
+        // name + area marking gone — only the coloured dot, shrinking as we zoom out (z 11.5 → 9.5)
+        const d = Math.max(5, Math.min(11, 5 + (z - 9.5) * 3));
+        txt.style.display = 'none';
+        dot.style.display = 'block';
+        dot.style.width  = `${d}px`;
+        dot.style.height = `${d}px`;
+      } else {
+        // zoomed further out — nothing on the map
+        txt.style.display = 'none';
+        dot.style.display = 'none';
+      }
+    });
+  }
+
+  /* keep the event-handler closures fresh without re-subscribing map listeners */
+  renderRef.current = renderClusters;
+  zoomRef.current   = updateScalesAndLabels;
+  clearRef.current  = clearSelection;
+  addVertexRef.current = (lngLat) => setDraftPoints(pts => [...pts, [lngLat.lng, lngLat.lat]]);
+  updateAreaLabelsRef.current = updateAreaLabels;
+
+  /* (re)build the point lookup whenever the point set changes, then re-render markers */
+  useEffect(() => {
+    if (!mapReady || !mapInstanceRef.current) return;
+    const byId = new Map<string, MapPoint>();
+    mapPoints.forEach(p => byId.set(p.id, p));
+    pointByIdRef.current = byId;
+    renderRef.current();
+  }, [mapPoints, mapReady]);
+
+  /* map listeners: re-cluster on move end, scale on zoom, clear on background tap */
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map || !mapReady) return;
+    const onMoveEnd = () => renderRef.current();
+    // Render markers DURING the pan too (throttled to one pass per frame) so pins appear as you
+    // drag toward them, instead of only popping in when the gesture ends.
+    let movePending = false;
+    const onMove = () => {
+      if (movePending) return;
+      movePending = true;
+      requestAnimationFrame(() => { movePending = false; renderRef.current(); });
+    };
+    const onZoom    = () => { zoomRef.current(); updateAreaLabelsRef.current(); };
+    const onClick   = (e: mapboxgl.MapMouseEvent) => {
+      if (drawingRef.current) { addVertexRef.current(e.lngLat); return; } // add a polygon vertex
+      clearRef.current();
+    };
+    // Admin: tap an existing area to delete it (confirmed). Registered by layer id — fires only
+    // when the fill is clicked, and works even though the layer is added later, after areas load.
+    const onAreaClick = (e: mapboxgl.MapLayerMouseEvent) => {
+      if (!isAdminRef.current || drawingRef.current) return;
+      const f = e.features?.[0];
+      if (!f) return;
+      setPendingDeleteArea({ id: String(f.properties?.id), name: String(f.properties?.name ?? 'אזור') });
+    };
+    map.on('moveend', onMoveEnd);
+    map.on('move', onMove);
+    map.on('zoom', onZoom);
+    map.on('click', onClick);
+    map.on('click', 'fomo-areas-fill', onAreaClick);
+    return () => {
+      map.off('moveend', onMoveEnd); map.off('move', onMove); map.off('zoom', onZoom); map.off('click', onClick);
+      map.off('click', 'fomo-areas-fill', onAreaClick);
+    };
+  }, [mapReady]);
 
   /* ── Fly to a focused location (e.g. "open in map" from a recommendation) ── */
   useEffect(() => {
@@ -517,37 +773,127 @@ export function MapScreen({
     onFocusHandled?.();
   }, [focusLocation, mapReady]);
 
-  /* ── Meetup pins ── */
+  /* ── Render admin-drawn central areas (polygons from the DB, shown to everyone) ── */
   useEffect(() => {
-    if (!mapInstanceRef.current) return;
-    meetupMarkersRef.current.forEach(m => m.remove());
-    meetupMarkersRef.current = [];
-    meetupElsRef.current = [];
+    const map = mapInstanceRef.current;
+    if (!map || !mapReady) return;
 
-    meetups.forEach(meetup => {
-      const pin = createMeetupPinSVG(meetup.emoji, meetup.users?.avatar_url);
-      const scaleWrapper = document.createElement('div');
-      scaleWrapper.style.cssText = `line-height:0;transform-origin:center bottom;transition:transform 0.15s ease;transform:scale(${getPinScale('yeshiva', mapInstanceRef.current!.getZoom())});${showMeetups ? '' : 'display:none;'}`;
-      scaleWrapper.appendChild(pin);
-      const el = document.createElement('div');
-      el.style.cssText = 'cursor:pointer;line-height:0;user-select:none;';
-      el.appendChild(scaleWrapper);
-      meetupElsRef.current.push(scaleWrapper);
-      const marker = new mapboxgl.Marker({ element: el, anchor: 'bottom' })
-        .setLngLat([meetup.longitude, meetup.latitude])
-        .addTo(mapInstanceRef.current!);
-      el.addEventListener('click', () => {
-        setSelectedMeetup(meetup);
-        setShowMeetup(true);
-        setSelectedEvent(null);
-        setPreviewEvent(null);
-        setPreviewPos(null);
-        setShowChabadHouse(false);
-        setShowAdminLocation(false);
-      });
-      meetupMarkersRef.current.push(marker);
-    });
-  }, [meetups, mapReady]);
+    const shapes: AreaShape[] = mapAreas.map(a => ({ id: a.id, name: a.name, polygon: a.polygon, color: a.color }));
+    const fc = buildAreasFC(shapes);
+
+    const removeLabels = () => { areaLabelsRef.current.forEach(m => m.remove()); areaLabelsRef.current = []; };
+
+    const paint = () => {
+      const existing = map.getSource('fomo-areas') as mapboxgl.GeoJSONSource | undefined;
+      if (existing) {
+        existing.setData(fc);
+      } else {
+        map.addSource('fomo-areas', { type: 'geojson', data: fc });
+        // Add ON TOP of all base layers (no beforeId) so the fill actually covers the roads
+        // underneath — inserting below the road layers is why the road stayed visible before.
+        map.addLayer({ id: 'fomo-areas-fill', type: 'fill', source: 'fomo-areas',
+          paint: {
+            'fill-color': ['get', 'color'],
+            // visible only in the working range; fades to 0 as the area collapses to just the dot
+            // (zoomed out) and again at very close (border only)
+            'fill-opacity': ['interpolate', ['linear'], ['zoom'], 11.1, 0, 11.5, 0.28, 15, 0.15, 17, 0],
+          } });
+        map.addLayer({ id: 'fomo-areas-line', type: 'line', source: 'fomo-areas',
+          layout: { 'line-join': 'round' },
+          paint: {
+            'line-color': ['get', 'color'],
+            'line-width': 2.5,
+            // border fades out with the fill so that when zoomed out only the dot remains
+            'line-opacity': ['interpolate', ['linear'], ['zoom'], 11.1, 0, 11.5, 1],
+          } });
+      }
+      // Keep the layers on top + carrying the latest paint even if they already existed (HMR /
+      // re-render) — moveLayer with no beforeId re-raises them above the base map's roads.
+      if (map.getLayer('fomo-areas-fill')) { map.moveLayer('fomo-areas-fill'); map.setPaintProperty('fomo-areas-fill', 'fill-opacity', ['interpolate', ['linear'], ['zoom'], 11.1, 0, 11.5, 0.28, 15, 0.15, 17, 0]); }
+      if (map.getLayer('fomo-areas-line')) { map.moveLayer('fomo-areas-line'); map.setPaintProperty('fomo-areas-line', 'line-opacity', ['interpolate', ['linear'], ['zoom'], 11.1, 0, 11.5, 1]); }
+      // name labels at each polygon's centroid (DOM markers → Hebrew RTL renders correctly).
+      // Each holds a text node + a coloured dot; updateAreaLabels swaps between them by zoom.
+      removeLabels();
+      areaLabelsRef.current = shapes
+        .filter(s => Array.isArray(s.polygon) && s.polygon.length >= 3)
+        .map(s => {
+          const color = s.color || '#F97316';
+          const wrap = document.createElement('div');
+          wrap.style.cssText = 'display:flex;align-items:center;justify-content:center;pointer-events:none;';
+          const txt = document.createElement('div');
+          txt.className = 'fomo-area-name';
+          txt.style.cssText = [
+            'font-family:Heebo,system-ui,sans-serif', 'font-size:12.5px', 'font-weight:800',
+            'color:#B45309', 'white-space:nowrap', 'letter-spacing:0.01em',
+            'transform-origin:center', 'transition:transform 0.12s linear',
+            'text-shadow:0 1px 2px #fff,0 -1px 2px #fff,1px 0 2px #fff,-1px 0 2px #fff,0 0 4px #fff',
+          ].join(';');
+          txt.textContent = s.name;
+          const dot = document.createElement('div');
+          dot.className = 'fomo-area-dot';
+          dot.style.cssText = `border-radius:50%;background:${color};box-shadow:0 0 0 2px #fff,0 1px 3px rgba(0,0,0,0.35);transition:width 0.12s linear,height 0.12s linear;`;
+          wrap.appendChild(txt);
+          wrap.appendChild(dot);
+          return new mapboxgl.Marker({ element: wrap, anchor: 'center' }).setLngLat(polygonCentroid(s.polygon)).addTo(map);
+        });
+      updateAreaLabels(); // set the correct text/dot state for the current zoom
+    };
+
+    if (map.isStyleLoaded()) paint(); else map.once('idle', paint);
+    return removeLabels; // GL layers are torn down with map.remove(); labels are DOM, remove them
+  }, [mapAreas, mapReady]);
+
+  /* ── Live preview of the polygon the admin is currently drawing ── */
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map || !mapReady) return;
+
+    const feats: GeoJSON.Feature[] = draftPoints.map((p, i) => ({
+      type: 'Feature', properties: { idx: i }, geometry: { type: 'Point', coordinates: p },
+    }));
+    if (draftPoints.length >= 3) {
+      feats.push({ type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [[...draftPoints, draftPoints[0]]] } });
+    } else if (draftPoints.length === 2) {
+      feats.push({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: draftPoints } });
+    }
+    const draftFC: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: feats };
+
+    const addDraft = () => {
+      const existing = map.getSource('fomo-draft') as mapboxgl.GeoJSONSource | undefined;
+      if (existing) {
+        existing.setData(draftFC);
+      } else {
+        map.addSource('fomo-draft', { type: 'geojson', data: draftFC });
+        map.addLayer({ id: 'fomo-draft-fill', type: 'fill', source: 'fomo-draft',
+          filter: ['==', ['geometry-type'], 'Polygon'],
+          // matches the saved area: visible in the working range, gone when collapsed to a dot / very close
+          paint: { 'fill-color': areaColor, 'fill-opacity': ['interpolate', ['linear'], ['zoom'], 11.1, 0, 11.5, 0.28, 15, 0.15, 17, 0] } });
+        map.addLayer({ id: 'fomo-draft-line', type: 'line', source: 'fomo-draft',
+          filter: ['!=', ['geometry-type'], 'Point'],
+          layout: { 'line-join': 'round' },
+          paint: { 'line-color': areaColor, 'line-width': 2.5, 'line-dasharray': [2, 1] } });
+        map.addLayer({ id: 'fomo-draft-pts', type: 'circle', source: 'fomo-draft',
+          filter: ['==', ['geometry-type'], 'Point'],
+          paint: { 'circle-radius': 5, 'circle-color': '#fff', 'circle-stroke-color': areaColor, 'circle-stroke-width': 2.5 } });
+      }
+      // keep the preview colour in sync with the admin's pick
+      if (map.getLayer('fomo-draft-fill')) map.setPaintProperty('fomo-draft-fill', 'fill-color', areaColor);
+      if (map.getLayer('fomo-draft-line')) map.setPaintProperty('fomo-draft-line', 'line-color', areaColor);
+      if (map.getLayer('fomo-draft-pts')) map.setPaintProperty('fomo-draft-pts', 'circle-stroke-color', areaColor);
+    };
+
+    const removeDraft = () => {
+      ['fomo-draft-pts', 'fomo-draft-line', 'fomo-draft-fill'].forEach(id => { if (map.getLayer(id)) map.removeLayer(id); });
+      if (map.getSource('fomo-draft')) map.removeSource('fomo-draft');
+    };
+
+    map.getCanvas().style.cursor = drawing ? 'crosshair' : '';
+    if (drawing || draftPoints.length) {
+      if (map.isStyleLoaded()) addDraft(); else map.once('idle', addDraft);
+    } else {
+      removeDraft();
+    }
+  }, [drawing, draftPoints, areaColor, mapReady]);
 
   /* ── Handlers ── */
   const handleJoinClick = async () => {
@@ -586,9 +932,42 @@ export function MapScreen({
     }
   };
 
+  /* ── Admin: draw a central area (polygon) ── */
+  const startDrawing = () => {
+    clearRef.current();
+    setShowCreateActionSheet(false);
+    setNaming(false); setAreaName(''); setAreaColor(AREA_COLORS[0]); setDraftPoints([]); setSavingArea(false);
+    setDrawing(true);
+  };
+  const undoVertex   = () => setDraftPoints(pts => pts.slice(0, -1));
+  const finishDrawing = () => { if (draftPoints.length >= 3) { setDrawing(false); setNaming(true); } };
+  const cancelDrawing = () => { setDrawing(false); setNaming(false); setDraftPoints([]); setAreaName(''); setSavingArea(false); };
+  const saveArea = async () => {
+    const name = areaName.trim();
+    if (!name || draftPoints.length < 3) return;
+    setSavingArea(true);
+    const { error } = await insertMapArea({ name, polygon: draftPoints, color: areaColor, created_by: userId });
+    setSavingArea(false);
+    if (error) { console.error('insertMapArea:', error.message); alert('לא ניתן לשמור את האזור: ' + error.message); return; }
+    cancelDrawing();
+    refreshAreas();
+  };
+  const confirmDeleteArea = async () => {
+    if (!pendingDeleteArea) return;
+    const { error } = await deleteMapArea(pendingDeleteArea.id);
+    setPendingDeleteArea(null);
+    if (error) { console.error('deleteMapArea:', error.message); alert('לא ניתן למחוק את האזור: ' + error.message); return; }
+    refreshAreas();
+  };
+
   /* ─────────────────────────── render ────────────────────────────────── */
   return (
     <div className="h-screen w-screen relative overflow-hidden bg-[#1A1F2E]" dir="rtl">
+
+      {/* TEMPP tiny version marker — confirms fresh code loaded; remove once confirmed */}
+      <div style={{ position: 'fixed', top: 2, left: 2, zIndex: 99999, background: 'rgba(220,38,38,0.85)', color: '#fff', font: '10px monospace', padding: '1px 5px', borderRadius: 4, pointerEvents: 'none' }}>
+        area-1
+      </div>
 
       {/* Loading */}
       {loading && (
@@ -706,6 +1085,35 @@ export function MapScreen({
         </div>
       )}
 
+      {/* Pin visuals. The select morph (body lift + tail grow) is driven inline in JS
+          (setPinSelected) with spring easing — see createCirclePin. This block only styles
+          the always-on bits (label / ping / pulse / cluster). */}
+      <style>{`
+        /* Keep DOM markers on their own persistent GPU layer so the WebView keeps painting them
+           DURING a touch-pan. Without this, WKWebView/Android WebView drop the DOM overlay above
+           the WebGL canvas mid-gesture and only repaint on release → pins vanish while dragging. */
+        .mapboxgl-marker { will-change: transform; -webkit-backface-visibility: hidden; backface-visibility: hidden; }
+        .fomo-pin-label { opacity: 0; transition: opacity 0.18s ease; }
+        .fomo-pin.show-label .fomo-pin-label { opacity: 1; }
+        .fomo-pin.selected .fomo-pin-label { opacity: 0; }
+        .fomo-pin-ping { opacity: 0; }
+        .fomo-pin.selected .fomo-pin-ping { animation: fomo-tap-ping 0.55s ease-out; }
+        .fomo-pin-pulse { opacity: 0.35; animation: fomo-today-pulse 2s ease-in-out infinite; }
+        @keyframes fomo-today-pulse { 0%,100% { transform: scale(1); opacity: 0.35; } 50% { transform: scale(1.35); opacity: 0; } }
+        @keyframes fomo-tap-ping { 0% { transform: scale(1); opacity: 0.7; } 100% { transform: scale(1.9); opacity: 0; } }
+        /* one-shot ~4° left-right wobble that plays as the pin morphs into the selected state */
+        .fomo-pin.selected .fomo-pin-wobble { animation: fomo-wobble 1s ease-out; }
+        @keyframes fomo-wobble {
+          0% { transform: rotate(0deg); }
+          28% { transform: rotate(-4deg); }
+          55% { transform: rotate(2.4deg); }
+          78% { transform: rotate(-1.1deg); }
+          100% { transform: rotate(0deg); }
+        }
+        .fomo-cluster-inner { transition: transform 0.15s ease; }
+        .fomo-cluster:active .fomo-cluster-inner { transform: scale(0.9); }
+      `}</style>
+
       {/* Map canvas */}
       <div ref={mapRef} className="absolute inset-0" />
 
@@ -723,14 +1131,14 @@ export function MapScreen({
           <div
             className="fixed inset-0"
             style={{ zIndex: 44 }}
-            onClick={() => { setPreviewEvent(null); setPreviewPos(null); }}
+            onClick={() => clearSelection()}
           />
           <div
             className="fixed pointer-events-none"
             style={{
               left: previewPos.x,
               top:  previewPos.y,
-              transform: 'translate(-50%, calc(-100% - 54px))',
+              transform: 'translate(-50%, calc(-100% - 70px))',
               zIndex: 45,
             }}
           >
@@ -888,6 +1296,27 @@ export function MapScreen({
                 );
               })}
             </div>
+
+            {/* Admin only — draw a central area on the map (polygon) that everyone will see */}
+            {isAdmin && !drawing && !naming && (
+              <div style={{ display: 'flex', marginTop: 8 }}>
+                <button
+                  onClick={startDrawing}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 6,
+                    padding: '7px 14px', borderRadius: 50, border: 'none',
+                    background: 'linear-gradient(135deg,#2563EB,#1D4ED8)',
+                    boxShadow: '0 4px 14px rgba(37,99,235,0.4)',
+                    cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0, transition: 'all 0.2s ease',
+                  }}
+                >
+                  <span style={{ fontSize: 14 }}>✏️</span>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: '#fff', fontFamily: 'Heebo, sans-serif' }}>
+                    סמן אזור מרכזי
+                  </span>
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Events sidebar toggle */}
@@ -1003,6 +1432,19 @@ export function MapScreen({
         />
       )}
 
+      {/* Event pin → events-tab design in a Chabad-style half-sheet (opens half, drag up to full) */}
+      {sheetEvent && (
+        <EventDetailsModal
+          event={sheetEvent}
+          variant="sheet"
+          onClose={() => { setSheetEvent(null); clearRef.current(); }}
+          currentUserId={userId}
+          onNavigateToUserProfile={onNavigateToUserProfile}
+          onMessageUser={onMessageUser}
+          onOpenMapAt={(lat, lng) => { setSheetEvent(null); clearRef.current(); mapInstanceRef.current?.flyTo({ center: [lng, lat], zoom: 15, essential: true }); }}
+        />
+      )}
+
       {/* Create action sheet */}
       <MapCreateActionSheet
         isOpen={showCreateActionSheet}
@@ -1036,6 +1478,109 @@ export function MapScreen({
         />
       )}
 
+      {/* ── Admin: draw-area panel (tapping vertices) ── */}
+      {drawing && (
+        <div style={{
+          position: 'fixed', left: 12, right: 12, zIndex: 40,
+          bottom: 'calc(96px + env(safe-area-inset-bottom))',
+          background: 'rgba(255,255,255,0.98)', borderRadius: 18, padding: '14px 16px',
+          boxShadow: '0 12px 40px rgba(0,0,0,0.28)', fontFamily: 'Heebo, sans-serif', direction: 'rtl',
+        }}>
+          <p style={{ fontSize: 14, fontWeight: 800, color: '#111827', marginBottom: 3 }}>
+            ✏️ הקש על המפה כדי לסמן את פינות האזור
+          </p>
+          <p style={{ fontSize: 12, color: draftPoints.length < 3 ? '#DC2626' : '#059669', marginBottom: 12 }}>
+            {draftPoints.length} נקודות{draftPoints.length < 3 ? ' · צריך לפחות 3' : ' · אפשר לסיים'}
+          </p>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={cancelDrawing} style={btnGhost}>ביטול</button>
+            <button onClick={undoVertex} disabled={!draftPoints.length} style={draftPoints.length ? btnGhost : btnDisabled}>בטל נקודה</button>
+            <button onClick={finishDrawing} disabled={draftPoints.length < 3} style={draftPoints.length >= 3 ? btnPrimary : btnDisabled}>סיום ←</button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Admin: name-the-area panel ── */}
+      {naming && (
+        <div style={{
+          position: 'fixed', left: 12, right: 12, zIndex: 40,
+          bottom: 'calc(96px + env(safe-area-inset-bottom))',
+          background: 'rgba(255,255,255,0.98)', borderRadius: 18, padding: '14px 16px',
+          boxShadow: '0 12px 40px rgba(0,0,0,0.28)', fontFamily: 'Heebo, sans-serif', direction: 'rtl',
+        }}>
+          <p style={{ fontSize: 14, fontWeight: 800, color: '#111827', marginBottom: 10 }}>שם האזור</p>
+          <input
+            autoFocus
+            value={areaName}
+            onChange={e => setAreaName(e.target.value)}
+            placeholder="למשל: סרי טאנו"
+            style={{
+              width: '100%', boxSizing: 'border-box', height: 44, borderRadius: 12,
+              border: '1.5px solid #E5E7EB', padding: '0 14px', fontSize: 15,
+              fontFamily: 'Heebo, sans-serif', color: '#111827', outline: 'none', marginBottom: 12,
+            }}
+          />
+          {/* colour picker */}
+          <p style={{ fontSize: 13, fontWeight: 700, color: '#374151', marginBottom: 8 }}>צבע האזור</p>
+          <div style={{ display: 'flex', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
+            {AREA_COLORS.map(c => {
+              const active = areaColor === c;
+              return (
+                <button
+                  key={c}
+                  onClick={() => setAreaColor(c)}
+                  aria-label={c}
+                  style={{
+                    width: 30, height: 30, borderRadius: '50%', background: c, cursor: 'pointer', padding: 0,
+                    border: active ? '3px solid #111827' : '2px solid #fff',
+                    boxShadow: active ? '0 0 0 2px #fff, 0 2px 6px rgba(0,0,0,0.25)' : '0 1px 4px rgba(0,0,0,0.2)',
+                    transform: active ? 'scale(1.12)' : 'scale(1)', transition: 'transform 0.12s ease',
+                  }}
+                />
+              );
+            })}
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={cancelDrawing} style={btnGhost}>ביטול</button>
+            <button onClick={() => { setNaming(false); setDrawing(true); }} style={btnGhost}>← חזרה לציור</button>
+            <button onClick={saveArea} disabled={!areaName.trim() || savingArea} style={areaName.trim() && !savingArea ? btnPrimary : btnDisabled}>
+              {savingArea ? 'שומר…' : 'שמור'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Admin: delete-area confirm ── */}
+      {pendingDeleteArea && (
+        <div
+          onClick={() => setPendingDeleteArea(null)}
+          style={{ position: 'fixed', inset: 0, zIndex: 60, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{ background: '#fff', borderRadius: 18, padding: '20px 20px 16px', maxWidth: 320, width: '100%', fontFamily: 'Heebo, sans-serif', direction: 'rtl', boxShadow: '0 20px 60px rgba(0,0,0,0.35)' }}
+          >
+            <p style={{ fontSize: 16, fontWeight: 800, color: '#111827', marginBottom: 6 }}>מחיקת אזור</p>
+            <p style={{ fontSize: 13.5, color: '#6B7280', marginBottom: 16, lineHeight: 1.5 }}>
+              למחוק את האזור «{pendingDeleteArea.name}»? הפעולה תוסר אצל כל המשתמשים.
+            </p>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={() => setPendingDeleteArea(null)} style={btnGhost}>ביטול</button>
+              <button onClick={confirmDeleteArea} style={{ ...btnPrimary, background: 'linear-gradient(135deg,#EF4444,#DC2626)', boxShadow: '0 4px 14px rgba(239,68,68,0.4)' }}>מחק</button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
+
+/* shared button styles for the admin draw-area panels */
+const btnBase: CSSProperties = {
+  flex: 1, height: 42, borderRadius: 12, border: 'none', cursor: 'pointer',
+  fontSize: 14, fontWeight: 800, fontFamily: 'Heebo, sans-serif',
+};
+const btnPrimary: CSSProperties = { ...btnBase, background: 'linear-gradient(135deg,#2563EB,#1D4ED8)', color: '#fff', boxShadow: '0 4px 14px rgba(37,99,235,0.4)' };
+const btnGhost:   CSSProperties = { ...btnBase, background: '#F3F4F6', color: '#374151' };
+const btnDisabled: CSSProperties = { ...btnBase, background: '#E5E7EB', color: '#9CA3AF', cursor: 'not-allowed' };
