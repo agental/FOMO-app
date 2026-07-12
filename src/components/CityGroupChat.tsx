@@ -4,9 +4,12 @@ import { BackButton } from './BackButton';
 import { MessageBubble } from './MessageBubble';
 import { ImageBubble } from './ImageBubble';
 import { EventChatCard } from './EventChatCard';
+import { PlaceChatCard } from './PlaceChatCard';
+import { AdminLocationBottomSheet } from './AdminLocationBottomSheet';
+import { parsePlace } from '../utils/placeMessage';
 import { EventDetailsModal } from './EventDetailsModal';
 import { parseEvent } from '../utils/eventMessage';
-import type { Event } from '../lib/supabase';
+import type { Event, AdminLocation } from '../lib/supabase';
 import { LocationName } from './LocationName';
 import { OpenLocationSheet } from './OpenLocationSheet';
 import { supabase } from '../lib/supabase';
@@ -217,6 +220,7 @@ export function CityGroupChat({
   const [uploading,    setUploading]    = useState(false);
   const [locLoading,   setLocLoading]   = useState(false);
   const [openEvent,    setOpenEvent]    = useState<Event | null>(null); // shared-event card → details
+  const [openPlace,    setOpenPlace]    = useState<AdminLocation | null>(null); // shared-place card → sheet
   const [menuMsg,      setMenuMsg]      = useState<GMessage | null>(null); // long-press context menu
   const [replyTo,      setReplyTo]      = useState<GMessage | null>(null); // message being replied to
   const [toast,        setToast]        = useState<string | null>(null);
@@ -824,6 +828,11 @@ export function CityGroupChat({
     const { error } = await supabase.from('group_messages').delete().eq('id', m.id);
     if (error) { showToast('לא ניתן למחוק'); loadMessages(); } else { showToast('ההודעה נמחקה'); }
   };
+  const openPlaceById = async (id: string) => {
+    const { data } = await supabase.from('admin_locations').select('*').eq('id', id).maybeSingle();
+    if (data) setOpenPlace(data as AdminLocation);
+  };
+
   const openEventById = async (id: string) => {
     const { data } = await supabase.from('events').select('*').eq('id', id).maybeSingle();
     if (data) setOpenEvent(data as Event);
@@ -949,6 +958,20 @@ export function CityGroupChat({
                     </span>
                   )}
                   <EventChatCard data={parseEvent(msg.content).event!} onClick={() => openEventById(parseEvent(msg.content).event!.id)} />
+                </div>
+              ) : msg.type === 'text' && parsePlace(msg.content).place ? (
+                /* Shared place → map card that opens the place sheet */
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: mine ? 'flex-end' : 'flex-start' }}>
+                  {showName && (
+                    <span
+                      onClick={() => onNavigateToUserProfile?.(msg.user_id)}
+                      style={{ display: 'block', fontSize: 10, fontWeight: 700, color: nameClr, margin: '0 4px 3px', lineHeight: 1.2, cursor: onNavigateToUserProfile ? 'pointer' : 'default' }}
+                      dir="rtl"
+                    >
+                      {msg.display_name}
+                    </span>
+                  )}
+                  <PlaceChatCard data={parsePlace(msg.content).place!} onClick={() => openPlaceById(parsePlace(msg.content).place!.id)} />
                 </div>
               ) : msg.type === 'text' ? (
                 /* iMessage-exact bubble (single SVG path, stretchable, fixed tail) */
@@ -1954,6 +1977,14 @@ export function CityGroupChat({
           onClose={() => setLocSheet(null)}
         />
       )}
+
+      {/* Shared-place sheet */}
+      <AdminLocationBottomSheet
+        isOpen={!!openPlace}
+        location={openPlace}
+        currentUserId={currentUserId}
+        onClose={() => setOpenPlace(null)}
+      />
 
       {/* Shared-event details */}
       {openEvent && (

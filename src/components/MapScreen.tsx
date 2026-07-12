@@ -17,6 +17,9 @@ import { createEventPinSVG } from '../utils/createEventPin';
 import { createCirclePin } from '../utils/createCirclePin';
 import { createChabadPinSVG } from '../utils/createChabadPin';
 import { createPlacePinSVG } from '../utils/createLocationPin';
+import { postPinStyle } from '../utils/postCategory';
+import { createRecommendationBubble } from '../utils/createRecommendationBubble';
+import { RecommendationModal } from './RecommendationModal';
 import { getMeetupPinColor } from '../utils/meetupPinColor';
 import { buildAreasFC, polygonCentroid, type AreaShape } from '../utils/areaHighlights';
 import { loadMapAreas, insertMapArea, deleteMapArea, type MapArea } from '../services/mapAreaService';
@@ -64,6 +67,12 @@ const AREA_COLORS = ['#F97316', '#EF4444', '#EC4899', '#8B5CF6', '#2563EB', '#06
    shows and grows toward zoom-in (Apple-style). */
 const PIN_DOT_ZOOM = 12;
 const PIN_DOT_D = 13; // dot diameter in px
+
+// A recommendation bubble carries text, so it would swamp the map at normal zooms. It stays folded
+// into the author's avatar until you're really close in.
+// A recommendation looks exactly like a place (dot → teardrop) and only differs when you're really
+// close in, where it unfolds into the author's chat bubble.
+const POST_BUBBLE_ZOOM = 15.6;
 const CHABAD_PURPLE = '#972689'; // matches the Chabad pin's outer frame
 // place teardrop is 36×41; scale it up to the Chabad pin's height (54) so they match in size
 const PLACE_PIN_SCALE = 54 / 41;
@@ -141,6 +150,7 @@ export function MapScreen({
   const [selectedChabadHouse,   setSelectedChabadHouse]   = useState<ChabadHouse | null>(null);
   const [showAdminLocation,     setShowAdminLocation]     = useState(false);
   const [selectedAdminLocation, setSelectedAdminLocation] = useState<AdminLocation | null>(null);
+  const [selectedRec,           setSelectedRec]           = useState<any | null>(null); // recommendation bubble → modal
   const [selectedMeetup,        setSelectedMeetup]        = useState<Meetup | null>(null);
   const [showMeetup,            setShowMeetup]            = useState(false);
   const [groupChatMeetup,       setGroupChatMeetup]       = useState<Meetup | null>(null);
@@ -161,6 +171,9 @@ export function MapScreen({
   const pointByIdRef    = useRef<Map<string, MapPoint>>(new Map());
   const markerMapRef    = useRef<Map<string, MarkerEntry>>(new Map());
   const selectedIdRef   = useRef<string | null>(null);
+  const orbitingRef     = useRef(false);
+  const focusingRef     = useRef(false);               // camera is flying to a tapped pin
+  const orbitGenRef     = useRef(0);                   // bumped on every stop — stale loops see it and die
   const renderRef       = useRef<() => void>(() => {});
   const zoomRef         = useRef<() => void>(() => {});
   const clearRef        = useRef<() => void>(() => {});
@@ -190,7 +203,7 @@ export function MapScreen({
   const loadPosts = async () => {
     const { data, error: e } = await supabase
       .from('posts')
-      .select('*')
+      .select('*, users(display_name, avatar_url)') // the author powers the map bubble's photo
       .not('latitude', 'is', null)
       .order('created_at', { ascending: false });
     if (e) { console.error('loadPosts:', e); return; }
@@ -443,14 +456,20 @@ export function MapScreen({
 
   /* Wrap a teardrop SVG pin (Chabad / place) in the manager's .fomo-pin > .fomo-pin-scale so it
      zoom-scales, gets the colour dot, and anchors its tip on the coordinate ('bottom'). */
-  function wrapTeardrop(inner: HTMLElement): HTMLElement {
+  function wrapTeardrop(inner: HTMLElement | SVGElement): HTMLElement {
     const root = document.createElement('div');
     root.className = 'fomo-pin';
     root.style.cssText = 'position:absolute;cursor:pointer;user-select:none;line-height:0;';
     const scaleEl = document.createElement('div');
     scaleEl.className = 'fomo-pin-scale';
     scaleEl.style.cssText = 'transform-origin:center bottom;line-height:0;';
-    scaleEl.appendChild(inner);
+    // Its own layer for the tap swing, so rotating the pin never fights the zoom scale that the
+    // parent owns. Origin at the tip — the pin swings from where it's stuck in the map.
+    const swingEl = document.createElement('div');
+    swingEl.className = 'fomo-pin-swing';
+    swingEl.style.cssText = 'transform-origin:center bottom;line-height:0;';
+    swingEl.appendChild(inner);
+    scaleEl.appendChild(swingEl);
     root.appendChild(scaleEl);
     return root;
   }
@@ -459,11 +478,26 @@ export function MapScreen({
      always shows the full pin so its morph + sheet work). */
   function setLeafDotMode(el: HTMLElement, selected: boolean) {
     const z = mapInstanceRef.current?.getZoom() ?? 20;
-    const asDot = z < PIN_DOT_ZOOM && !selected;
+    // each pin can demand its own zoom before it expands — recommendation bubbles carry text,
+    // so they only unfold when you're really close (see POST_BUBBLE_ZOOM).
+    const threshold = Number(el.dataset.dotZoom) || PIN_DOT_ZOOM;
+    const asDot = z < threshold && !selected;
     const scaleEl = el.querySelector('.fomo-pin-scale') as HTMLElement | null;
     const dotEl   = el.querySelector('.fomo-pin-dot') as HTMLElement | null;
     if (scaleEl) scaleEl.style.display = asDot ? 'none' : '';
-    if (dotEl)   dotEl.style.display   = asDot ? 'block' : 'none';
+
+    // Recommendations carry a second threshold: below it they wear the same teardrop as the
+    // places; at/above it the pin unfolds into the chat bubble.
+    const bubbleZoom = Number(el.dataset.bubbleZoom);
+    if (bubbleZoom) {
+      const bubble = el.querySelector('.fomo-rec-bubble') as HTMLElement | null;
+      const pin    = el.querySelector('.fomo-rec-pin') as HTMLElement | null;
+      const unfold = z >= bubbleZoom;
+      if (bubble) bubble.style.display = unfold ? 'flex' : 'none';
+      if (pin)    pin.style.display    = unfold ? 'none' : 'block';
+    }
+
+    if (dotEl) dotEl.style.display = asDot ? 'block' : 'none';
   }
 
   function buildLeafPin(pt: MapPoint): HTMLElement {
@@ -476,18 +510,10 @@ export function MapScreen({
       el = createEventPinSVG(e.event_type || 'parties', e.emoji ?? undefined, e.image_url, isTodayDate(e.event_date), e.title || 'אירוע');
       dotColor = getCategoryColor(e.event_type || '');
     } else if (pt.type === 'chabad') {
-      // Restored original Chabad pin (the exact teardrop + menorah SVG). Wrapped in the
-      // manager's .fomo-pin / .fomo-pin-scale so it still zoom-scales & clusters; it uses
-      // anchor 'bottom' (tip on the coordinate) and does not do the circle-morph.
-      const root = document.createElement('div');
-      root.className = 'fomo-pin';
-      root.style.cssText = 'position:absolute;cursor:pointer;user-select:none;line-height:0;';
-      const scaleEl = document.createElement('div');
-      scaleEl.className = 'fomo-pin-scale';
-      scaleEl.style.cssText = 'transform-origin:center bottom;line-height:0;';
-      scaleEl.appendChild(createChabadPinSVG());
-      root.appendChild(scaleEl);
-      el = root;
+      // The original Chabad pin (teardrop + menorah SVG). It was hand-wrapping .fomo-pin /
+      // .fomo-pin-scale itself, which meant it missed the swing layer — wrapTeardrop is the one
+      // place that builds a teardrop, so it gets the tap swing like every other one.
+      el = wrapTeardrop(createChabadPinSVG());
       dotColor = CHABAD_PURPLE;
       dotAtBottom = true;
     } else if (pt.type === 'admin') {
@@ -504,11 +530,37 @@ export function MapScreen({
       dotColor = pinColor;
       dotAtBottom = true;
     } else if (pt.type === 'post') {
-      const postPin = createPlacePinSVG('⭐', '#F97316');
-      postPin.style.transformOrigin = 'bottom center';
-      postPin.style.transform = `scale(${PLACE_PIN_SCALE})`;
-      el = wrapTeardrop(postPin);
-      dotColor = '#F97316';
+      /* A recommendation reads exactly like a place until you're right on top of it:
+           far      → the same colour dot the places use
+           mid      → the same teardrop pin, wearing its category emoji
+           close in → unfolds into the chat bubble: the author's photo and what they said   */
+      const r = pt.data as any;
+      const { emoji: recEmoji, color: recColor } = postPinStyle(r); // author's choice, else category
+
+      const teardrop = createPlacePinSVG(recEmoji, recColor);
+      teardrop.classList.add('fomo-rec-pin');
+      teardrop.style.transformOrigin = 'bottom center';
+      teardrop.style.transform = `scale(${PLACE_PIN_SCALE})`;
+
+      const bubble = createRecommendationBubble({
+        author:    r.users?.display_name || 'מטייל',
+        avatarUrl: r.users?.avatar_url,
+        placeName: r.place_name || 'המלצה',
+        content:   r.content,
+        emoji:     recEmoji,
+        color:     recColor,
+      });
+      bubble.classList.add('fomo-rec-bubble');
+      bubble.style.display = 'none'; // the teardrop leads; setLeafDotMode swaps them by zoom
+
+      const stack = document.createElement('div');
+      stack.style.cssText = 'display:flex;flex-direction:column;align-items:center;line-height:0;';
+      stack.appendChild(bubble);
+      stack.appendChild(teardrop);
+
+      el = wrapTeardrop(stack);
+      el.dataset.bubbleZoom = String(POST_BUBBLE_ZOOM); // only unfold the text this close in
+      dotColor = recColor; // same dot as the places — recommendations read identically when far
       dotAtBottom = true;
     } else {
       /* meetup */
@@ -542,6 +594,15 @@ export function MapScreen({
       const dotEl   = el.querySelector('.fomo-pin-dot') as HTMLElement | null;
       if (scaleEl) scaleEl.style.display = '';
       if (dotEl)   dotEl.style.display = 'none';
+
+      // Knock the pin: it rocks on its tip and settles. Re-armed on every tap — a CSS class alone
+      // wouldn't replay the animation when you tap the same pin twice.
+      const swing = el.querySelector('.fomo-pin-swing') as HTMLElement | null;
+      if (swing) {
+        swing.style.animation = 'none';
+        void swing.offsetHeight; // reflow, so the browser sees the animation as brand new
+        swing.style.animation = 'fomo-pin-swing 0.78s cubic-bezier(0.28,0.9,0.4,1)';
+      }
       const lift = ddy * SELECT_SCALE; // keeps the dot exactly on the coordinate after growing
       if (body) { body.style.transitionTimingFunction = GROW_EASE; body.style.transform = `translateY(-${lift}px) scale(${SELECT_SCALE})`; }
       if (tail) { tail.style.transitionTimingFunction = GROW_EASE; tail.style.opacity = '1'; tail.style.transform = 'translateX(-50%) scaleY(1)'; }
@@ -574,6 +635,88 @@ export function MapScreen({
     setPinSelected(el, true);
   }
 
+  /* ── Focus a tapped pin ──────────────────────────────────────────────────────────────────
+     Lift it into the strip of map still visible ABOVE the sheet (Mapbox `padding` shifts the
+     optical centre, so the pin lands mid-screen rather than behind the sheet), tilt the camera,
+     then let the world drift slowly around it. */
+  const ORBIT_DEG_PER_SEC = 3.2;
+  const MAP_TOP_CHROME = 172; // search bar + filter chips, in CSS px
+
+  // Mapbox clamps a single easeTo to the short way round, so a turn has to be walked in steps.
+  const ORBIT_STEP_DEG = 150;
+
+  function stopOrbit() {
+    orbitGenRef.current++; // invalidates any in-flight step AND any pending `once('moveend')`
+    const wasOrbiting = orbitingRef.current;
+    orbitingRef.current = false;
+    focusingRef.current = false;
+    if (wasOrbiting) mapInstanceRef.current?.stop(); // halt the easeTo that's driving the turn
+  }
+
+  /* Rotate with ONE long, linear easeTo per step — never `setBearing` in a rAF loop.
+     setBearing is jumpTo under the hood: it fires movestart/move/moveend on every call, so a
+     per-frame loop fires 60 moveends a second and, worse, drives the camera OUTSIDE Mapbox's own
+     render loop. DOM markers live in a different compositor layer from the canvas, and on the iOS
+     WebView they end up a frame out of step with it — which is the pin visibly shaking. Desktop
+     compositing kept up and hid it. Handing the camera back to Mapbox keeps them locked together. */
+  function orbitStep(gen: number) {
+    const m = mapInstanceRef.current;
+    if (!m || orbitGenRef.current !== gen) return;
+    m.easeTo({
+      bearing: m.getBearing() + ORBIT_STEP_DEG,
+      duration: (ORBIT_STEP_DEG / ORBIT_DEG_PER_SEC) * 1000,
+      easing: (t) => t, // linear, so the steps join into one constant drift
+      essential: true,
+    });
+    m.once('moveend', () => {
+      if (orbitGenRef.current === gen && orbitingRef.current) orbitStep(gen);
+    });
+  }
+
+  function focusPin(lng: number, lat: number) {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+
+    stopOrbit();
+    const gen = orbitGenRef.current; // tap another pin and this generation goes stale, killing this loop
+
+    // Centre the pin in what's actually LEFT of the map: the sheet eats the bottom, and the search
+    // bar + filter chips eat the top. Padding both sides is what puts the pin in the clear.
+    const sheetPx = Math.round(window.innerHeight * 0.55); // the half-open sheet
+    focusingRef.current = true; // hold the marker set still until we land
+    map.easeTo({
+      center: [lng, lat],
+      zoom: Math.max(map.getZoom(), 16.2),
+      pitch: 50,
+      padding: { top: MAP_TOP_CHROME, bottom: sheetPx, left: 0, right: 0 },
+      duration: 900,
+      essential: true,
+    });
+
+    map.once('moveend', () => {
+      if (orbitGenRef.current !== gen) return; // superseded by another tap / a user gesture
+      focusingRef.current = false;
+      const m = mapInstanceRef.current;
+      if (!m || selectedIdRef.current == null) return; // deselected mid-flight
+      renderRef.current(); // one clean pass now that we've landed
+
+      orbitingRef.current = true;
+      orbitStep(gen);
+    });
+  }
+
+  /** Back to a plain, north-up, flat map. */
+  function resetView() {
+    stopOrbit();
+    const map = mapInstanceRef.current;
+    if (!map) return;
+    map.easeTo({
+      pitch: 0, bearing: 0,
+      padding: { top: 0, bottom: 0, left: 0, right: 0 },
+      duration: 600, essential: true,
+    });
+  }
+
   function clearSelection() {
     const id = selectedIdRef.current;
     if (id) {
@@ -583,28 +726,17 @@ export function MapScreen({
         if (!labelVisibleAtZoom(mapInstanceRef.current?.getZoom() ?? 0)) entry.el.classList.remove('show-label');
       }
     }
+    const had = selectedIdRef.current != null;
     selectedIdRef.current = null;
     setPreviewEvent(null);
     setPreviewPos(null);
-  }
-
-  function openPostPopup(rec: any) {
-    const map = mapInstanceRef.current;
-    if (!map || rec.latitude == null || rec.longitude == null) return;
-    const esc = (s: string) => (s || '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] || c));
-    new mapboxgl.Popup({ offset: 26, closeButton: true, maxWidth: '240px' })
-      .setLngLat([rec.longitude, rec.latitude])
-      .setHTML(`<div dir="rtl" style="font-family:Heebo,sans-serif;text-align:right">
-        <div style="font-weight:800;font-size:14px;color:#111827">⭐ ${esc(rec.place_name || 'המלצה')}</div>
-        <div style="font-size:12px;color:#6B7280;margin-top:4px;line-height:1.4">${esc(rec.content || '')}</div>
-        ${rec.city ? `<div style="font-size:11px;color:#9CA3AF;margin-top:5px">📍 ${esc(rec.city)}</div>` : ''}
-      </div>`)
-      .addTo(map);
+    if (had) resetView();
   }
 
   function handleLeafClick(pt: MapPoint, el: HTMLElement) {
     if (drawingRef.current) return; // ignore pin taps while drawing an area
     selectLeaf(pt.id, el);
+    focusPin(pt.lng, pt.lat); // centre it above the sheet, then orbit slowly
     if (pt.type === 'event') {
       // Open the events-tab event design directly in a Chabad-style half-sheet (opens half,
       // drag up to full). No mini preview card anymore — the pin morph + sheet, like place pins.
@@ -624,7 +756,10 @@ export function MapScreen({
       setSelectedEvent(null); setPreviewEvent(null); setPreviewPos(null);
       setShowChabadHouse(false); setShowAdminLocation(false);
     } else {
-      openPostPopup(pt.data);
+      // tapping the bubble opens the full recommendation (same sheet as the home feed)
+      setSelectedRec(pt.data);
+      setSelectedEvent(null); setPreviewEvent(null); setPreviewPos(null);
+      setSelectedMeetup(null); setShowMeetup(false); setShowChabadHouse(false); setShowAdminLocation(false);
     }
   }
 
@@ -661,10 +796,12 @@ export function MapScreen({
     });
 
     markerMapRef.current.forEach((entry, key) => {
+      // Never cull the pin whose sheet is open. While the camera flies to it (pitched + padded)
+      // the viewport bounds swing around, and dropping + recreating its marker made it visibly
+      // jump. The sheet owns the selection's lifecycle — culling has no business ending it.
+      if (key === selectedIdRef.current) return;
       if (!next.has(key)) { entry.marker.remove(); markerMapRef.current.delete(key); }
     });
-
-    if (selectedIdRef.current && !next.has(selectedIdRef.current)) clearSelection();
   }
 
   function updateScalesAndLabels() {
@@ -732,16 +869,26 @@ export function MapScreen({
   useEffect(() => {
     const map = mapInstanceRef.current;
     if (!map || !mapReady) return;
-    const onMoveEnd = () => renderRef.current();
+    // `setBearing` is a jumpTo under the hood: it fires movestart/move/MOVEEND synchronously on
+    // every single call. So during the orbit this ran renderClusters 60x/sec — and because the
+    // pitched, rotating viewport makes getBounds() swing, pins kept falling out of the cull and
+    // getting destroyed and rebuilt each frame. That was the fast up/down flicker.
+    const onMoveEnd = () => { if (orbitingRef.current || focusingRef.current) return; renderRef.current(); };
     // Render markers DURING the pan too (throttled to one pass per frame) so pins appear as you
     // drag toward them, instead of only popping in when the gesture ends.
     let movePending = false;
     const onMove = () => {
+      // Hold still while the camera flies to a tapped pin and while it orbits: re-rendering
+      // mid-flight recreated markers under a swinging, pitched viewport and made them jump.
+      // `moveend` renders once we've landed.
+      if (orbitingRef.current || focusingRef.current) return;
       if (movePending) return;
       movePending = true;
       requestAnimationFrame(() => { movePending = false; renderRef.current(); });
     };
     const onZoom    = () => { zoomRef.current(); updateAreaLabelsRef.current(); };
+    // the moment the user grabs the map, the orbit yields to them
+    const onUserGrab = () => stopOrbit();
     const onClick   = (e: mapboxgl.MapMouseEvent) => {
       if (drawingRef.current) { addVertexRef.current(e.lngLat); return; } // add a polygon vertex
       clearRef.current();
@@ -759,9 +906,17 @@ export function MapScreen({
     map.on('zoom', onZoom);
     map.on('click', onClick);
     map.on('click', 'fomo-areas-fill', onAreaClick);
+    // touchstart/mousedown, not dragstart: Mapbox's own handlers call map.stop() the moment you
+    // touch down, which fires a moveend — and that moveend would queue the NEXT orbit step. We
+    // have to cancel the orbit before that happens, so we listen to the touch itself.
+    map.on('touchstart', onUserGrab);
+    map.on('mousedown', onUserGrab);
+    map.on('wheel', onUserGrab);
     return () => {
       map.off('moveend', onMoveEnd); map.off('move', onMove); map.off('zoom', onZoom); map.off('click', onClick);
       map.off('click', 'fomo-areas-fill', onAreaClick);
+      map.off('touchstart', onUserGrab); map.off('mousedown', onUserGrab); map.off('wheel', onUserGrab);
+      stopOrbit();
     };
   }, [mapReady]);
 
@@ -1103,6 +1258,20 @@ export function MapScreen({
         @keyframes fomo-tap-ping { 0% { transform: scale(1); opacity: 0.7; } 100% { transform: scale(1.9); opacity: 0; } }
         /* one-shot ~4° left-right wobble that plays as the pin morphs into the selected state */
         .fomo-pin.selected .fomo-pin-wobble { animation: fomo-wobble 1s ease-out; }
+
+        /* Tap a teardrop and it rocks on its tip, each swing smaller than the last, like it was
+           knocked. The tip never leaves the coordinate. */
+        @keyframes fomo-pin-swing {
+          0%   { transform: rotate(0deg); }
+          14%  { transform: rotate(-14deg); }
+          32%  { transform: rotate(10deg); }
+          50%  { transform: rotate(-6deg); }
+          66%  { transform: rotate(3.4deg); }
+          80%  { transform: rotate(-1.8deg); }
+          92%  { transform: rotate(0.8deg); }
+          100% { transform: rotate(0deg); }
+        }
+        @media (prefers-reduced-motion: reduce) { .fomo-pin-swing { animation: none !important; } }
         @keyframes fomo-wobble {
           0% { transform: rotate(0deg); }
           28% { transform: rotate(-4deg); }
@@ -1404,11 +1573,20 @@ export function MapScreen({
         chabadHouse={selectedChabadHouse}
       />
 
+      {selectedRec && (
+        <RecommendationModal
+          rec={selectedRec}
+          currentUserId={userId}
+          onClose={() => { setSelectedRec(null); clearRef.current(); }}
+        />
+      )}
+
       <AdminLocationBottomSheet
         isOpen={showAdminLocation}
-        onClose={() => { setShowAdminLocation(false); setSelectedAdminLocation(null); }}
+        onClose={() => { setShowAdminLocation(false); setSelectedAdminLocation(null); clearRef.current(); }}
         location={selectedAdminLocation}
         currentUserId={userId}
+        userLocation={location}
       />
 
       <MeetupBottomSheet

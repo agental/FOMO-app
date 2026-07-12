@@ -1,12 +1,15 @@
 import { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { Send, ChevronDown } from 'lucide-react';
-import { supabase, type Event } from '../lib/supabase';
+import { supabase, type Event, type AdminLocation } from '../lib/supabase';
 import { UserAvatar } from './UserAvatar';
 import { BackButton } from './BackButton';
 import { EventChatCard } from './EventChatCard';
+import { PlaceChatCard } from './PlaceChatCard';
+import { AdminLocationBottomSheet } from './AdminLocationBottomSheet';
 import { EventDetailsModal } from './EventDetailsModal';
 import { MessageBubble } from './MessageBubble';
 import { parseEvent } from '../utils/eventMessage';
+import { parsePlace } from '../utils/placeMessage';
 
 type Message = {
   id: string;
@@ -42,6 +45,7 @@ export function ChatScreen({ conversationId, currentUserId, otherUserId, onBack,
   const [loading, setLoading] = useState(!_chatMsgCache[conversationId]?.length);
   const [sending, setSending] = useState(false);
   const [openEvent, setOpenEvent] = useState<Event | null>(null);
+  const [openPlace, setOpenPlace] = useState<AdminLocation | null>(null);
   const [otherTyping, setOtherTyping] = useState(false); // is the other person typing right now
   const [showScroll, setShowScroll] = useState(false); // show the "jump to bottom" button when scrolled up
   const [unreadNew, setUnreadNew] = useState(0); // count of messages arrived while scrolled up
@@ -252,6 +256,11 @@ export function ChatScreen({ conversationId, currentUserId, otherUserId, onBack,
     if (data) setOpenEvent(data as Event);
   };
 
+  const openPlaceById = async (id: string) => {
+    const { data } = await supabase.from('admin_locations').select('*').eq('id', id).maybeSingle();
+    if (data) setOpenPlace(data as AdminLocation);
+  };
+
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -331,6 +340,7 @@ export function ChatScreen({ conversationId, currentUserId, otherUserId, onBack,
     const next = messages[index + 1];
     const isLast = !next || next.sender_id !== message.sender_id;
     const evt = parseEvent(message.content).event;
+    const plc = parsePlace(message.content).place;
     const isNew = !seenIdsRef.current.has(message.id); // animate only freshly-arrived messages
     const popStyle = isNew ? { animation: 'gchat-pop 360ms cubic-bezier(0.34,1.56,0.64,1) both', transformOrigin: mine ? 'right bottom' : 'left bottom' } as const : undefined;
     return (
@@ -345,6 +355,8 @@ export function ChatScreen({ conversationId, currentUserId, otherUserId, onBack,
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: mine ? 'flex-end' : 'flex-start', paddingLeft: 8, paddingRight: 8, marginBottom: isLast ? 6 : 2 }}>
           {evt ? (
             <div style={popStyle}><EventChatCard data={evt} onClick={() => openEventById(evt.id)} /></div>
+          ) : plc ? (
+            <div style={popStyle}><PlaceChatCard data={plc} onClick={() => openPlaceById(plc.id)} /></div>
           ) : (
             <div style={{ maxWidth: '78%', ...popStyle }}>
               <MessageBubble mine={!mine} tail={isLast} color={mine ? '#FFD4A8' : '#FFFFFF'} contentStyle={{ padding: '7px 14px' }}>
@@ -496,6 +508,13 @@ export function ChatScreen({ conversationId, currentUserId, otherUserId, onBack,
           onClose={() => setOpenEvent(null)}
         />
       )}
+
+      <AdminLocationBottomSheet
+        isOpen={!!openPlace}
+        location={openPlace}
+        currentUserId={currentUserId}
+        onClose={() => setOpenPlace(null)}
+      />
     </div>
   );
 }

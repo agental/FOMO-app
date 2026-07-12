@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { MapPin, X, Navigation, Phone, Globe, Link, Loader, CircleCheck as CheckCircle, CircleAlert as AlertCircle, Upload, Star, Camera, Clock, Smile } from 'lucide-react';
+import { MapPin, X, Navigation, Phone, Globe, Link, Loader, CircleCheck as CheckCircle, CircleAlert as AlertCircle, Upload, Star, Camera, Clock, Smile, Plus } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { COUNTRIES } from '../utils/countries';
 import { createPlacePinSVG } from '../utils/createLocationPin';
@@ -74,7 +74,9 @@ export function CreateLocationForm({ onSuccess, onCancel, currentUserId }: Creat
   };
 
   // Image upload
-  const [customImageUrl, setCustomImageUrl] = useState<string | null>(null);
+  // The place's photo gallery — seeded from Google, plus anything the admin uploads.
+  // photos[0] is the cover (image_url / place_photo_url); the whole array goes to place_photos.
+  const [photos, setPhotos] = useState<string[]>([]);
   const [imageUploading, setImageUploading] = useState(false);
   const [imageError, setImageError] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -155,6 +157,10 @@ export function CreateLocationForm({ onSuccess, onCancel, currentUserId }: Creat
       const place = data as PlaceData;
       setPlaceData(place);
 
+      // seed the gallery with Google's photos (admin can still add / remove / re-cover)
+      const googlePhotos = place.photos?.length ? place.photos : (place.photoUrl ? [place.photoUrl] : []);
+      if (googlePhotos.length) setPhotos(prev => [...prev, ...googlePhotos.filter(u => !prev.includes(u))]);
+
       setName(place.placeName || '');
       if (place.city) setCity(place.city);
       if (place.latitude) setLatitude(place.latitude);
@@ -178,65 +184,96 @@ export function CreateLocationForm({ onSuccess, onCancel, currentUserId }: Creat
     }
   };
 
+  /**
+   * Centre the picker on the ADMIN'S ACTUAL LOCATION.
+   *
+   * `navigator.geolocation` does not work inside the iOS WebView, so it always failed and dropped
+   * the pin on the old Bangkok fallback. The real position comes from the wrapper's native bridge
+   * (expo-location → `window._nativeLocation` + a `nativeLocation` event), same as MapScreen.
+   * There is no hard-coded fallback any more — if we genuinely can't locate, we say so.
+   */
   const getCurrentLocation = () => {
     setMapLoading(true);
-    if ('geolocation' in navigator) {
-      navigator.geolocation.getCurrentPosition(
-        (position) => {
-          setLatitude(position.coords.latitude);
-          setLongitude(position.coords.longitude);
-          setShowMapPicker(true);
-          setMapLoading(false);
-        },
-        () => {
-          setLatitude(13.7563);
-          setLongitude(100.5018);
-          setShowMapPicker(true);
-          setMapLoading(false);
-        }
-      );
-    } else {
-      setLatitude(13.7563);
-      setLongitude(100.5018);
+    let done = false;
+
+    const apply = (lat: number, lng: number) => {
+      if (done) return;
+      done = true;
+      window.removeEventListener('nativeLocation', onNative as EventListener);
+      setLatitude(lat);
+      setLongitude(lng);
       setShowMapPicker(true);
       setMapLoading(false);
+    };
+
+    const onNative = (e: any) => {
+      const { lat, lng } = e?.detail || {};
+      if (lat != null && !isNaN(lat)) apply(lat, lng);
+    };
+
+    // 1) already injected by the native bridge (the usual case in the app)
+    const cached = (window as any)._nativeLocation;
+    if (cached?.lat != null && !isNaN(cached.lat)) { apply(cached.lat, cached.lng); return; }
+
+    // 2) it may arrive a moment later
+    window.addEventListener('nativeLocation', onNative as EventListener);
+
+    // 3) browser geolocation — works on desktop/web, silently fails in the iOS WebView
+    if ('geolocation' in navigator) {
+      navigator.geolocation.getCurrentPosition(
+        pos => apply(pos.coords.latitude, pos.coords.longitude),
+        () => { /* keep waiting for the native event */ },
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 },
+      );
     }
+
+    // 4) give up honestly instead of pretending the place is in Bangkok
+    setTimeout(() => {
+      if (done) return;
+      done = true;
+      window.removeEventListener('nativeLocation', onNative as EventListener);
+      setMapLoading(false);
+      alert('לא הצלחנו לאתר את המיקום שלך. אשר הרשאת מיקום, או הדבק קישור Google Maps כדי למלא את המיקום אוטומטית.');
+    }, 12000);
   };
 
+  /** Upload one or many images and append them to the gallery. */
   const handleImageSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    if (!file.type.startsWith('image/')) {
-      setImageError('נא להעלות קובץ תמונה בלבד');
-      return;
-    }
-    if (file.size > 5 * 1024 * 1024) {
-      setImageError('התמונה גדולה מדי. מקסימום 5MB');
-      return;
-    }
+    const files = Array.from(e.target.files ?? []);
+    if (!files.length) return;
 
     setImageError('');
     setImageUploading(true);
+    const uploaded: string[] = [];
 
     try {
-      const fileExt = file.name.split('.').pop();
-      const fileName = `locations/${currentUserId}-${Date.now()}.${fileExt}`;
+      for (const file of files) {
+        if (!file.type.startsWith('image/')) { setImageError('אפשר להעלות קבצי תמונה בלבד'); continue; }
+        if (file.size > 5 * 1024 * 1024) { setImageError(`"${file.name}" גדולה מדי (מקסימום 5MB)`); continue; }
 
-      const { error: uploadError } = await supabase.storage
-        .from('images')
-        .upload(fileName, file, { cacheControl: '3600', upsert: false });
+        const ext = file.name.split('.').pop();
+        const key = `locations/${currentUserId}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}.${ext}`;
 
-      if (uploadError) throw uploadError;
+        const { error: uploadError } = await supabase.storage
+          .from('images')
+          .upload(key, file, { cacheControl: '3600', upsert: false });
+        if (uploadError) throw uploadError;
 
-      const { data: { publicUrl } } = supabase.storage.from('images').getPublicUrl(fileName);
-      setCustomImageUrl(publicUrl);
+        const { data: { publicUrl } } = supabase.storage.from('images').getPublicUrl(key);
+        uploaded.push(publicUrl);
+      }
+      if (uploaded.length) setPhotos(prev => [...prev, ...uploaded]);
     } catch (err: any) {
       setImageError(err.message || 'שגיאה בהעלאת התמונה');
     } finally {
       setImageUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = ''; // let the same file be picked again
     }
   };
+
+  const removePhoto = (i: number) => setPhotos(prev => prev.filter((_, idx) => idx !== i));
+  /** Promote a photo to the cover (photos[0] is what the map pin / cards / list show). */
+  const makeCover = (i: number) => setPhotos(prev => [prev[i], ...prev.filter((_, idx) => idx !== i)]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -257,7 +294,7 @@ export function CreateLocationForm({ onSuccess, onCancel, currentUserId }: Creat
         if (!city && geoResult.city) setCity(geoResult.city);
       }
 
-      const photoUrl = customImageUrl || placeData?.photoUrl || placeData?.photos?.[0] || null;
+      const photoUrl = photos[0] ?? null; // the cover
       const emojiValue = emoji.trim() || '📍';
       const finalRating = manualRating > 0 ? manualRating : (placeData?.rating ?? null);
 
@@ -281,7 +318,7 @@ export function CreateLocationForm({ onSuccess, onCancel, currentUserId }: Creat
         place_rating:       finalRating,
         place_review_count: placeData?.reviewCount ?? null,
         place_photo_url:    photoUrl,
-        place_photos:       placeData?.photos || null,
+        place_photos:       photos.length ? photos : null,
         place_phone:        phone || placeData?.phone || null,
         place_website:      placeData?.website || null,
         place_types:        placeData?.types || null,
@@ -309,7 +346,7 @@ export function CreateLocationForm({ onSuccess, onCancel, currentUserId }: Creat
     }
   };
 
-  const displayImage = customImageUrl || placeData?.photoUrl || placeData?.photos?.[0];
+  const displayImage = photos[0];
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-end justify-center z-50" dir="rtl">
@@ -389,46 +426,24 @@ export function CreateLocationForm({ onSuccess, onCancel, currentUserId }: Creat
             )}
           </div>
 
-          {/* Image upload */}
+          {/* Photo gallery — multiple images; photos[0] is the cover */}
           <div>
             <label className="block text-sm font-semibold text-gray-700 mb-2">
               <Camera className="inline w-4 h-4 ml-1" />
-              תמונה למקום
+              תמונות המקום
+              {photos.length > 0 && <span className="text-gray-400 font-normal"> ({photos.length})</span>}
             </label>
+
             <input
               ref={fileInputRef}
               type="file"
               accept="image/*"
+              multiple
               onChange={handleImageSelect}
               className="hidden"
             />
-            {displayImage ? (
-              <div className="relative rounded-2xl overflow-hidden border border-gray-200">
-                <img src={displayImage} alt="תמונת המקום" className="w-full h-48 object-cover" />
-                <div className="absolute top-2 left-2 flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                    className="bg-white/90 backdrop-blur text-gray-700 text-xs font-bold px-3 py-1.5 rounded-full shadow hover:bg-white transition-all flex items-center gap-1"
-                  >
-                    <Upload className="w-3 h-3" />
-                    החלף
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setCustomImageUrl(null)}
-                    className="bg-red-500/90 backdrop-blur text-white text-xs font-bold px-3 py-1.5 rounded-full shadow hover:bg-red-600 transition-all"
-                  >
-                    הסר
-                  </button>
-                </div>
-                {customImageUrl && (
-                  <div className="absolute bottom-2 right-2 bg-green-500 text-white text-xs font-bold px-2 py-1 rounded-full">
-                    תמונה שהועלתה
-                  </div>
-                )}
-              </div>
-            ) : (
+
+            {photos.length === 0 ? (
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
@@ -440,11 +455,68 @@ export function CreateLocationForm({ onSuccess, onCancel, currentUserId }: Creat
                 ) : (
                   <>
                     <Upload className="w-8 h-8 text-gray-400" />
-                    <span className="text-sm text-gray-500 font-medium">לחץ להעלאת תמונה</span>
-                    <span className="text-xs text-gray-400">JPG, PNG עד 5MB</span>
+                    <span className="text-sm text-gray-500 font-medium">לחץ להעלאת תמונות</span>
+                    <span className="text-xs text-gray-400">אפשר לבחור כמה בבת אחת · עד 5MB לתמונה</span>
                   </>
                 )}
               </button>
+            ) : (
+              <div className="grid grid-cols-3 gap-2">
+                {photos.map((url, i) => (
+                  <div key={url} className="relative rounded-xl overflow-hidden border border-gray-200 bg-gray-100" style={{ aspectRatio: '1 / 1' }}>
+                    <img src={url} alt="" className="w-full h-full object-cover" />
+
+                    {/* remove */}
+                    <button
+                      type="button"
+                      onClick={() => removePhoto(i)}
+                      aria-label="הסר תמונה"
+                      className="absolute top-1 left-1 w-6 h-6 rounded-full bg-black/55 backdrop-blur flex items-center justify-center active:scale-90 transition-transform"
+                    >
+                      <X className="w-3.5 h-3.5 text-white" strokeWidth={2.6} />
+                    </button>
+
+                    {/* cover badge / make-cover */}
+                    {i === 0 ? (
+                      <span className="absolute bottom-1 right-1 bg-blue-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-md shadow">
+                        ראשית
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => makeCover(i)}
+                        className="absolute bottom-1 right-1 bg-white/90 backdrop-blur text-gray-700 text-[10px] font-bold px-1.5 py-0.5 rounded-md shadow active:scale-90 transition-transform"
+                      >
+                        הפוך לראשית
+                      </button>
+                    )}
+                  </div>
+                ))}
+
+                {/* add more */}
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={imageUploading}
+                  className="border-2 border-dashed border-gray-300 rounded-xl flex flex-col items-center justify-center gap-1 hover:border-blue-400 hover:bg-blue-50 transition-all disabled:opacity-50"
+                  style={{ aspectRatio: '1 / 1' }}
+                >
+                  {imageUploading ? (
+                    <Loader className="w-5 h-5 text-blue-500 animate-spin" />
+                  ) : (
+                    <>
+                      <Plus className="w-6 h-6 text-gray-400" />
+                      <span className="text-[11px] text-gray-500 font-medium">הוסף</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            )}
+
+            {photos.length > 0 && (
+              <p className="text-xs text-gray-400 mt-1.5">
+                התמונה הראשית מוצגת בפין ובכרטיסים. כל התמונות יופיעו בגלריה של המקום.
+              </p>
             )}
             {imageError && <p className="text-red-500 text-xs mt-1">{imageError}</p>}
           </div>

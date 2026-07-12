@@ -4,6 +4,8 @@
  * marker (U+2064) so it never collides with normal text or the reply marker (U+2063).
  * A plain-text fallback is appended for any client that doesn't parse it.
  */
+import { parsePlace } from './placeMessage';
+
 const EVT = '⁤';
 const PREFIX = `${EVT}EVT`;
 
@@ -43,6 +45,8 @@ export function messagePreview(content: string | null, type?: string | null): st
   if (type === 'location') return '📍 מיקום';
   const { event } = parseEvent(content);
   if (event) return `📅 שיתף אירוע: ${event.title}`;
+  const { place } = parsePlace(content);
+  if (place) return `${place.emoji || '📍'} שיתף מקום: ${place.name}`;
   // Strip a reply quote prefix if present
   let c = content ?? '';
   if (c[0] === REPLY_SEP) {

@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { Plus, MapPin, Shield, Bell, Calendar, Users, Clock, Star, ChevronDown, Check, X, Search } from 'lucide-react';
+import { Plus, MapPin, Shield, Bell, Calendar, Users, Clock, ChevronDown, Check, X, Search } from 'lucide-react';
 import { FilterSheet } from './FilterSheet';
 import { HeaderProfileAvatar } from './HeaderProfileAvatar';
 import { supabase } from '../lib/supabase';
@@ -10,6 +10,10 @@ import { MapCreateEventFlow } from './MapCreateEventFlow';
 import { CreateLocationForm } from './CreateLocationForm';
 import { CreatePostForm } from './CreatePostForm';
 import { EventDetailsModal } from './EventDetailsModal';
+import { AdminLocationBottomSheet } from './AdminLocationBottomSheet';
+import { PlacesFeed } from './PlacesFeed';
+import { RecommendationCard } from './RecommendationCard';
+import { RecommendationModal } from './RecommendationModal';
 import { FloatingNavBar } from './FloatingNavBar';
 import { COUNTRIES } from '../utils/countries';
 import { useEvents } from '../hooks/useEvents';
@@ -96,10 +100,14 @@ export function HomeScreen({
   const [userAvatarUrl, setUserAvatarUrl] = useState<string | null>(_huc?.userAvatarUrl ?? null);
   const [feedMode, setFeedMode] = useState<FeedMode>('events');
   const [adminLocations, setAdminLocations] = useState<AdminLocation[]>([]);
+  const [placeSheet, setPlaceSheet] = useState<AdminLocation | null>(null); // Apple-Maps place card
+  // GPS cached by the native bridge — powers "distance from you" and the "near you" rail.
+  const homeUserLocation = useMemo(() => {
+    const nat = (window as any)._nativeLocation;
+    return nat?.lat != null ? { latitude: nat.lat as number, longitude: nat.lng as number } : null;
+  }, []);
   const [recommendations, setRecommendations] = useState<any[]>([]);
   const [selectedRec, setSelectedRec] = useState<any | null>(null);
-  const [recRating, setRecRating] = useState<{ avg: number | null; count: number; mine: number }>({ avg: null, count: 0, mine: 0 });
-  const [ratingBump, setRatingBump] = useState(0);
   const [locationsLoaded, setLocationsLoaded] = useState(false);
   const [pullY, setPullY] = useState(0);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -410,35 +418,6 @@ export function HomeScreen({
     }
   };
 
-  const loadRecRatings = async (postId: string) => {
-    setRecRating({ avg: null, count: 0, mine: 0 });
-    try {
-      const { data, error } = await supabase.from('post_ratings').select('rating, user_id').eq('post_id', postId);
-      if (error || !data) return;
-      const count = data.length;
-      const avg = count ? data.reduce((s, r) => s + (r.rating || 0), 0) / count : null;
-      const mine = (currentUserId && data.find(r => r.user_id === currentUserId)?.rating) || 0;
-      setRecRating({ avg, count, mine });
-    } catch { /* post_ratings table may not exist yet */ }
-  };
-
-  const rateRec = async (rating: number) => {
-    if (!currentUserId || !selectedRec) return;
-    setRecRating(prev => ({ ...prev, mine: rating }));
-    setRatingBump(b => b + 1);
-    try {
-      const { error } = await supabase.from('post_ratings').upsert(
-        { post_id: selectedRec.id, user_id: currentUserId, rating },
-        { onConflict: 'post_id,user_id' },
-      );
-      if (error) { console.error('rate error:', error.message); return; }
-      loadRecRatings(selectedRec.id);
-    } catch (err) { console.error('rate error:', err); }
-  };
-
-  useEffect(() => {
-    if (selectedRec?.id) loadRecRatings(selectedRec.id);
-  }, [selectedRec?.id]);
 
   const loadRecommendations = async () => {
     try {
@@ -806,7 +785,9 @@ export function HomeScreen({
               borderRadius: 12,
               background: '#FFFFFF',
               boxShadow: '0 2px 10px rgba(0,0,0,0.13), 0 1px 3px rgba(0,0,0,0.08)',
-              transform: feedMode === 'locations' ? 'translateX(48px)' : 'translateX(0)',
+              // one button width (44px) — the buttons are adjacent (gap: 0), so 48px overshot
+              // by 4px and the indicator poked out past the pill's right edge.
+              transform: feedMode === 'locations' ? 'translateX(44px)' : 'translateX(0)',
               transition: 'transform 0.3s cubic-bezier(0.34,1.56,0.64,1)',
               pointerEvents: 'none',
             }} />
@@ -937,38 +918,6 @@ export function HomeScreen({
         {/* ════════════════ LOCATIONS FEED ════════════════ */}
         {feedMode === 'locations' ? (
           <>
-          {recommendations.length > 0 && (
-            <div style={{ margin: '4px 16px 12px' }}>
-              <p className="px-1 mb-2" style={{ fontSize: 13, fontWeight: 900, color: '#374151', fontFamily: 'Heebo, sans-serif' }}>המלצות מהקהילה</p>
-              <div style={{ display: 'grid', gap: 10 }}>
-                {recommendations.map(rec => {
-                  const tag = rec.tags?.[0];
-                  const place = [rec.city, rec.country ? COUNTRIES[rec.country]?.name : null].filter(Boolean).join(', ');
-                  return (
-                    <div key={rec.id} onClick={() => setSelectedRec(rec)} className="active:scale-[0.99] transition-transform" style={{ display: 'flex', gap: 12, padding: 12, background: '#fff', borderRadius: 18, boxShadow: 'var(--shadow-card)', cursor: 'pointer' }}>
-                      <div style={{ width: 72, height: 72, borderRadius: 14, flexShrink: 0, overflow: 'hidden', background: '#FFF7ED', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                        {rec.image_url
-                          ? <img src={rec.image_url} alt={rec.place_name || ''} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                          : <Star className="w-7 h-7" style={{ color: '#F97316' }} strokeWidth={2} />}
-                      </div>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
-                          <p style={{ fontSize: 15, fontWeight: 800, color: '#111827', fontFamily: "'Heebo', sans-serif", margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{rec.place_name || 'המלצה'}</p>
-                          {tag && <span style={{ fontSize: 10, fontWeight: 700, color: '#EA580C', background: '#FFF7ED', borderRadius: 20, padding: '2px 7px', flexShrink: 0, fontFamily: "'Heebo', sans-serif" }}>{tag}</span>}
-                        </div>
-                        <p style={{ fontSize: 12.5, color: '#6B7280', fontFamily: "'Rubik', sans-serif", margin: '0 0 4px', lineHeight: 1.4, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{rec.content}</p>
-                        {place && (
-                          <span style={{ fontSize: 11.5, color: '#9CA3AF', fontWeight: 500, display: 'flex', alignItems: 'center', gap: 4, fontFamily: "'Heebo', sans-serif" }}>
-                            <MapPin size={11} strokeWidth={2} /> {place}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
           {!locationsLoaded ? (
             <div className="px-4 space-y-4 pt-2">
               {[1, 2, 3].map(i => (
@@ -988,69 +937,30 @@ export function HomeScreen({
               </p>
             </div>
           ) : adminLocations.length > 0 ? (
-            <div style={{ margin: '4px 16px 0', background: '#FFFFFF', borderRadius: 20, overflow: 'hidden', boxShadow: '0 2px 16px rgba(0,0,0,0.06)' }}>
-              {adminLocations.map((loc, idx) => {
-                const img = loc.place_photo_url || loc.image_url;
-                const rating = loc.place_rating;
-                const isOpen = loc.place_open_now;
-                return (
-                  <div key={loc.id}>
-                    {idx > 0 && <div style={{ height: 1, background: '#F5F5F7', margin: '0 14px' }} />}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '16px 14px', cursor: 'pointer' }}>
-
-                      {/* Thumbnail */}
-                      <div style={{ width: 80, height: 80, borderRadius: 16, flexShrink: 0, overflow: 'hidden', background: '#F3F4F6', position: 'relative' }}>
-                        {img ? (
-                          <img src={img} alt={loc.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                        ) : (
-                          <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 32 }}>
-                            {loc.emoji || '📍'}
-                          </div>
-                        )}
-                        {/* open/closed badge */}
-                        {isOpen !== undefined && isOpen !== null && (
-                          <div style={{
-                            position: 'absolute', bottom: 5, right: 5,
-                            background: isOpen ? '#22C55E' : '#EF4444',
-                            borderRadius: 6, padding: '2px 5px',
-                            fontSize: 9, fontWeight: 700, color: '#fff',
-                            border: '1.5px solid white',
-                          }}>
-                            {isOpen ? 'פתוח' : 'סגור'}
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Text */}
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <p style={{ fontSize: 15, fontWeight: 800, color: '#111827', fontFamily: "'Heebo', sans-serif", margin: '0 0 5px', lineHeight: 1.3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {loc.name}
-                        </p>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                          {(loc.city || loc.address) && (
-                            <span style={{ fontSize: 12, color: '#9CA3AF', fontWeight: 500, display: 'flex', alignItems: 'center', gap: 4, fontFamily: "'Heebo', sans-serif" }}>
-                              <MapPin size={11} strokeWidth={2} />
-                              {loc.city || loc.address}
-                            </span>
-                          )}
-                          {rating && (
-                            <span style={{ fontSize: 12, color: '#9CA3AF', fontWeight: 500, display: 'flex', alignItems: 'center', gap: 4, fontFamily: "'Heebo', sans-serif" }}>
-                              <Star size={11} strokeWidth={2} color="#FACC15" fill="#FACC15" />
-                              {rating.toFixed(1)}
-                              {loc.place_review_count ? ` (${loc.place_review_count})` : ''}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Right: pin color dot */}
-                      <div style={{ flexShrink: 0, width: 10, height: 10, borderRadius: '50%', background: loc.pin_color || '#F97316', boxShadow: `0 0 6px ${loc.pin_color || '#F97316'}88` }} />
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+            <PlacesFeed
+              places={adminLocations}
+              currentUserId={currentUserId ?? undefined}
+              searchQuery={searchQuery}
+              userLocation={homeUserLocation}
+              onSelectPlace={setPlaceSheet}
+              onOpenMap={onNavigateToMap}
+            />
           ) : null}
+          {recommendations.length > 0 && (
+            <section style={{ margin: '30px 18px 12px' }}>
+              <h3 style={{ fontSize: 16.5, fontWeight: 900, color: '#111827', fontFamily: "'Heebo', sans-serif", margin: '0 0 3px' }}>
+                המלצות מהקהילה
+              </h3>
+              <p style={{ fontSize: 12.5, color: '#8B90A0', fontWeight: 600, fontFamily: "'Heebo', sans-serif", margin: '0 0 12px' }}>
+                מקומות שמטיילים אחרים אהבו
+              </p>
+              <div style={{ display: 'grid', gap: 11 }}>
+                {recommendations.map(rec => (
+                  <RecommendationCard key={rec.id} rec={rec} onClick={() => setSelectedRec(rec)} />
+                ))}
+              </div>
+            </section>
+          )}
           </>
 
         /* ════════════════ EVENTS FEED ════════════════ */
@@ -1586,102 +1496,12 @@ export function HomeScreen({
 
       {/* Recommendation details */}
       {selectedRec && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-end justify-center animate-fade-in" dir="rtl" onClick={() => setSelectedRec(null)}>
-          <div className="bg-white w-full max-w-md rounded-t-[28px] animate-slide-up overflow-hidden" onClick={(e) => e.stopPropagation()} style={{ paddingBottom: 'max(20px, env(safe-area-inset-bottom))' }}>
-            {selectedRec.image_url ? (
-              <div style={{ position: 'relative', height: 200 }}>
-                <img src={selectedRec.image_url} alt={selectedRec.place_name || ''} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                <button onClick={() => setSelectedRec(null)} aria-label="סגור" style={{ position: 'absolute', top: 14, left: 14, width: 36, height: 36, borderRadius: '50%', background: 'rgba(0,0,0,0.45)', backdropFilter: 'blur(4px)', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
-                  <X className="w-5 h-5 text-white" />
-                </button>
-              </div>
-            ) : (
-              <div className="relative pt-3">
-                <div className="w-10 h-1 rounded-full bg-gray-200 mx-auto" />
-                <button onClick={() => setSelectedRec(null)} aria-label="סגור" className="absolute top-2 left-4 w-9 h-9 flex items-center justify-center rounded-full hover:bg-gray-100">
-                  <X className="w-5 h-5 text-gray-500" />
-                </button>
-              </div>
-            )}
-
-            <div className="px-6 pt-4">
-              <div className="flex items-center gap-2 mb-2">
-                <Star className="w-5 h-5 flex-shrink-0" style={{ color: '#F97316' }} fill="#F97316" />
-                <h2 className="text-2xl font-black text-gray-900" style={{ fontFamily: 'Heebo, sans-serif' }}>{selectedRec.place_name || 'המלצה'}</h2>
-              </div>
-              {selectedRec.tags?.[0] && (
-                <span style={{ display: 'inline-block', fontSize: 12, fontWeight: 700, color: '#EA580C', background: '#FFF7ED', borderRadius: 20, padding: '3px 12px', fontFamily: 'Heebo, sans-serif' }}>{selectedRec.tags[0]}</span>
-              )}
-              <p className="text-[15px] text-gray-600 leading-relaxed mt-3" style={{ fontFamily: 'Rubik, sans-serif' }}>{selectedRec.content}</p>
-              {(selectedRec.city || selectedRec.country) && (
-                <div className="flex items-center gap-2 mt-4 text-[14px] font-semibold" style={{ color: '#6B7280', fontFamily: 'Rubik, sans-serif' }}>
-                  <MapPin className="w-4 h-4" style={{ color: '#F97316' }} />
-                  {[selectedRec.city, selectedRec.country ? COUNTRIES[selectedRec.country]?.name : null].filter(Boolean).join(', ')}
-                </div>
-              )}
-              {selectedRec.users?.display_name && (
-                <p className="text-[13px] text-gray-400 mt-2" style={{ fontFamily: 'Rubik, sans-serif' }}>הומלץ על ידי {selectedRec.users.display_name}</p>
-              )}
-            </div>
-
-            {/* דירוג אופציונלי עם אנימציה */}
-            <div className="px-6 pt-5">
-              <style>{`
-                @keyframes recStarPop { 0% { transform: scale(0.5); } 55% { transform: scale(1.28); } 100% { transform: scale(1); } }
-                @media (prefers-reduced-motion: reduce) { .rec-star { animation: none !important; } }
-              `}</style>
-              <div className="rounded-2xl border border-gray-100 px-4 py-3.5" style={{ background: '#FAFAFA' }}>
-                <div className="flex items-center justify-between">
-                  <span className="text-[14px] font-black text-gray-700" style={{ fontFamily: 'Heebo, sans-serif' }}>
-                    {recRating.mine > 0 ? 'הדירוג שלך' : 'דרגו את המקום'}
-                  </span>
-                  {recRating.avg != null && recRating.count > 0 && (
-                    <span className="flex items-center gap-1 text-[13px] font-bold text-gray-400" style={{ fontFamily: 'Rubik, sans-serif' }}>
-                      <Star className="w-3.5 h-3.5" style={{ color: '#F97316' }} fill="#F97316" />
-                      {recRating.avg.toFixed(1)} · {recRating.count}
-                    </span>
-                  )}
-                </div>
-                <div key={ratingBump} className="flex gap-2 mt-2.5" style={{ direction: 'ltr', justifyContent: 'flex-end' }}>
-                  {[1, 2, 3, 4, 5].map((n) => {
-                    const filled = n <= recRating.mine;
-                    return (
-                      <button
-                        key={n}
-                        type="button"
-                        onClick={() => rateRec(n)}
-                        aria-label={`דרג ${n} מתוך 5`}
-                        className="rec-star"
-                        style={{ background: 'none', border: 'none', padding: 2, cursor: currentUserId ? 'pointer' : 'default', lineHeight: 0, animation: filled ? `recStarPop 0.42s cubic-bezier(0.34,1.56,0.64,1) ${(n - 1) * 70}ms both` : 'none' }}
-                      >
-                        <Star className="w-9 h-9" strokeWidth={2} style={{ color: filled ? '#F97316' : '#D1D5DB', fill: filled ? '#F97316' : 'none', transition: 'color 0.18s, fill 0.18s' }} />
-                      </button>
-                    );
-                  })}
-                </div>
-                <p className="text-[11.5px] mt-2" style={{ color: recRating.mine > 0 ? '#16A34A' : '#9CA3AF', fontFamily: 'Rubik, sans-serif', transition: 'color 0.2s' }}>
-                  {!currentUserId ? 'התחברו כדי לדרג' : recRating.mine > 0 ? 'תודה על הדירוג! 🎉' : 'אופציונלי — לא חובה לדרג'}
-                </p>
-              </div>
-            </div>
-
-            <div className="px-5 pt-5">
-              {selectedRec.latitude != null && selectedRec.longitude != null && onOpenMapAt ? (
-                <button
-                  onClick={() => { const r = selectedRec; setSelectedRec(null); onOpenMapAt(r.latitude, r.longitude); }}
-                  className="w-full h-14 rounded-2xl font-black text-white active:scale-[0.98] transition flex items-center justify-center gap-2"
-                  style={{ background: 'linear-gradient(135deg, #F97316, #EA580C)', boxShadow: '0 8px 24px rgba(249,115,22,0.35)', fontFamily: 'Heebo, sans-serif' }}
-                >
-                  <MapPin className="w-5 h-5" /> פתח במפה
-                </button>
-              ) : (
-                <div className="text-center text-[13px] text-gray-400 py-2" style={{ fontFamily: 'Rubik, sans-serif' }}>
-                  למקום זה לא צורף מיקום מדויק
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
+        <RecommendationModal
+          rec={selectedRec}
+          currentUserId={currentUserId}
+          onClose={() => setSelectedRec(null)}
+          onOpenMapAt={onOpenMapAt}
+        />
       )}
 
       {selectedEvent && (
@@ -1702,6 +1522,16 @@ export function HomeScreen({
         initialSearch={searchQuery}
         onApply={handleApplyFilters}
         onClose={() => setShowFilterSheet(false)}
+      />
+
+      {/* Tapping a place in the "מקומות" feed opens the same Apple-Maps card as the map pin.
+          Distance uses the GPS the native bridge cached on window (null → the line is skipped). */}
+      <AdminLocationBottomSheet
+        isOpen={!!placeSheet}
+        onClose={() => setPlaceSheet(null)}
+        location={placeSheet}
+        currentUserId={currentUserId ?? undefined}
+        userLocation={homeUserLocation}
       />
 
       {/* ── Country picker ── */}

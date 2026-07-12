@@ -748,10 +748,10 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
                 <div style={{ position: 'relative', flexShrink: 0 }}>
                   <div style={{
                     width: 52, height: 52, borderRadius: '50%',
-                    background: gc.unreadCount > 0 ? 'linear-gradient(135deg, #F97316, #EA580C)' : `${emojiColor(gc.cityEmoji)}1F`,
+                    background: `${emojiColor(gc.cityEmoji)}1F`,
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
                     fontSize: 24,
-                    boxShadow: gc.unreadCount > 0 ? '0 3px 10px rgba(249,115,22,0.35)' : `inset 0 0 0 2px ${emojiColor(gc.cityEmoji)}, 0 2px 8px ${emojiColor(gc.cityEmoji)}26`,
+                    boxShadow: `inset 0 0 0 2px ${emojiColor(gc.cityEmoji)}, 0 2px 8px ${emojiColor(gc.cityEmoji)}26`,
                   }}>
                     <span>{gc.cityEmoji}</span>
                   </div>
