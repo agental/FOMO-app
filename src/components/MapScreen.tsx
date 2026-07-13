@@ -334,8 +334,12 @@ export function MapScreen({
       );
     }
 
+    // Fallback: if no location after 8 s, open map centred on Israel
+    const fallbackTimer = setTimeout(() => applyLocation(31.5, 34.75), 8000);
+
     return () => {
       window.removeEventListener('nativeLocation', onNativeLocation);
+      clearTimeout(fallbackTimer);
     };
   }, []);
 

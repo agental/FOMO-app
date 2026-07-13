@@ -32,6 +32,7 @@ function App() {
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
   const [chatOtherUserId, setChatOtherUserId] = useState<string | null>(null);
   const [openCreate, setOpenCreate] = useState(false);
+  const [mapMounted, setMapMounted] = useState(false);
 
   // The "+" create button lives on the Home screen. From any other screen it
   // routes back to Home and signals it to open the create sheet.
@@ -63,6 +64,7 @@ function App() {
   // Remember the screen the user came from, so a viewed profile can return there
   useEffect(() => {
     if (currentScreen !== 'userProfile') setProfileBackScreen(currentScreen);
+    if (currentScreen === 'map') setMapMounted(true);
   }, [currentScreen]);
 
   // Refresh session silently when the user returns to the app after being in background
@@ -334,195 +336,173 @@ function App() {
     );
   }
 
-  if (currentScreen === 'profile') {
-    return (
-      <ProfileScreen
-        onBack={() => setCurrentScreen('home')}
-        currentUserId={currentUserId}
-        onNavigateToMap={() => setCurrentScreen('map')}
-        onNavigateToMyEvents={() => setCurrentScreen('myEvents')}
-        onNavigateToSettings={() => setCurrentScreen('settings')}
-        onNavigateToMessages={() => setCurrentScreen('messages')}
-        onNavigateToCreate={goCreate}
-      />
-    );
-  }
-
-  if (currentScreen === 'myEvents') {
-    return (
-      <MyEventsScreen
-        currentUserId={currentUserId!}
-        onBack={() => setCurrentScreen('home')}
-        onHomeClick={() => setCurrentScreen('home')}
-        onMapClick={() => setCurrentScreen('map')}
-        onCreateClick={goCreate}
-        onMessagesClick={() => setCurrentScreen('messages')}
-        onNavigateToUserProfile={(userId: string) => {
-          setViewingUserId(userId);
-          setCurrentScreen('userProfile');
-        }}
-      />
-    );
-  }
-
-  if (currentScreen === 'map') {
-    return (
-      <MapScreen
-        userId={currentUserId!}
-        selectedCountries={Array.from(selectedCountries)}
-        onBack={() => setCurrentScreen('home')}
-        onNavigateToHome={() => setCurrentScreen('home')}
-        onNavigateToMyEvents={() => setCurrentScreen('myEvents')}
-        onNavigateToMessages={() => setCurrentScreen('messages')}
-        onNavigateToUserProfile={(userId: string) => {
-          setViewingUserId(userId);
-          setCurrentScreen('userProfile');
-        }}
-        onMessageUser={handleMessageUser}
-        focusLocation={mapFocus}
-        onFocusHandled={() => setMapFocus(null)}
-      />
-    );
-  }
-
-  if (currentScreen === 'admin') {
-    return (
-      <AdminDashboard
-        currentUserId={currentUserId!}
-        onBack={() => setCurrentScreen('home')}
-      />
-    );
-  }
-
-  if (currentScreen === 'userProfile' && viewingUserId) {
-    return (
-      <ProfileScreen
-        onBack={() => setCurrentScreen(profileBackScreen)}
-        currentUserId={currentUserId}
-        onNavigateToMap={() => setCurrentScreen('map')}
-        onNavigateToCreate={goCreate}
-        viewUserId={viewingUserId}
-        onMessageUser={handleMessageUser}
-      />
-    );
-  }
-
-  if (currentScreen === 'messages') {
-    return (
-      <MessagesScreen
-        currentUserId={currentUserId!}
-        onBack={() => setCurrentScreen('home')}
-        onConversationClick={(conversationId, otherUserId) => {
-          setCurrentConversationId(conversationId);
-          setChatOtherUserId(otherUserId);
-          setCurrentScreen('chat');
-        }}
-        onHomeClick={() => setCurrentScreen('home')}
-        onMapClick={() => setCurrentScreen('map')}
-        onCreateClick={goCreate}
-        onMyEventsClick={() => setCurrentScreen('myEvents')}
-        onNavigateToCountrySelection={navigateToCountrySelection}
-        onOpenMapAt={(lat: number, lng: number) => { setMapFocus({ latitude: lat, longitude: lng }); setCurrentScreen('map'); }}
-        onNavigateToUserProfile={(userId: string) => { setViewingUserId(userId); setCurrentScreen('userProfile'); }}
-        initialCountries={Array.from(selectedCountries)}
-      />
-    );
-  }
-
-  if (currentScreen === 'requests') {
-    return (
-      <RequestsScreen
-        currentUserId={currentUserId!}
-        onBack={() => setCurrentScreen('home')}
-        onHomeClick={() => setCurrentScreen('home')}
-        onMapClick={() => setCurrentScreen('map')}
-        onCreateClick={goCreate}
-        onMessagesClick={() => setCurrentScreen('messages')}
-        onMyEventsClick={() => setCurrentScreen('myEvents')}
-        onNavigateToUserProfile={(userId: string) => {
-          setViewingUserId(userId);
-          setCurrentScreen('userProfile');
-        }}
-      />
-    );
-  }
-
-  if (currentScreen === 'settings') {
-    return (
-      <SettingsScreen
-        currentUserId={currentUserId}
-        onBack={() => setCurrentScreen('home')}
-        onNavigateToHome={() => setCurrentScreen('home')}
-        onNavigateToMap={() => setCurrentScreen('map')}
-        onNavigateToMessages={() => setCurrentScreen('messages')}
-        onNavigateToMyEvents={() => setCurrentScreen('myEvents')}
-        onNavigateToCreate={goCreate}
-        onNavigateToCountrySelection={navigateToCountrySelection}
-        onNavigateToNotifications={() => setCurrentScreen('notifications')}
-        onNavigateToPrivacy={() => setCurrentScreen('privacy')}
-        onNavigateToAbout={() => setCurrentScreen('about')}
-        onSignOut={() => setCurrentScreen('auth')}
-      />
-    );
-  }
-
-  if (currentScreen === 'notifications') {
-    return (
-      <NotificationsScreen
-        currentUserId={currentUserId}
-        onBack={() => setCurrentScreen('settings')}
-      />
-    );
-  }
-
-  if (currentScreen === 'privacy') {
-    return (
-      <PrivacyScreen
-        currentUserId={currentUserId}
-        onBack={() => setCurrentScreen('settings')}
-      />
-    );
-  }
-
-  if (currentScreen === 'about') {
-    return <AboutScreen onBack={() => setCurrentScreen('settings')} />;
-  }
-
-  if (currentScreen === 'chat' && currentConversationId && chatOtherUserId) {
-    return (
-      <ChatScreen
-        conversationId={currentConversationId}
-        currentUserId={currentUserId!}
-        otherUserId={chatOtherUserId}
-        onBack={() => setCurrentScreen('messages')}
-        onNavigateToUserProfile={(userId: string) => {
-          setViewingUserId(userId);
-          setCurrentScreen('userProfile');
-        }}
-      />
-    );
-  }
-
   return (
-    <HomeScreen
-      onNavigateToProfile={() => setCurrentScreen('profile')}
-      onNavigateToMap={() => setCurrentScreen('map')}
-      onNavigateToAdmin={() => setCurrentScreen('admin')}
-      onNavigateToMessages={() => setCurrentScreen('messages')}
-      onNavigateToRequests={() => setCurrentScreen('requests')}
-      onNavigateToMyEvents={() => setCurrentScreen('myEvents')}
-      onNavigateToCountrySelection={navigateToCountrySelection}
-      onNavigateToUserProfile={(userId: string) => {
-        setViewingUserId(userId);
-        setCurrentScreen('userProfile');
-      }}
-      onMessageUser={handleMessageUser}
-      onOpenMapAt={(lat: number, lng: number) => { setMapFocus({ latitude: lat, longitude: lng }); setCurrentScreen('map'); }}
-      initialCountries={Array.from(selectedCountries)}
-      currentUserId={currentUserId}
-      openCreateSignal={openCreate}
-      onCreateConsumed={() => setOpenCreate(false)}
-    />
+    <>
+      {currentScreen === 'profile' && (
+        <ProfileScreen
+          onBack={() => setCurrentScreen('home')}
+          currentUserId={currentUserId}
+          onNavigateToMap={() => setCurrentScreen('map')}
+          onNavigateToMyEvents={() => setCurrentScreen('myEvents')}
+          onNavigateToSettings={() => setCurrentScreen('settings')}
+          onNavigateToMessages={() => setCurrentScreen('messages')}
+          onNavigateToCreate={goCreate}
+        />
+      )}
+      {currentScreen === 'myEvents' && (
+        <MyEventsScreen
+          currentUserId={currentUserId!}
+          onBack={() => setCurrentScreen('home')}
+          onHomeClick={() => setCurrentScreen('home')}
+          onMapClick={() => setCurrentScreen('map')}
+          onCreateClick={goCreate}
+          onMessagesClick={() => setCurrentScreen('messages')}
+          onNavigateToUserProfile={(userId: string) => {
+            setViewingUserId(userId);
+            setCurrentScreen('userProfile');
+          }}
+        />
+      )}
+      {currentScreen === 'admin' && (
+        <AdminDashboard
+          currentUserId={currentUserId!}
+          onBack={() => setCurrentScreen('home')}
+        />
+      )}
+      {currentScreen === 'userProfile' && !!viewingUserId && (
+        <ProfileScreen
+          onBack={() => setCurrentScreen(profileBackScreen)}
+          currentUserId={currentUserId}
+          onNavigateToMap={() => setCurrentScreen('map')}
+          onNavigateToCreate={goCreate}
+          viewUserId={viewingUserId}
+          onMessageUser={handleMessageUser}
+        />
+      )}
+      {currentScreen === 'messages' && (
+        <MessagesScreen
+          currentUserId={currentUserId!}
+          onBack={() => setCurrentScreen('home')}
+          onConversationClick={(conversationId, otherUserId) => {
+            setCurrentConversationId(conversationId);
+            setChatOtherUserId(otherUserId);
+            setCurrentScreen('chat');
+          }}
+          onHomeClick={() => setCurrentScreen('home')}
+          onMapClick={() => setCurrentScreen('map')}
+          onCreateClick={goCreate}
+          onMyEventsClick={() => setCurrentScreen('myEvents')}
+          onNavigateToCountrySelection={navigateToCountrySelection}
+          onOpenMapAt={(lat: number, lng: number) => { setMapFocus({ latitude: lat, longitude: lng }); setCurrentScreen('map'); }}
+          onNavigateToUserProfile={(userId: string) => { setViewingUserId(userId); setCurrentScreen('userProfile'); }}
+          initialCountries={Array.from(selectedCountries)}
+        />
+      )}
+      {currentScreen === 'requests' && (
+        <RequestsScreen
+          currentUserId={currentUserId!}
+          onBack={() => setCurrentScreen('home')}
+          onHomeClick={() => setCurrentScreen('home')}
+          onMapClick={() => setCurrentScreen('map')}
+          onCreateClick={goCreate}
+          onMessagesClick={() => setCurrentScreen('messages')}
+          onMyEventsClick={() => setCurrentScreen('myEvents')}
+          onNavigateToUserProfile={(userId: string) => {
+            setViewingUserId(userId);
+            setCurrentScreen('userProfile');
+          }}
+        />
+      )}
+      {currentScreen === 'settings' && (
+        <SettingsScreen
+          currentUserId={currentUserId}
+          onBack={() => setCurrentScreen('home')}
+          onNavigateToHome={() => setCurrentScreen('home')}
+          onNavigateToMap={() => setCurrentScreen('map')}
+          onNavigateToMessages={() => setCurrentScreen('messages')}
+          onNavigateToMyEvents={() => setCurrentScreen('myEvents')}
+          onNavigateToCreate={goCreate}
+          onNavigateToCountrySelection={navigateToCountrySelection}
+          onNavigateToNotifications={() => setCurrentScreen('notifications')}
+          onNavigateToPrivacy={() => setCurrentScreen('privacy')}
+          onNavigateToAbout={() => setCurrentScreen('about')}
+          onSignOut={() => setCurrentScreen('auth')}
+        />
+      )}
+      {currentScreen === 'notifications' && (
+        <NotificationsScreen
+          currentUserId={currentUserId}
+          onBack={() => setCurrentScreen('settings')}
+        />
+      )}
+      {currentScreen === 'privacy' && (
+        <PrivacyScreen
+          currentUserId={currentUserId}
+          onBack={() => setCurrentScreen('settings')}
+        />
+      )}
+      {currentScreen === 'about' && (
+        <AboutScreen onBack={() => setCurrentScreen('settings')} />
+      )}
+      {currentScreen === 'chat' && !!currentConversationId && !!chatOtherUserId && (
+        <ChatScreen
+          conversationId={currentConversationId}
+          currentUserId={currentUserId!}
+          otherUserId={chatOtherUserId}
+          onBack={() => setCurrentScreen('messages')}
+          onNavigateToUserProfile={(userId: string) => {
+            setViewingUserId(userId);
+            setCurrentScreen('userProfile');
+          }}
+        />
+      )}
+      {currentScreen === 'home' && (
+        <HomeScreen
+          onNavigateToProfile={() => setCurrentScreen('profile')}
+          onNavigateToMap={() => setCurrentScreen('map')}
+          onNavigateToAdmin={() => setCurrentScreen('admin')}
+          onNavigateToMessages={() => setCurrentScreen('messages')}
+          onNavigateToRequests={() => setCurrentScreen('requests')}
+          onNavigateToMyEvents={() => setCurrentScreen('myEvents')}
+          onNavigateToCountrySelection={navigateToCountrySelection}
+          onNavigateToUserProfile={(userId: string) => {
+            setViewingUserId(userId);
+            setCurrentScreen('userProfile');
+          }}
+          onMessageUser={handleMessageUser}
+          onOpenMapAt={(lat: number, lng: number) => { setMapFocus({ latitude: lat, longitude: lng }); setCurrentScreen('map'); }}
+          initialCountries={Array.from(selectedCountries)}
+          currentUserId={currentUserId}
+          openCreateSignal={openCreate}
+          onCreateConsumed={() => setOpenCreate(false)}
+        />
+      )}
+      {/* Map stays mounted once first visited so Mapbox doesn't re-initialise on every navigation */}
+      {mapMounted && (
+        <div style={{
+          position: 'fixed', inset: 0,
+          zIndex: currentScreen === 'map' ? 100 : -1,
+          visibility: currentScreen === 'map' ? 'visible' : 'hidden',
+          pointerEvents: currentScreen === 'map' ? 'auto' : 'none',
+        }}>
+          <MapScreen
+            userId={currentUserId!}
+            selectedCountries={Array.from(selectedCountries)}
+            onBack={() => setCurrentScreen('home')}
+            onNavigateToHome={() => setCurrentScreen('home')}
+            onNavigateToMyEvents={() => setCurrentScreen('myEvents')}
+            onNavigateToMessages={() => setCurrentScreen('messages')}
+            onNavigateToUserProfile={(userId: string) => {
+              setViewingUserId(userId);
+              setCurrentScreen('userProfile');
+            }}
+            onMessageUser={handleMessageUser}
+            focusLocation={mapFocus}
+            onFocusHandled={() => setMapFocus(null)}
+          />
+        </div>
+      )}
+    </>
   );
 }
 

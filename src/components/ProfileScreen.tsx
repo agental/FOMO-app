@@ -461,10 +461,16 @@ export default function ProfileScreen({
               </Chip>
             )}
             {profile.instagram && (
-              <Chip>
-                <InstagramIcon size={11} />
-                &nbsp;{profile.instagram.replace('@', '')}
-              </Chip>
+              <a
+                href={profile.instagram.startsWith('http') ? profile.instagram : `https://instagram.com/${profile.instagram.replace('@', '')}`}
+                target="_blank" rel="noopener noreferrer"
+                style={{ textDecoration: 'none' }}
+              >
+                <Chip style={{ cursor: 'pointer' }}>
+                  <InstagramIcon size={11} />
+                  &nbsp;{profile.instagram.replace('@', '')}
+                </Chip>
+              </a>
             )}
           </div>
         </div>
@@ -479,34 +485,36 @@ export default function ProfileScreen({
         position: 'relative',
       }}>
 
-        {/* Events — full-width tile, taps through to My Events */}
-        <div
-          onClick={isOwnProfile ? onNavigateToMyEvents : undefined}
-          role={isOwnProfile ? 'button' : undefined}
-          aria-label={isOwnProfile ? 'האירועים שלי' : undefined}
-          className={`animate-card-entrance fomo-animated${isOwnProfile ? ' fomo-press' : ''}`}
-          style={{
-            display: 'flex', alignItems: 'center', gap: 12,
-            background: 'var(--color-surface)', borderRadius: 'var(--radius-lg)',
-            padding: '14px 16px', marginBottom: 12, boxShadow: 'var(--shadow-card)',
-            cursor: isOwnProfile ? 'pointer' : 'default',
-          }}
-        >
-          <div style={{
-            width: 44, height: 44, borderRadius: 14, flexShrink: 0,
-            background: 'var(--color-primary-tint)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}>
-            <Ticket size={22} style={{ color: 'var(--color-primary)' }} />
+        {/* Events tile — own profile only (top position) */}
+        {isOwnProfile && (
+          <div
+            onClick={onNavigateToMyEvents}
+            role="button"
+            aria-label="האירועים שלי"
+            className="animate-card-entrance fomo-animated fomo-press"
+            style={{
+              display: 'flex', alignItems: 'center', gap: 12,
+              background: 'var(--color-surface)', borderRadius: 'var(--radius-lg)',
+              padding: '14px 16px', marginBottom: 12, boxShadow: 'var(--shadow-card)',
+              cursor: 'pointer',
+            }}
+          >
+            <div style={{
+              width: 44, height: 44, borderRadius: 14, flexShrink: 0,
+              background: 'var(--color-primary-tint)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+              <Ticket size={22} style={{ color: 'var(--color-primary)' }} />
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 20, fontWeight: 900, color: 'var(--color-text-heading)', fontFamily: 'Heebo, sans-serif', lineHeight: 1 }}>{eventsCount}</div>
+              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--color-text-muted)', fontFamily: 'Heebo, sans-serif', marginTop: 4 }}>אירועים</div>
+            </div>
+            <ChevronLeft size={18} style={{ color: 'var(--color-primary)', opacity: 0.6, flexShrink: 0 }} />
           </div>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 20, fontWeight: 900, color: 'var(--color-text-heading)', fontFamily: 'Heebo, sans-serif', lineHeight: 1 }}>{eventsCount}</div>
-            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--color-text-muted)', fontFamily: 'Heebo, sans-serif', marginTop: 4 }}>אירועים</div>
-          </div>
-          {isOwnProfile && <ChevronLeft size={18} style={{ color: 'var(--color-primary)', opacity: 0.6, flexShrink: 0 }} />}
-        </div>
+        )}
 
-        {/* Action buttons — viewing other user */}
+        {/* Action buttons + events tile — viewing other user */}
         {!isOwnProfile && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 12 }}>
             <button
@@ -525,35 +533,27 @@ export default function ProfileScreen({
               שלח הודעה
             </button>
 
-            {profile.instagram ? (
-              <a
-                href={profile.instagram.startsWith('http') ? profile.instagram : `https://instagram.com/${profile.instagram.replace('@', '')}`}
-                target="_blank" rel="noopener noreferrer"
-                className="fomo-press"
-                style={{
-                  width: '100%', height: 52, borderRadius: 18,
-                  background: 'linear-gradient(135deg, #F43F5E, #C026D3, #F97316)',
-                  color: 'white', fontSize: 15, fontWeight: 800,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-                  textDecoration: 'none', cursor: 'pointer',
-                  fontFamily: 'Heebo, sans-serif',
-                  boxShadow: '0 6px 22px rgba(244,63,94,0.3)',
-                }}
-              >
-                <InstagramIcon size={18} />
-                פתח באינסטגרם
-              </a>
-            ) : (
+            <div
+              className="animate-card-entrance fomo-animated"
+              style={{
+                display: 'flex', alignItems: 'center', gap: 12,
+                background: 'var(--color-surface)', borderRadius: 'var(--radius-lg)',
+                padding: '14px 16px', boxShadow: 'var(--shadow-card)',
+                cursor: 'default',
+              }}
+            >
               <div style={{
-                width: '100%', height: 46, borderRadius: 18,
-                border: '2px dashed #E5E7EB',
-                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
-                color: '#D1D5DB', fontSize: 13, fontFamily: 'Heebo, sans-serif',
+                width: 44, height: 44, borderRadius: 14, flexShrink: 0,
+                background: 'var(--color-primary-tint)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
               }}>
-                <InstagramIcon size={15} />
-                אינסטגרם לא מחובר
+                <Ticket size={22} style={{ color: 'var(--color-primary)' }} />
               </div>
-            )}
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 20, fontWeight: 900, color: 'var(--color-text-heading)', fontFamily: 'Heebo, sans-serif', lineHeight: 1 }}>{eventsCount}</div>
+                <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--color-text-muted)', fontFamily: 'Heebo, sans-serif', marginTop: 4 }}>אירועים</div>
+              </div>
+            </div>
           </div>
         )}
 

@@ -1253,8 +1253,8 @@ export function HomeScreen({
                           aria-pressed={isActive}
                           className="flex-shrink-0 flex items-center gap-1.5 px-3.5 h-10 rounded-full transition-all active:scale-95"
                           style={isActive
-                            ? { background: 'linear-gradient(135deg, #F97316, #EA580C)', color: '#fff', boxShadow: '0 6px 16px rgba(249,115,22,0.30)' }
-                            : { background: '#fff', color: '#4B5563', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}
+                            ? { background: 'rgba(249,115,22,0.07)', color: '#F97316', border: '2px solid #F97316', boxShadow: 'none' }
+                            : { background: '#fff', color: '#4B5563', border: '2px solid transparent', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}
                         >
                           <span className="text-[16px] leading-none select-none">{c.emoji}</span>
                           <span className="text-[13px] font-bold whitespace-nowrap" style={{ fontFamily: 'Heebo, sans-serif' }}>{c.label}</span>
@@ -1263,10 +1263,16 @@ export function HomeScreen({
                     })}
                   </div>
 
-                  {selectedInterest && (
+                  <div
+                    style={{
+                      height: '44px',
+                      opacity: selectedInterest ? 1 : 0,
+                      pointerEvents: selectedInterest ? 'auto' : 'none',
+                      transition: 'opacity 0.15s ease',
+                    }}
+                  >
                     <div
-                      key={selectedInterest}
-                      className="flex gap-2 overflow-x-auto scrollbar-hide px-4 pb-1 animate-slide-down"
+                      className="flex gap-2 overflow-x-auto scrollbar-hide px-4 pb-1"
                       style={{ WebkitOverflowScrolling: 'touch' } as React.CSSProperties}
                     >
                       {[
@@ -1285,9 +1291,10 @@ export function HomeScreen({
                             className="flex-shrink-0 px-4 py-2 rounded-full text-[13px] font-bold transition-all active:scale-95"
                             style={{
                               fontFamily: 'Heebo, sans-serif',
-                              background: active ? 'linear-gradient(135deg, #F97316, #EA580C)' : '#F3F4F6',
-                              color: active ? '#fff' : '#6B7280',
-                              boxShadow: active ? '0 4px 14px rgba(249,115,22,0.3)' : 'none',
+                              background: active ? 'rgba(249,115,22,0.07)' : '#F3F4F6',
+                              color: active ? '#F97316' : '#6B7280',
+                              border: active ? '2px solid #F97316' : '2px solid transparent',
+                              boxShadow: 'none',
                             }}
                           >
                             {chip.label}
@@ -1295,7 +1302,7 @@ export function HomeScreen({
                         );
                       })}
                     </div>
-                  )}
+                  </div>
                 </div>
               )}
 

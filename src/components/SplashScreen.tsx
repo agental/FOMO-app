@@ -235,15 +235,15 @@ export function SplashScreen({ onComplete }: { onComplete: () => void }) {
         {/* Tagline — fades in during hold */}
         <p style={{
           margin: '16px 0 0',
-          fontSize: 12, fontWeight: 500,
-          color: 'rgba(255,255,255,0.30)',
-          letterSpacing: '0.22em', textTransform: 'uppercase',
+          fontSize: 16, fontWeight: 500,
+          color: 'rgba(255,255,255,0.45)',
+          letterSpacing: '0.12em', textTransform: 'uppercase',
           fontFamily: "'Heebo', sans-serif",
           opacity:    phase === 'hold' || phase === 'exit' ? 1 : 0,
           transform:  phase === 'hold' || phase === 'exit' ? 'translateY(0)' : 'translateY(10px)',
           transition: 'opacity 0.7s 0.20s ease-out, transform 0.7s 0.20s ease-out',
         }}>
-          גלה  ·  חווה  ·  התחבר
+          אל תהיה זה שפספס.
         </p>
       </div>
 
