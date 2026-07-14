@@ -5,11 +5,10 @@ import { MessageBubble } from './MessageBubble';
 import { ImageBubble } from './ImageBubble';
 import { EventChatCard } from './EventChatCard';
 import { PlaceChatCard } from './PlaceChatCard';
-import { AdminLocationBottomSheet } from './AdminLocationBottomSheet';
 import { parsePlace } from '../utils/placeMessage';
 import { EventDetailsModal } from './EventDetailsModal';
 import { parseEvent } from '../utils/eventMessage';
-import type { Event, AdminLocation } from '../lib/supabase';
+import type { Event } from '../lib/supabase';
 import { LocationName } from './LocationName';
 import { OpenLocationSheet } from './OpenLocationSheet';
 import { supabase } from '../lib/supabase';
@@ -33,7 +32,7 @@ interface CityGroupChatProps {
   countryCode: string; countryFlag: string; cityName: string; cityEmoji: string;
   currentUserId: string; currentUserName: string; currentUserAvatar: string | null;
   onClose: () => void;
-  onOpenMapAt?: (lat: number, lng: number) => void;
+  onOpenMapAt?: (lat: number, lng: number, placeId?: string) => void;
   onNavigateToUserProfile?: (userId: string) => void;
 }
 
@@ -193,6 +192,7 @@ const saveLeftChannels = () => { try { localStorage.setItem(LEFT_KEY, JSON.strin
 export function CityGroupChat({
   countryCode, countryFlag, cityName, cityEmoji,
   currentUserId, currentUserName, currentUserAvatar, onClose,
+  onOpenMapAt,
   onNavigateToUserProfile,
 }: CityGroupChatProps) {
 
@@ -220,7 +220,6 @@ export function CityGroupChat({
   const [uploading,    setUploading]    = useState(false);
   const [locLoading,   setLocLoading]   = useState(false);
   const [openEvent,    setOpenEvent]    = useState<Event | null>(null); // shared-event card → details
-  const [openPlace,    setOpenPlace]    = useState<AdminLocation | null>(null); // shared-place card → sheet
   const [menuMsg,      setMenuMsg]      = useState<GMessage | null>(null); // long-press context menu
   const [replyTo,      setReplyTo]      = useState<GMessage | null>(null); // message being replied to
   const [toast,        setToast]        = useState<string | null>(null);
@@ -828,11 +827,6 @@ export function CityGroupChat({
     const { error } = await supabase.from('group_messages').delete().eq('id', m.id);
     if (error) { showToast('לא ניתן למחוק'); loadMessages(); } else { showToast('ההודעה נמחקה'); }
   };
-  const openPlaceById = async (id: string) => {
-    const { data } = await supabase.from('admin_locations').select('*').eq('id', id).maybeSingle();
-    if (data) setOpenPlace(data as AdminLocation);
-  };
-
   const openEventById = async (id: string) => {
     const { data } = await supabase.from('events').select('*').eq('id', id).maybeSingle();
     if (data) setOpenEvent(data as Event);
@@ -971,7 +965,7 @@ export function CityGroupChat({
                       {msg.display_name}
                     </span>
                   )}
-                  <PlaceChatCard data={parsePlace(msg.content).place!} onClick={() => openPlaceById(parsePlace(msg.content).place!.id)} />
+                  <PlaceChatCard data={parsePlace(msg.content).place!} onClick={() => { const pl = parsePlace(msg.content).place!; onOpenMapAt?.(pl.lat, pl.lng, pl.id); }} />
                 </div>
               ) : msg.type === 'text' ? (
                 /* iMessage-exact bubble (single SVG path, stretchable, fixed tail) */
@@ -1978,13 +1972,6 @@ export function CityGroupChat({
         />
       )}
 
-      {/* Shared-place sheet */}
-      <AdminLocationBottomSheet
-        isOpen={!!openPlace}
-        location={openPlace}
-        currentUserId={currentUserId}
-        onClose={() => setOpenPlace(null)}
-      />
 
       {/* Shared-event details */}
       {openEvent && (

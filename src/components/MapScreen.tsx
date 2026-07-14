@@ -18,7 +18,8 @@ import { createCirclePin } from '../utils/createCirclePin';
 import { createChabadPinSVG } from '../utils/createChabadPin';
 import { createPlacePinSVG } from '../utils/createLocationPin';
 import { postPinStyle } from '../utils/postCategory';
-import { createRecommendationBubble } from '../utils/createRecommendationBubble';
+import { createRecommendationPin } from '../utils/createRecommendationPin';
+import { RecommendationListSheet } from './RecommendationListSheet';
 import { RecommendationModal } from './RecommendationModal';
 import { getMeetupPinColor } from '../utils/meetupPinColor';
 import { buildAreasFC, polygonCentroid, type AreaShape } from '../utils/areaHighlights';
@@ -40,7 +41,7 @@ interface MapScreenProps {
   onNavigateToMessages?: () => void;
   onNavigateToUserProfile?: (userId: string) => void;
   onMessageUser?: (userId: string) => void;
-  focusLocation?: { latitude: number; longitude: number } | null;
+  focusLocation?: { latitude: number; longitude: number; placeId?: string } | null;
   onFocusHandled?: () => void;
 }
 
@@ -68,11 +69,9 @@ const AREA_COLORS = ['#F97316', '#EF4444', '#EC4899', '#8B5CF6', '#2563EB', '#06
 const PIN_DOT_ZOOM = 12;
 const PIN_DOT_D = 13; // dot diameter in px
 
-// A recommendation bubble carries text, so it would swamp the map at normal zooms. It stays folded
-// into the author's avatar until you're really close in.
-// A recommendation looks exactly like a place (dot → teardrop) and only differs when you're really
-// close in, where it unfolds into the author's chat bubble.
-const POST_BUBBLE_ZOOM = 15.6;
+// Recommendations at (nearly) the same place fold into one thumbtack. Group key = place name +
+// a coarse coord cell, so the same-named place in one town stacks but a far-away namesake doesn't.
+const REC_CELL = 0.02; // ~2km cells for keying same-name places together
 const CHABAD_PURPLE = '#972689'; // matches the Chabad pin's outer frame
 // place teardrop is 36×41; scale it up to the Chabad pin's height (54) so they match in size
 const PLACE_PIN_SCALE = 54 / 41;
@@ -150,7 +149,8 @@ export function MapScreen({
   const [selectedChabadHouse,   setSelectedChabadHouse]   = useState<ChabadHouse | null>(null);
   const [showAdminLocation,     setShowAdminLocation]     = useState(false);
   const [selectedAdminLocation, setSelectedAdminLocation] = useState<AdminLocation | null>(null);
-  const [selectedRec,           setSelectedRec]           = useState<any | null>(null); // recommendation bubble → modal
+  const [selectedRec,           setSelectedRec]           = useState<any | null>(null); // one recommendation → modal
+  const [recList,               setRecList]               = useState<any[] | null>(null); // a stack of recs → list sheet
   const [selectedMeetup,        setSelectedMeetup]        = useState<Meetup | null>(null);
   const [showMeetup,            setShowMeetup]            = useState(false);
   const [groupChatMeetup,       setGroupChatMeetup]       = useState<Meetup | null>(null);
@@ -418,9 +418,26 @@ export function MapScreen({
         if (l.latitude == null || l.longitude == null) return;
         pts.push({ id: `admin:${l.id}`, type: 'admin', lng: l.longitude, lat: l.latitude, title: l.name || 'מקום', data: l });
       });
+      // Group recommendations that share a place, so a popular spot is one stack, not a pile.
+      const groups = new Map<string, any[]>();
       posts.forEach(r => {
         if (r.latitude == null || r.longitude == null) return;
-        pts.push({ id: `post:${r.id}`, type: 'post', lng: r.longitude, lat: r.latitude, title: r.place_name || 'המלצה', data: r });
+        const nameKey = (r.place_name || '').trim().toLowerCase();
+        const cell = `${Math.round(r.latitude / REC_CELL)},${Math.round(r.longitude / REC_CELL)}`;
+        // named places group by name+cell; unnamed fall back to a fine coord so they don't all merge
+        const key = nameKey ? `${nameKey}@${cell}` : `~${r.latitude.toFixed(4)},${r.longitude.toFixed(4)}`;
+        (groups.get(key) ?? groups.set(key, []).get(key)!).push(r);
+      });
+      groups.forEach((list, key) => {
+        const primary = list[0];
+        if (list.length === 1) {
+          pts.push({ id: `post:${primary.id}`, type: 'post', lng: primary.longitude, lat: primary.latitude, title: primary.place_name || 'המלצה', data: primary });
+        } else {
+          pts.push({
+            id: `postgroup:${key}`, type: 'post', lng: primary.longitude, lat: primary.latitude,
+            title: primary.place_name || 'המלצות', data: { __group: true, posts: list },
+          });
+        }
       });
     }
     if (showMeetups) {
@@ -478,25 +495,11 @@ export function MapScreen({
      always shows the full pin so its morph + sheet work). */
   function setLeafDotMode(el: HTMLElement, selected: boolean) {
     const z = mapInstanceRef.current?.getZoom() ?? 20;
-    // each pin can demand its own zoom before it expands — recommendation bubbles carry text,
-    // so they only unfold when you're really close (see POST_BUBBLE_ZOOM).
     const threshold = Number(el.dataset.dotZoom) || PIN_DOT_ZOOM;
     const asDot = z < threshold && !selected;
     const scaleEl = el.querySelector('.fomo-pin-scale') as HTMLElement | null;
     const dotEl   = el.querySelector('.fomo-pin-dot') as HTMLElement | null;
     if (scaleEl) scaleEl.style.display = asDot ? 'none' : '';
-
-    // Recommendations carry a second threshold: below it they wear the same teardrop as the
-    // places; at/above it the pin unfolds into the chat bubble.
-    const bubbleZoom = Number(el.dataset.bubbleZoom);
-    if (bubbleZoom) {
-      const bubble = el.querySelector('.fomo-rec-bubble') as HTMLElement | null;
-      const pin    = el.querySelector('.fomo-rec-pin') as HTMLElement | null;
-      const unfold = z >= bubbleZoom;
-      if (bubble) bubble.style.display = unfold ? 'flex' : 'none';
-      if (pin)    pin.style.display    = unfold ? 'none' : 'block';
-    }
-
     if (dotEl) dotEl.style.display = asDot ? 'block' : 'none';
   }
 
@@ -530,37 +533,25 @@ export function MapScreen({
       dotColor = pinColor;
       dotAtBottom = true;
     } else if (pt.type === 'post') {
-      /* A recommendation reads exactly like a place until you're right on top of it:
-           far      → the same colour dot the places use
-           mid      → the same teardrop pin, wearing its category emoji
-           close in → unfolds into the chat bubble: the author's photo and what they said   */
-      const r = pt.data as any;
-      const { emoji: recEmoji, color: recColor } = postPinStyle(r); // author's choice, else category
+      /* A recommendation is a thumbtack whose head is the recommender's photo. Several at one place
+         arrive as a group → a fanned stack with a count. Far away it collapses to a colour dot,
+         same as everything else. */
+      const d = pt.data as any;
+      const list: any[] = d.__group ? d.posts : [d];
+      const primary = list[0];
+      const { emoji: recEmoji, color: recColor } = postPinStyle(primary); // author's choice, else category
 
-      const teardrop = createPlacePinSVG(recEmoji, recColor);
-      teardrop.classList.add('fomo-rec-pin');
-      teardrop.style.transformOrigin = 'bottom center';
-      teardrop.style.transform = `scale(${PLACE_PIN_SCALE})`;
-
-      const bubble = createRecommendationBubble({
-        author:    r.users?.display_name || 'מטייל',
-        avatarUrl: r.users?.avatar_url,
-        placeName: r.place_name || 'המלצה',
-        content:   r.content,
-        emoji:     recEmoji,
-        color:     recColor,
+      const pin = createRecommendationPin({
+        avatarUrl:    primary.users?.avatar_url,
+        name:         primary.users?.display_name,
+        color:        recColor,
+        emoji:        recEmoji,
+        count:        list.length,
+        extraAvatars: list.slice(1, 3).map(p => p.users?.avatar_url ?? null),
       });
-      bubble.classList.add('fomo-rec-bubble');
-      bubble.style.display = 'none'; // the teardrop leads; setLeafDotMode swaps them by zoom
 
-      const stack = document.createElement('div');
-      stack.style.cssText = 'display:flex;flex-direction:column;align-items:center;line-height:0;';
-      stack.appendChild(bubble);
-      stack.appendChild(teardrop);
-
-      el = wrapTeardrop(stack);
-      el.dataset.bubbleZoom = String(POST_BUBBLE_ZOOM); // only unfold the text this close in
-      dotColor = recColor; // same dot as the places — recommendations read identically when far
+      el = wrapTeardrop(pin);
+      dotColor = recColor; // same colour dot as places when zoomed out
       dotAtBottom = true;
     } else {
       /* meetup */
@@ -646,11 +637,14 @@ export function MapScreen({
   const ORBIT_STEP_DEG = 150;
 
   function stopOrbit() {
-    orbitGenRef.current++; // invalidates any in-flight step AND any pending `once('moveend')`
-    const wasOrbiting = orbitingRef.current;
+    // Bumping the generation is what actually stops the orbit: the current easeTo's moveend sees a
+    // stale gen and doesn't queue the next step. We deliberately DON'T call map.stop() — this runs
+    // on touchstart, and calling stop() mid-gesture jams Mapbox's own drag-pan so markers freeze
+    // until you lift your finger. The camera animation is superseded anyway: a user drag interrupts
+    // it, and focusPin/resetView issue a fresh easeTo over it.
+    orbitGenRef.current++;
     orbitingRef.current = false;
     focusingRef.current = false;
-    if (wasOrbiting) mapInstanceRef.current?.stop(); // halt the easeTo that's driving the turn
   }
 
   /* Rotate with ONE long, linear easeTo per step — never `setBearing` in a rAF loop.
@@ -756,8 +750,10 @@ export function MapScreen({
       setSelectedEvent(null); setPreviewEvent(null); setPreviewPos(null);
       setShowChabadHouse(false); setShowAdminLocation(false);
     } else {
-      // tapping the bubble opens the full recommendation (same sheet as the home feed)
-      setSelectedRec(pt.data);
+      // one tack → the recommendation; a stack → the list of everyone who recommended this place
+      const d = pt.data as any;
+      if (d.__group) { setRecList(d.posts); setSelectedRec(null); }
+      else { setSelectedRec(d); setRecList(null); }
       setSelectedEvent(null); setPreviewEvent(null); setPreviewPos(null);
       setSelectedMeetup(null); setShowMeetup(false); setShowChabadHouse(false); setShowAdminLocation(false);
     }
@@ -920,13 +916,52 @@ export function MapScreen({
     };
   }, [mapReady]);
 
-  /* ── Fly to a focused location (e.g. "open in map" from a recommendation) ── */
+  /* ── Fly to a focused location (e.g. "open in map" from a recommendation or a shared place card) ── */
   useEffect(() => {
     if (!focusLocation || !mapInstanceRef.current) return;
     setMapFilter(f => (f === 'all' || f === 'places') ? f : 'all');
-    mapInstanceRef.current.flyTo({ center: [focusLocation.longitude, focusLocation.latitude], zoom: 15, essential: true });
+
+    const { latitude, longitude, placeId } = focusLocation;
+
+    if (placeId) {
+      // Shared place → do exactly what tapping its pin does: fly in, tilt, orbit, and open the sheet.
+      // A short delay lets the filter flip above take effect (so the pin exists) before we select it.
+      openPlaceOnMap(`admin:${placeId}`, longitude, latitude);
+    } else {
+      mapInstanceRef.current.flyTo({ center: [longitude, latitude], zoom: 15, essential: true });
+    }
     onFocusHandled?.();
   }, [focusLocation, mapReady]);
+
+  /* Open a place's pin from elsewhere in the app (a chat card, a link). Mirrors a real pin tap:
+     selects it (so a rebuilt marker keeps the selected look), opens the sheet, and runs the focus
+     animation + orbit. The point lives in pointByIdRef whether or not its marker is on screen yet. */
+  function openPlaceOnMap(id: string, lng: number, lat: number) {
+    const pt = pointByIdRef.current.get(id);
+    // Set the selection first, so if the marker is (re)built by the fly-in it's born selected.
+    selectedIdRef.current = id;
+
+    if (pt?.type === 'admin') {
+      setShowAdminLocation(true);
+      setSelectedAdminLocation(pt.data as AdminLocation);
+    } else {
+      // Arrived before loadLocations finished (or the pin was filtered out) — fetch the row so the
+      // sheet still opens. The fly-in below doesn't wait on this.
+      const rawId = id.startsWith('admin:') ? id.slice(6) : id;
+      supabase.from('admin_locations').select('*').eq('id', rawId).maybeSingle()
+        .then(({ data }) => {
+          if (data && selectedIdRef.current === id) { // still the active selection
+            setSelectedAdminLocation(data as AdminLocation);
+            setShowAdminLocation(true);
+          }
+        });
+    }
+
+    const marker = markerMapRef.current.get(id);
+    if (marker) setPinSelected(marker.el, true); // gives the swing too
+
+    focusPin(lng, lat);
+  }
 
   /* ── Render admin-drawn central areas (polygons from the DB, shown to everyone) ── */
   useEffect(() => {
@@ -1577,9 +1612,15 @@ export function MapScreen({
         <RecommendationModal
           rec={selectedRec}
           currentUserId={userId}
-          onClose={() => { setSelectedRec(null); clearRef.current(); }}
+          onClose={() => { setSelectedRec(null); if (!recList) clearRef.current(); }}
         />
       )}
+
+      <RecommendationListSheet
+        recs={recList}
+        onOpen={(rec) => setSelectedRec(rec)}
+        onClose={() => { setRecList(null); clearRef.current(); }}
+      />
 
       <AdminLocationBottomSheet
         isOpen={showAdminLocation}
