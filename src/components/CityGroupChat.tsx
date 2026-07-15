@@ -5,7 +5,7 @@ import { MessageBubble } from './MessageBubble';
 import { ImageBubble } from './ImageBubble';
 import { EventChatCard } from './EventChatCard';
 import { PlaceChatCard } from './PlaceChatCard';
-import { parsePlace } from '../utils/placeMessage';
+import { parsePlace, type PlacePayload } from '../utils/placeMessage';
 import { EventDetailsModal } from './EventDetailsModal';
 import { parseEvent } from '../utils/eventMessage';
 import type { Event } from '../lib/supabase';
@@ -32,7 +32,7 @@ interface CityGroupChatProps {
   countryCode: string; countryFlag: string; cityName: string; cityEmoji: string;
   currentUserId: string; currentUserName: string; currentUserAvatar: string | null;
   onClose: () => void;
-  onOpenMapAt?: (lat: number, lng: number, placeId?: string) => void;
+  onOpenMapAt?: (lat: number, lng: number, placeId?: string, place?: PlacePayload) => void;
   onNavigateToUserProfile?: (userId: string) => void;
 }
 
@@ -965,7 +965,7 @@ export function CityGroupChat({
                       {msg.display_name}
                     </span>
                   )}
-                  <PlaceChatCard data={parsePlace(msg.content).place!} onClick={() => { const pl = parsePlace(msg.content).place!; onOpenMapAt?.(pl.lat, pl.lng, pl.id); }} />
+                  <PlaceChatCard data={parsePlace(msg.content).place!} onClick={() => { const pl = parsePlace(msg.content).place!; onOpenMapAt?.(pl.lat, pl.lng, pl.id, pl); }} />
                 </div>
               ) : msg.type === 'text' ? (
                 /* iMessage-exact bubble (single SVG path, stretchable, fixed tail) */

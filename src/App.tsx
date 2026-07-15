@@ -7,6 +7,7 @@ import { OnboardingScreen } from './components/OnboardingScreen';
 import { CreateProfileWizard } from './components/CreateProfileWizard';
 import { CountrySelectionScreen } from './components/CountrySelectionScreen';
 import { MapScreen } from './components/MapScreen';
+import type { PlacePayload } from './utils/placeMessage';
 import { AdminDashboard } from './components/AdminDashboard';
 import { MessagesScreen } from './components/MessagesScreen';
 import { RequestsScreen } from './components/RequestsScreen';
@@ -28,7 +29,7 @@ function App() {
   const [selectedCountries, setSelectedCountries] = useState<Set<string>>(new Set());
   const [viewingUserId, setViewingUserId] = useState<string | null>(null);
   const [profileBackScreen, setProfileBackScreen] = useState<Screen>('home');
-  const [mapFocus, setMapFocus] = useState<{ latitude: number; longitude: number; placeId?: string } | null>(null);
+  const [mapFocus, setMapFocus] = useState<{ latitude: number; longitude: number; placeId?: string; place?: PlacePayload } | null>(null);
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
   const [chatOtherUserId, setChatOtherUserId] = useState<string | null>(null);
   const [openCreate, setOpenCreate] = useState(false);
@@ -422,7 +423,7 @@ function App() {
         onCreateClick={goCreate}
         onMyEventsClick={() => setCurrentScreen('myEvents')}
         onNavigateToCountrySelection={navigateToCountrySelection}
-        onOpenMapAt={(lat: number, lng: number, placeId?: string) => { setMapFocus({ latitude: lat, longitude: lng, placeId }); setCurrentScreen('map'); }}
+        onOpenMapAt={(lat: number, lng: number, placeId?: string, place?: PlacePayload) => { setMapFocus({ latitude: lat, longitude: lng, placeId, place }); setCurrentScreen('map'); }}
         onNavigateToUserProfile={(userId: string) => { setViewingUserId(userId); setCurrentScreen('userProfile'); }}
         initialCountries={Array.from(selectedCountries)}
       />
@@ -495,7 +496,7 @@ function App() {
         currentUserId={currentUserId!}
         otherUserId={chatOtherUserId}
         onBack={() => setCurrentScreen('messages')}
-        onOpenMapAt={(lat: number, lng: number, placeId?: string) => { setMapFocus({ latitude: lat, longitude: lng, placeId }); setCurrentScreen('map'); }}
+        onOpenMapAt={(lat: number, lng: number, placeId?: string, place?: PlacePayload) => { setMapFocus({ latitude: lat, longitude: lng, placeId, place }); setCurrentScreen('map'); }}
         onNavigateToUserProfile={(userId: string) => {
           setViewingUserId(userId);
           setCurrentScreen('userProfile');

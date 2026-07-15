@@ -8,7 +8,7 @@ import { PlaceChatCard } from './PlaceChatCard';
 import { EventDetailsModal } from './EventDetailsModal';
 import { MessageBubble } from './MessageBubble';
 import { parseEvent } from '../utils/eventMessage';
-import { parsePlace } from '../utils/placeMessage';
+import { parsePlace, type PlacePayload } from '../utils/placeMessage';
 
 type Message = {
   id: string;
@@ -30,7 +30,7 @@ type ChatScreenProps = {
   currentUserId: string;
   otherUserId: string;
   onBack: () => void;
-  onOpenMapAt?: (lat: number, lng: number, placeId?: string) => void;
+  onOpenMapAt?: (lat: number, lng: number, placeId?: string, place?: PlacePayload) => void;
   onNavigateToUserProfile?: (userId: string) => void;
 };
 
@@ -351,7 +351,7 @@ export function ChatScreen({ conversationId, currentUserId, otherUserId, onBack,
           {evt ? (
             <div style={popStyle}><EventChatCard data={evt} onClick={() => openEventById(evt.id)} /></div>
           ) : plc ? (
-            <div style={popStyle}><PlaceChatCard data={plc} onClick={() => onOpenMapAt?.(plc.lat, plc.lng, plc.id)} /></div>
+            <div style={popStyle}><PlaceChatCard data={plc} onClick={() => onOpenMapAt?.(plc.lat, plc.lng, plc.id, plc)} /></div>
           ) : (
             <div style={{ maxWidth: '78%', ...popStyle }}>
               <MessageBubble mine={!mine} tail={isLast} color={mine ? '#FFD4A8' : '#FFFFFF'} contentStyle={{ padding: '7px 14px' }}>

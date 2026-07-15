@@ -10,7 +10,7 @@ import 'mapbox-gl/dist/mapbox-gl.css';
 interface CreateMeetupFlowProps {
   isOpen: boolean;
   onClose: () => void;
-  onSuccess: () => void;
+  onSuccess: (location?: { latitude: number; longitude: number }) => void;
   userId: string;
   initialLocation?: { latitude: number; longitude: number };
 }
@@ -206,7 +206,7 @@ export function CreateMeetupFlow({
         return;
       }
       triggerSuccess();
-      setTimeout(() => { onSuccess(); onClose(); }, 2200);
+      setTimeout(() => { onSuccess({ latitude, longitude }); onClose(); }, 2200);
     } catch (err) {
       showToast('שגיאה ביצירת הישיבה: ' + (err instanceof Error ? err.message : String(err)));
     } finally {

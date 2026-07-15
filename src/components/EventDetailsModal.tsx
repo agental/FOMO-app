@@ -49,16 +49,21 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
   const [showShare, setShowShare] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  /* ── bottom-sheet mode (variant='sheet'): opens to half, drag up to full, drag down to close ── */
+  /* ── bottom-sheet mode (variant='sheet'): the SAME snap machine as the place sheet — three detents
+     (peek / half / full), scroll-to-expand, and drag-down to close, so an event feels identical. ── */
   const winH = typeof window !== 'undefined' ? window.innerHeight : 800;
   const SHEET_FULL = Math.round(winH * 0.92);
   const SHEET_HALF = Math.round(winH * 0.55);
-  const COLLAPSED  = SHEET_FULL - SHEET_HALF; // translateY offset that leaves the half visible
-  const [snap, setSnap]       = useState<'half' | 'full'>('half');
+  const SHEET_PEEK = Math.round(winH * 0.27);
+  const OFF_HALF   = SHEET_FULL - SHEET_HALF;
+  const OFF_PEEK   = SHEET_FULL - SHEET_PEEK;
+  const [snap, setSnap]       = useState<'peek' | 'half' | 'full'>('half');
   const [dragDy, setDragDy]   = useState(0);
   const [dragging, setDragging] = useState(false);
   const [entered, setEntered] = useState(false);
   const dragStartY = useRef(0);
+  const cardDrag   = useRef(false);
+  const lastY      = useRef(0);
 
   useEffect(() => {
     if (variant !== 'sheet') return;
@@ -68,30 +73,63 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
 
   const closeSheet = () => { setEntered(false); setTimeout(onClose, 320); };
 
-  const basePx = snap === 'full' ? 0 : COLLAPSED;
+  const basePx = snap === 'full' ? 0 : snap === 'half' ? OFF_HALF : OFF_PEEK;
   const sheetTranslate = !entered ? SHEET_FULL : Math.min(SHEET_FULL, Math.max(0, basePx + dragDy));
 
-  const onDragStart = (y: number) => { dragStartY.current = y; setDragging(true); };
-  const onDragMove  = (y: number) => { if (dragging) setDragDy(y - dragStartY.current); };
-  const onDragEnd   = () => {
+  const UP = -55, DOWN = 90;
+  const onDragEnd = () => {
     const d = dragDy;
-    setDragging(false);
-    setDragDy(0);
-    if (snap === 'half') {
-      if (d <= -55) setSnap('full');
-      else if (d >= 90) closeSheet();
-    } else {
-      if (d >= 120) setSnap('half');
+    setDragging(false); setDragDy(0);
+    if (snap === 'full') {
+      if (d >= 120) { setSnap('half'); scrollRef.current?.scrollTo({ top: 0 }); }
+    } else if (snap === 'half') {
+      if (d <= UP) setSnap('full');
+      else if (d >= DOWN) setSnap('peek');
+    } else { // peek
+      if (d <= UP) setSnap('half');
+      else if (d >= DOWN) closeSheet();
     }
+  };
+  const onMouseDown = (e: React.MouseEvent) => { dragStartY.current = e.clientY; setDragging(true); };
+
+  /* One finger, two jobs: scroll the content, or move the whole card. The card takes over the moment
+     the content underneath has no scroll left to give — hand-off happens mid-gesture. */
+  const onContentTouchStart = (e: React.TouchEvent) => {
+    const y = e.touches[0].clientY;
+    dragStartY.current = y; lastY.current = y;
+    const inScroll = !!scrollRef.current && scrollRef.current.contains(e.target as Node);
+    cardDrag.current = !inScroll || snap !== 'full' || (scrollRef.current?.scrollTop ?? 0) <= 0;
+  };
+  const onContentTouchMove = (e: React.TouchEvent) => {
+    const y = e.touches[0].clientY;
+    const goingDown = y > lastY.current;
+    lastY.current = y;
+    if (!cardDrag.current) {
+      if (goingDown && (scrollRef.current?.scrollTop ?? 0) <= 0) { cardDrag.current = true; dragStartY.current = y; }
+      else return;
+    }
+    const dy = y - dragStartY.current;
+    if (snap === 'full' && dy < 0) { cardDrag.current = false; setDragging(false); setDragDy(0); return; }
+    setDragging(true); setDragDy(dy);
+  };
+  const onContentTouchEnd = () => {
+    if (!cardDrag.current) return;
+    cardDrag.current = false;
+    if (dragging) onDragEnd();
+  };
+  const onContentWheel = (e: React.WheelEvent) => {
+    if (e.deltaY <= 0) return;
+    if (snap === 'peek') setSnap('half');
+    else if (snap === 'half') setSnap('full');
   };
 
   useEffect(() => {
     if (!dragging) return;
-    const mm = (e: MouseEvent) => onDragMove(e.clientY);
-    const mu = () => onDragEnd();
-    document.addEventListener('mousemove', mm);
-    document.addEventListener('mouseup', mu);
-    return () => { document.removeEventListener('mousemove', mm); document.removeEventListener('mouseup', mu); };
+    const move = (e: MouseEvent) => setDragDy(e.clientY - dragStartY.current);
+    const up   = () => onDragEnd();
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', up);
+    return () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); };
   }, [dragging, dragDy, snap]);
 
   const currentUserId = propUserId || '00000000-0000-0000-0000-000000000001';
@@ -517,16 +555,18 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
             height: SHEET_FULL,
             transform: `translateY(${sheetTranslate}px)`,
             transition: dragging ? 'none' : 'transform 0.34s cubic-bezier(0.22,1,0.3,1)',
+            display: 'flex', flexDirection: 'column',
           }}
+          onTouchStart={onContentTouchStart}
+          onTouchMove={onContentTouchMove}
+          onTouchEnd={onContentTouchEnd}
+          onWheel={onContentWheel}
         >
-          {/* drag handle (drag up to expand, down to close) */}
+          {/* drag handle */}
           <div
             className="w-full pt-3 pb-2 flex justify-center cursor-grab active:cursor-grabbing"
-            style={{ touchAction: 'none' }}
-            onMouseDown={(e) => onDragStart(e.clientY)}
-            onTouchStart={(e) => onDragStart(e.touches[0].clientY)}
-            onTouchMove={(e) => onDragMove(e.touches[0].clientY)}
-            onTouchEnd={onDragEnd}
+            style={{ flexShrink: 0, touchAction: 'none' }}
+            onMouseDown={onMouseDown}
           >
             <div className="w-11 h-1.5 bg-gray-300 rounded-full" />
           </div>
@@ -543,22 +583,29 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
 
           <div
             ref={scrollRef}
-            className="overflow-y-auto overscroll-contain"
-            style={{ height: 'calc(100% - 34px)', paddingBottom: isOwner ? 24 : 104 }}
+            style={{
+              flex: '1 1 auto', minHeight: 0,
+              paddingBottom: isOwner ? 24 : 104,
+              // Scrolls only when the card is full and not being dragged — otherwise the card moves,
+              // not the content (and iOS can't rubber-band the body inside the sheet).
+              overflowY: snap === 'full' && !dragging ? 'auto' : 'hidden',
+              overscrollBehavior: 'none',
+              touchAction: snap === 'full' && !dragging ? 'pan-y' : 'none',
+            }}
           >
             {detailBody}
           </div>
         </div>
 
-        {/* CTA pinned to the viewport (sibling of the sheet, so it stays visible even at half —
-            a position:fixed child of the translated sheet would anchor to the sheet, not the screen) */}
+        {/* CTA pinned to the viewport (sibling of the sheet). Hidden at peek so it doesn't float over
+            the map while the card is tucked away. */}
         <div
           className="fixed bottom-0 left-0 right-0 z-[60] bg-white px-5"
           style={{
             paddingTop: 14,
             paddingBottom: 'max(20px, env(safe-area-inset-bottom))',
             boxShadow: '0 -2px 16px rgba(0,0,0,0.08)',
-            transform: entered ? 'translateY(0)' : 'translateY(100%)',
+            transform: entered && snap !== 'peek' ? 'translateY(0)' : 'translateY(100%)',
             transition: 'transform 0.34s cubic-bezier(0.22,1,0.3,1)',
           }}
         >

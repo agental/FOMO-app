@@ -39,6 +39,7 @@ const DAY_NAMES = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמיש
 const HEEBO = "'Heebo', sans-serif";
 const INK   = '#111827';
 const MUTED = '#9AA0AC';
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function getOpenStatus(hours: Record<string, { open: string; close: string; closed: boolean }> | null | undefined) {
   if (!hours) return null;
@@ -219,6 +220,9 @@ const pillBase: React.CSSProperties = {
 
 export function AdminLocationBottomSheet({ isOpen, onClose, location, currentUserId, userLocation }: AdminLocationBottomSheetProps) {
   const uid = useId();
+  // A tapped base-map POI is fed in as a synthetic place keyed by a text id (not an admin_locations
+  // uuid). Its photos/upload live only on real admin places; save + reviews work for both.
+  const isRealPlace = !!location && UUID_RE.test(location.id);
 
   /* ── sheet snap machine: three detents, like Apple Maps ──
      peek  — title + address only; the map is yours again
@@ -277,8 +281,10 @@ export function AdminLocationBottomSheet({ isOpen, onClose, location, currentUse
       : location.image_url ? [location.image_url] : []);
     // …then refresh from the DB, so photos an admin added earlier are always remembered even if the
     // map's copy of this place hasn't reloaded yet.
-    supabase.from('admin_locations').select('place_photos').eq('id', location.id).maybeSingle()
-      .then(({ data }) => { if (data?.place_photos?.length) setPhotos(data.place_photos); });
+    if (isRealPlace) {
+      supabase.from('admin_locations').select('place_photos').eq('id', location.id).maybeSingle()
+        .then(({ data }) => { if (data?.place_photos?.length) setPhotos(data.place_photos); });
+    }
     fetchReviews();
     loadPlaceSavers(location.id).then(setSavers);
     const id = requestAnimationFrame(() => setEntered(true));
@@ -493,7 +499,7 @@ export function AdminLocationBottomSheet({ isOpen, onClose, location, currentUse
   const sheetTranslate = !entered ? SHEET_FULL : Math.min(SHEET_FULL, Math.max(0, basePx + dragDy));
 
   // The map is the point of this screen — the lower the sheet sits, the clearer it gets.
-  const scrim = !entered ? 0 : 0.42 * (1 - Math.min(1, sheetTranslate / OFF_PEEK)) + 0.04;
+  const scrim = 0; // no dark backdrop — keep the map fully bright behind the sheet
 
   return (
     <>
@@ -644,7 +650,7 @@ export function AdminLocationBottomSheet({ isOpen, onClose, location, currentUse
             <PhotoMosaic
               photos={photos}
               color={pinColor}
-              canAdd={isAdmin}
+              canAdd={isAdmin && isRealPlace}
               uploading={uploading}
               onOpen={(i) => setLightbox(i)}
               onAdd={() => fileRef.current?.click()}

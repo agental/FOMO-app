@@ -1,30 +1,31 @@
 /**
- * A recommendation on the map = a thumbtack with the recommender's photo as its head.
+ * A recommendation on the map = a round photo pin: the recommender's avatar as a glossy
+ * "coin" that sits on the spot above a soft ground shadow.
  *
- * Why a thumbtack: every other pin is a teardrop (places, Chabad) or a plain circle (events,
- * meetups). A tack with a needle + a ground shadow is a distinct silhouette, so a recommendation
- * never reads as one of those — and the photo-as-head says "a person pinned their take here".
+ * Why a circle: places are teardrops and events/meetups are plain dots, so a photo-in-a-ring
+ * is its own silhouette — and the photo-as-head says "a person pinned their take here".
  *
  * When several recommendations share one spot they arrive as a GROUP: the head becomes a small fan
  * of photos with a count badge, so a popular place is one tidy stack instead of a pile of overlaps.
  *
- * The tip sits at the bottom-centre, so a Mapbox marker with anchor 'bottom' plants it on the coord.
+ * The bottom-centre is the anchor point (just under the coin), so a Mapbox marker with
+ * anchor 'bottom' plants it on the coord.
  */
 export interface RecommendationPinOpts {
   avatarUrl?: string | null;
   name?: string | null;              // for the initial fallback when there's no photo
-  color: string;                     // category colour → the head ring + needle accent
+  color: string;                     // category colour → the head ring
   emoji: string;                     // category badge on the head
   count?: number;                    // group size; >1 draws the fan + count badge
   extraAvatars?: (string | null)[];  // up to 2 more photos for the fan behind the head
 }
 
 const W = 62;
-const H = 74;
-const HEAD = 40;               // avatar diameter
+const H = 56;
+const HEAD = 40;                        // avatar diameter
 const HEAD_CX = W / 2;
-const HEAD_CY = 22;            // head centre
-const TIP_Y = H - 3;           // where the needle bites the map
+const HEAD_CY = 28;                     // head centre
+const SHADOW_Y = H - 3;                 // soft ground shadow, just under the coin
 
 function avatarNode(url: string | null | undefined, name: string | null | undefined, size: number, ring: string): HTMLElement {
   const el = document.createElement('div');
@@ -62,26 +63,14 @@ export function createRecommendationPin(opts: RecommendationPinOpts): HTMLElemen
   const wrap = document.createElement('div');
   wrap.style.cssText = `position:relative;width:${W}px;height:${H}px;line-height:0;`;
 
-  /* ── needle + ground shadow (SVG behind everything) ── */
+  /* ── soft ground shadow (SVG behind everything) ── */
   const svg = document.createElementNS(NS, 'svg');
   svg.setAttribute('width', String(W));
   svg.setAttribute('height', String(H));
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
   svg.style.cssText = 'position:absolute;top:0;left:0;overflow:visible;pointer-events:none;';
-
-  const gid = `rec-${Math.random().toString(36).slice(2, 7)}`;
   svg.innerHTML = `
-    <defs>
-      <linearGradient id="${gid}-steel" x1="0" y1="0" x2="1" y2="0">
-        <stop offset="0" stop-color="#C7CCD4"/>
-        <stop offset="0.45" stop-color="#EEF1F5"/>
-        <stop offset="1" stop-color="#9AA1AD"/>
-      </linearGradient>
-    </defs>
-    <ellipse cx="${HEAD_CX}" cy="${TIP_Y - 1}" rx="7" ry="2.4" fill="rgba(0,0,0,0.28)"/>
-    <path d="M${HEAD_CX - 4.4},${HEAD_CY + 12} L${HEAD_CX + 4.4},${HEAD_CY + 12} L${HEAD_CX + 0.9},${TIP_Y} Q${HEAD_CX},${TIP_Y + 1.6} ${HEAD_CX - 0.9},${TIP_Y} Z"
-          fill="url(#${gid}-steel)" stroke="rgba(0,0,0,0.10)" stroke-width="0.5"/>
-    <ellipse cx="${HEAD_CX}" cy="${HEAD_CY + 12}" rx="5" ry="2" fill="${color}" opacity="0.9"/>
+    <ellipse cx="${HEAD_CX}" cy="${SHADOW_Y}" rx="9" ry="2.6" fill="rgba(0,0,0,0.22)"/>
   `;
   wrap.appendChild(svg);
 
@@ -108,6 +97,8 @@ export function createRecommendationPin(opts: RecommendationPinOpts): HTMLElemen
   const front = avatarNode(avatarUrl, name, HEAD, color);
   front.style.position = 'relative';
   front.style.zIndex = '2';
+  // lift the coin off its ground shadow
+  front.style.boxShadow = `${front.style.boxShadow}, 0 4px 9px rgba(0,0,0,0.22)`;
   head.appendChild(front);
 
   // glossy plastic highlight — sells the pushpin look
