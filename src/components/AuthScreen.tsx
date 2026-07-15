@@ -1,23 +1,37 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import { AlertCircle, MapPin } from 'lucide-react';
 import { placePinColor } from '../utils/placePinColor';
+import { createPlacePinSVG } from '../utils/createLocationPin';
+import { createChabadPinSVG } from '../utils/createChabadPin';
 
 interface AuthScreenProps {
   onAuthSuccess: (userId: string) => void; // kept for API compatibility; OAuth resolves via App's onAuthStateChange
 }
 
-/* City chats, shown as a gently marquee-ing strip at the top — a live taste of the feature. */
+/* City chats, shown as a gently marquee-ing strip at the top — a live taste of the feature.
+   Each carries a city emoji + IANA timezone, so the strip shows the real local time there. */
+// One capital per country (backpacker-country capitals, East first).
 const CITIES = [
-  { flag: '🇹🇭', name: 'בנגקוק' },
-  { flag: '🇮🇱', name: 'תל אביב' },
-  { flag: '🇮🇳', name: 'גואה' },
-  { flag: '🇵🇹', name: 'ליסבון' },
-  { flag: '🇬🇪', name: 'טביליסי' },
-  { flag: '🇻🇳', name: 'האנוי' },
-  { flag: '🇨🇴', name: 'מדיין' },
-  { flag: '🇬🇷', name: 'סנטוריני' },
+  { emoji: '🛕', name: 'בנגקוק',   tz: 'Asia/Bangkok' },       // Thailand
+  { emoji: '🏙️', name: 'מנילה',    tz: 'Asia/Manila' },        // Philippines
+  { emoji: '🛺', name: 'קולומבו',  tz: 'Asia/Colombo' },       // Sri Lanka
+  { emoji: '🏔️', name: 'קטמנדו',   tz: 'Asia/Kathmandu' },     // Nepal
+  { emoji: '🍜', name: 'האנוי',    tz: 'Asia/Ho_Chi_Minh' },   // Vietnam
+  { emoji: '🛶', name: 'פנום פן',  tz: 'Asia/Phnom_Penh' },    // Cambodia
+  { emoji: '🌴', name: 'ג׳קרטה',   tz: 'Asia/Jakarta' },       // Indonesia
+  { emoji: '🕌', name: 'ניו דלהי', tz: 'Asia/Kolkata' },       // India
+  { emoji: '🌆', name: 'בוגוטה',   tz: 'America/Bogota' },      // Colombia
+  { emoji: '🦙', name: 'לימה',     tz: 'America/Lima' },        // Peru
+  { emoji: '🏛️', name: 'ברזיליה',  tz: 'America/Sao_Paulo' },  // Brazil
 ];
+
+/* Current wall-clock time in a city, "HH:mm" (24h). Empty on any bad zone. */
+function localTime(tz: string, now: Date): string {
+  try {
+    return new Intl.DateTimeFormat('he-IL', { timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false }).format(now);
+  } catch { return ''; }
+}
 
 const AVATAR_B = 'https://i.pravatar.cc/150?img=8';
 
@@ -35,6 +49,12 @@ const INK = '#141821';
 export function AuthScreen(_props: AuthScreenProps) {
   const [error, setError] = useState<string | null>(null);
   const [busy,  setBusy]  = useState<'google' | 'apple' | null>(null);
+  const [now,   setNow]   = useState(() => new Date()); // keeps the city clocks live
+
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 30000);
+    return () => clearInterval(id);
+  }, []);
 
   // OAuth sign-in (Google / Apple only). Native bridge is the only path that works in the WebView:
   // Google/Apple block OAuth in embedded webviews, so the auth URL is handed to App.js which opens
@@ -70,7 +90,7 @@ export function AuthScreen(_props: AuthScreenProps) {
     <button
       type="button" onClick={() => handleOAuth('apple')} disabled={busy !== null}
       style={{
-        width: '100%', height: 56, borderRadius: 16, border: 'none', background: '#000', color: '#fff',
+        width: '100%', height: 56, borderRadius: 9999, border: 'none', background: '#000', color: '#fff',
         display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
         fontSize: 16, fontWeight: 700, fontFamily: HEEBO,
         cursor: busy ? 'default' : 'pointer', opacity: busy && busy !== 'apple' ? 0.5 : 1,
@@ -92,7 +112,7 @@ export function AuthScreen(_props: AuthScreenProps) {
     <button
       type="button" onClick={() => handleOAuth('google')} disabled={busy !== null}
       style={{
-        width: '100%', height: 56, borderRadius: 16, background: '#fff', color: '#3C4043', border: '1px solid #DADCE0',
+        width: '100%', height: 56, borderRadius: 9999, background: '#fff', color: '#3C4043', border: '1px solid #DADCE0',
         display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
         fontSize: 16, fontWeight: 700, fontFamily: HEEBO,
         cursor: busy ? 'default' : 'pointer', opacity: busy && busy !== 'google' ? 0.5 : 1,
@@ -117,35 +137,48 @@ export function AuthScreen(_props: AuthScreenProps) {
     <div
       dir="rtl"
       style={{
-        minHeight: '100dvh', width: '100%', position: 'relative',
+        // Locked to exactly the viewport height (not minHeight) so the screen can't grow past it
+        // and scroll. box-sizing:border-box (global) keeps the safe-area padding inside the 100dvh.
+        height: '100dvh', width: '100%', position: 'relative',
         display: 'flex', flexDirection: 'column', overflow: 'hidden',
+        overscrollBehavior: 'none', touchAction: 'none',
         fontFamily: HEEBO,
         background: 'linear-gradient(180deg, #FFFFFF 0%, #FFFFFF 70%, #FFF7ED 100%)',
         paddingTop: 'env(safe-area-inset-top)',
       }}
     >
       {/* ── Wordmark ── */}
-      <div style={{ textAlign: 'center', paddingTop: 18, paddingBottom: 12 }}>
+      <div style={{ flexShrink: 0, textAlign: 'center', paddingTop: 18, paddingBottom: 12 }}>
         <span dir="ltr" style={{ fontSize: 30, fontWeight: 900, color: INK, letterSpacing: '-1.5px', fontFamily: HEEBO }}>
           FOMO<span style={{ color: '#F97316' }}>.</span>
         </span>
       </div>
 
-      {/* ── City-chats strip (marquee) ── */}
-      <div style={{ borderTop: '1px solid #F1F1F3', borderBottom: '1px solid #F1F1F3', overflow: 'hidden', padding: '11px 0' }}>
-        <div className="fomo-marquee" style={{ display: 'flex', width: 'max-content', animation: 'fomoMarquee 34s linear infinite' }}>
-          {[...CITIES, ...CITIES].map((c, i) => (
-            <div key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '0 16px', borderInlineEnd: '1px solid #F1F1F3', whiteSpace: 'nowrap' }}>
-              <span style={{ fontSize: 16 }}>{c.flag}</span>
-              <span style={{ fontSize: 13.5, fontWeight: 700, color: '#3A3F4A', fontFamily: HEEBO }}>{c.name}</span>
-              <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#22C55E', boxShadow: '0 0 0 3px rgba(34,197,94,0.18)' }} />
+      {/* ── City-chats strip (marquee) ──
+             The track is forced dir=ltr so the -50% loop is exact and never opens a gap (RTL made
+             the seam unreliable); each chip is dir=rtl so the Hebrew name still reads correctly. */}
+      <div dir="ltr" style={{ flexShrink: 0, overflow: 'hidden', padding: '12px 0' }}>
+        <div className="fomo-marquee" style={{ display: 'flex', width: 'max-content', willChange: 'transform', animation: 'fomoMarquee 46s linear infinite' }}>
+          {/* Two identical halves; the animation shifts the track by exactly one half (-50%), so the
+              loop is perfectly continuous with no empty gap — the second half is already on screen
+              before the first scrolls off. A short divider sits before each city. */}
+          {[0, 1].map(half => (
+            <div key={half} aria-hidden={half === 1} style={{ display: 'flex', flexShrink: 0 }}>
+              {CITIES.map((c, i) => (
+                <div key={i} dir="rtl" style={{ display: 'inline-flex', alignItems: 'center', whiteSpace: 'nowrap' }}>
+                  <span aria-hidden style={{ width: 1, height: 16, background: '#E6E6EA', margin: '0 16px', flexShrink: 0 }} />
+                  <span style={{ fontSize: 16 }}>{c.emoji}</span>
+                  <span style={{ fontSize: 13.5, fontWeight: 700, color: '#3A3F4A', fontFamily: HEEBO, marginInlineStart: 7 }}>{c.name}</span>
+                  <span dir="ltr" style={{ fontSize: 12.5, fontWeight: 600, color: '#9AA0AC', fontFamily: HEEBO, marginInlineEnd: 10 }}>{localTime(c.tz, now)}</span>
+                </div>
+              ))}
             </div>
           ))}
         </div>
       </div>
 
       {/* ── Heading ── */}
-      <div style={{ padding: '26px 26px 0', animation: 'fomoFadeUp 0.7s cubic-bezier(0.22,1,0.36,1) both' }}>
+      <div style={{ flexShrink: 0, padding: '26px 26px 0', animation: 'fomoFadeUp 0.7s cubic-bezier(0.22,1,0.36,1) both' }}>
         <h1 style={{ margin: 0, fontSize: 28, lineHeight: 1.2, fontWeight: 900, color: INK, fontFamily: HEEBO }}>
           מצא חברים לטיול,<br />בכל מקום בעולם 🎉
         </h1>
@@ -154,10 +187,12 @@ export function AuthScreen(_props: AuthScreenProps) {
         </p>
       </div>
 
-      {/* ── Floating feature-preview cards ── */}
-      <div style={{ position: 'relative', flex: 1, minHeight: 300, margin: '8px 0' }}>
+      {/* ── Floating feature-preview cards (each in its own vertical band so none overlap).
+             flex:1 + minHeight:0 makes THIS the shock-absorber, so the fixed strips above/below
+             (which are flexShrink:0) never get squeezed — that squeeze was clipping the city strip. ── */}
+      <div style={{ position: 'relative', flex: 1, minHeight: 0, margin: '8px 0' }}>
         {/* City chat — the Ko Phangan group */}
-        <div className="fomo-float" style={{ ...floatCard, top: '4%', insetInlineEnd: '5%', animation: 'fomoFloatA 6s ease-in-out infinite' }}>
+        <div className="fomo-float" style={{ ...floatCard, top: '1%', insetInlineEnd: '5%', width: 165, animation: 'fomoFloatA 6s ease-in-out infinite' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 6 }}>
             <span style={{
               width: 24, height: 24, borderRadius: '50%', flexShrink: 0,
@@ -172,28 +207,17 @@ export function AuthScreen(_props: AuthScreenProps) {
           <div style={bubble}>מי בא לחוף הפלמינגו עכשיו? 🏖️</div>
         </div>
 
-        {/* Map */}
-        <div className="fomo-float" style={{ ...floatCard, top: '30%', insetInlineStart: '6%', width: 150, animation: 'fomoFloatB 7s ease-in-out infinite' }}>
-          <div style={{ position: 'relative', height: 74, borderRadius: 12, overflow: 'hidden', background: 'linear-gradient(135deg,#E8F0E4,#DDE7F0)' }}>
-            {/* faux roads */}
-            <div style={{ position: 'absolute', top: 26, left: -4, right: -4, height: 6, background: '#fff', opacity: 0.9, transform: 'rotate(-8deg)' }} />
-            <div style={{ position: 'absolute', top: 0, bottom: 0, left: 52, width: 6, background: '#fff', opacity: 0.9, transform: 'rotate(6deg)' }} />
-            <div style={{ position: 'absolute', top: 40, right: 14, width: 34, height: 24, borderRadius: 6, background: '#CFE3C4' }} />
-            {/* teardrop pin */}
-            <div style={{ position: 'absolute', left: '50%', top: '46%', transform: 'translate(-50%,-100%)' }}>
-              <div style={{ width: 20, height: 20, borderRadius: '50% 50% 50% 0', transform: 'rotate(45deg)', background: 'linear-gradient(135deg,#FB923C,#EA580C)', boxShadow: '0 3px 6px rgba(234,88,12,0.4)' }}>
-                <div style={{ width: 7, height: 7, borderRadius: '50%', background: '#fff', position: 'absolute', top: 6.5, left: 6.5, transform: 'rotate(-45deg)' }} />
-              </div>
-            </div>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 7 }}>
+        {/* Map — real Mapbox tile with the app's actual Chabad + place pins */}
+        <div className="fomo-float" style={{ ...floatCard, top: '22%', insetInlineStart: '5%', width: 170, animation: 'fomoFloatB 7s ease-in-out infinite' }}>
+          <MiniMap />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 8 }}>
             <MapPin size={13} color="#EA580C" strokeWidth={2.4} />
-            <span style={{ fontSize: 12, fontWeight: 800, color: INK, fontFamily: HEEBO }}>מקומות שווים לידך</span>
+            <span style={{ fontSize: 12, fontWeight: 800, color: INK, fontFamily: HEEBO }}>מקומות ובתי חב״ד לידך</span>
           </div>
         </div>
 
         {/* Event / home card */}
-        <div className="fomo-float" style={{ ...floatCard, top: '52%', insetInlineEnd: '9%', width: 172, animation: 'fomoFloatC 6.6s ease-in-out infinite' }}>
+        <div className="fomo-float" style={{ ...floatCard, top: '60%', insetInlineEnd: '7%', width: 165, animation: 'fomoFloatC 6.6s ease-in-out infinite' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
             <span style={{ width: 40, height: 40, borderRadius: 12, background: 'linear-gradient(135deg,#F97316,#EA580C)', display: 'grid', placeItems: 'center', fontSize: 20, flexShrink: 0 }}>🎉</span>
             <div style={{ minWidth: 0 }}>
@@ -204,7 +228,7 @@ export function AuthScreen(_props: AuthScreenProps) {
         </div>
 
         {/* Recommendation thumbtack */}
-        <div className="fomo-float" style={{ ...floatCard, top: '76%', insetInlineStart: '12%', animation: 'fomoFloatA 7.4s ease-in-out infinite', animationDelay: '0.5s' }}>
+        <div className="fomo-float" style={{ ...floatCard, top: '82%', insetInlineStart: '9%', width: 168, animation: 'fomoFloatA 7.4s ease-in-out infinite', animationDelay: '0.5s' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <img src={AVATAR_B} alt="" style={{ ...avatarS, boxShadow: '0 0 0 2px #fff, 0 0 0 4px #7A57C2' }} />
             <span style={{ fontSize: 12, fontWeight: 700, color: INK, fontFamily: HEEBO }}>המליץ: הקפה הכי טוב בעיר ☕</span>
@@ -213,7 +237,7 @@ export function AuthScreen(_props: AuthScreenProps) {
       </div>
 
       {/* ── Buttons + legal ── */}
-      <div style={{ padding: '0 26px max(28px, calc(env(safe-area-inset-bottom) + 16px))', animation: 'fomoFadeUp 0.7s 0.06s cubic-bezier(0.22,1,0.36,1) both' }}>
+      <div style={{ flexShrink: 0, padding: '0 26px max(28px, calc(env(safe-area-inset-bottom) + 16px))', animation: 'fomoFadeUp 0.7s 0.06s cubic-bezier(0.22,1,0.36,1) both' }}>
         {error && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 14, padding: '11px 14px', color: '#DC2626', fontSize: 13 }}>
             <AlertCircle size={15} style={{ flexShrink: 0 }} />{error}
@@ -236,7 +260,9 @@ export function AuthScreen(_props: AuthScreenProps) {
         @keyframes fomoFloatC  { 0%,100% { transform:translateY(0) rotate(-2deg); } 50% { transform:translateY(-10px) rotate(-2deg); } }
         @keyframes spin        { to { transform: rotate(360deg); } }
         @media (prefers-reduced-motion: reduce) {
-          .fomo-marquee, .fomo-float { animation: none !important; }
+          /* the city strip stays scrolling on purpose (it's the point of the screen); only the
+             card bob is stilled under reduce-motion */
+          .fomo-float { animation: none !important; }
         }
       `}</style>
     </div>
@@ -255,6 +281,44 @@ const bubble: React.CSSProperties = {
   background: '#F3F4F6', borderRadius: '4px 12px 12px 12px', padding: '7px 11px',
   fontSize: 12.5, color: '#374151', fontFamily: RUBIK, lineHeight: 1.35,
 };
+
+/* The little map preview: a real Mapbox streets tile with the app's own Chabad + place pins
+   dropped on top (the exact SVG builders the live map uses, scaled down). */
+function MiniMap() {
+  const chabadRef = useRef<HTMLDivElement>(null);
+  const beachRef  = useRef<HTMLDivElement>(null);
+  const coffeeRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    chabadRef.current?.replaceChildren(createChabadPinSVG());
+    beachRef.current?.replaceChildren(createPlacePinSVG('🏖️', placePinColor('🏖️')));
+    coffeeRef.current?.replaceChildren(createPlacePinSVG('☕', placePinColor('☕')));
+  }, []);
+
+  const token = import.meta.env.VITE_MAPBOX_TOKEN as string | undefined;
+  const W = 156, H = 78;
+  // Tel-Aviv coastline — pretty, and reads as "places near you". No labels/logo for a clean card.
+  const mapUrl = token
+    ? `https://api.mapbox.com/styles/v1/mapbox/streets-v12/static/34.7691,32.0813,13.4,0/${W}x${H}@2x`
+      + `?access_token=${token}&attribution=false&logo=false`
+    : null;
+
+  const pin: React.CSSProperties = {
+    position: 'absolute', transform: 'translate(-50%,-100%) scale(0.6)', transformOrigin: 'bottom center',
+    lineHeight: 0, pointerEvents: 'none', filter: 'drop-shadow(0 3px 5px rgba(0,0,0,0.28))',
+  };
+
+  return (
+    <div style={{ position: 'relative', height: H, borderRadius: 12, overflow: 'hidden', background: 'linear-gradient(135deg,#DCE7F2,#E7EFE2)' }}>
+      {mapUrl && (
+        <img src={mapUrl} alt="" loading="lazy" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+      )}
+      <div ref={beachRef}  style={{ ...pin, left: '25%', top: '46%' }} />
+      <div ref={chabadRef} style={{ ...pin, left: '55%', top: '66%' }} />
+      <div ref={coffeeRef} style={{ ...pin, left: '80%', top: '43%' }} />
+    </div>
+  );
+}
 
 /* Button busy spinner. `light` = white on dark (Apple); default = orange on white (Google). */
 function Spinner({ light }: { light?: boolean }) {

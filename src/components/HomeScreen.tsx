@@ -11,7 +11,7 @@ import { CreateLocationForm } from './CreateLocationForm';
 import { CreatePostForm } from './CreatePostForm';
 import { EventDetailsModal } from './EventDetailsModal';
 import { AdminLocationBottomSheet } from './AdminLocationBottomSheet';
-import { PlacesFeed } from './PlacesFeed';
+import { CountryGuide } from './CountryGuide';
 import { RecommendationCard } from './RecommendationCard';
 import { RecommendationModal } from './RecommendationModal';
 import { FloatingNavBar } from './FloatingNavBar';
@@ -918,34 +918,13 @@ export function HomeScreen({
         {/* ════════════════ LOCATIONS FEED ════════════════ */}
         {feedMode === 'locations' ? (
           <>
-          {!locationsLoaded ? (
-            <div className="px-4 space-y-4 pt-2">
-              {[1, 2, 3].map(i => (
-                <div key={i} className="animate-pulse">
-                  <div style={{ height: 80, background: '#F3F4F6', borderRadius: 20 }} />
-                </div>
-              ))}
-            </div>
-          ) : (adminLocations.length === 0 && recommendations.length === 0) ? (
-            <div className="flex flex-col items-center px-6 pt-20 pb-12 text-center animate-fade-in">
-              <div className="text-6xl mb-5">📍</div>
-              <h3 className="text-xl font-black text-gray-900 mb-2" style={{ fontFamily: 'Heebo, sans-serif' }}>
-                אין מקומות עדיין
-              </h3>
-              <p className="text-gray-400 text-sm leading-relaxed max-w-xs" style={{ fontFamily: 'Rubik, sans-serif' }}>
-                המנהל טרם הוסיף מקומות מומלצים
-              </p>
-            </div>
-          ) : adminLocations.length > 0 ? (
-            <PlacesFeed
-              places={adminLocations}
-              currentUserId={currentUserId ?? undefined}
-              searchQuery={searchQuery}
-              userLocation={homeUserLocation}
-              onSelectPlace={setPlaceSheet}
-              onOpenMap={onNavigateToMap}
-            />
-          ) : null}
+          <CountryGuide
+            countryCode={activeCountry}
+            onSelectCountry={setActiveCountry}
+            onOpenMap={onNavigateToMap}
+            places={adminLocations}
+            onSelectPlace={setPlaceSheet}
+          />
           {recommendations.length > 0 && (
             <section style={{ margin: '30px 18px 12px' }}>
               <h3 style={{ fontSize: 16.5, fontWeight: 900, color: '#111827', fontFamily: "'Heebo', sans-serif", margin: '0 0 3px' }}>
