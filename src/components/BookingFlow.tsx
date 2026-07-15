@@ -59,10 +59,8 @@ export function BookingFlow({ event, price, onClose, onComplete }: BookingFlowPr
   const [agree, setAgree]       = useState(false);
 
   /* ── payment ── */
-  const [methods, setMethods] = useState<SavedCard[]>([
-    { id: 'mc1', brand: 'mastercard', last4: '4679', name: '' },
-  ]);
-  const [selectedMethod, setSelectedMethod] = useState<string>('mc1');
+  const [methods, setMethods] = useState<SavedCard[]>([]);
+  const [selectedMethod, setSelectedMethod] = useState<string>('apay');
   const [showAddCard, setShowAddCard] = useState(false);
 
   /* ── pin / result ── */
@@ -93,7 +91,14 @@ export function BookingFlow({ event, price, onClose, onComplete }: BookingFlowPr
   useEffect(() => {
     if (status !== 'success') return;
     if ('vibrate' in navigator) navigator.vibrate(20);
-    const t = setTimeout(async () => { await onComplete(); }, 1700);
+    const t = setTimeout(async () => {
+      try {
+        await onComplete();
+      } catch {
+        // DB write failed after payment "succeeded" — show failure so user can retry
+        setStatus('failed');
+      }
+    }, 1700);
     return () => clearTimeout(t);
   }, [status]);
 
@@ -108,7 +113,7 @@ export function BookingFlow({ event, price, onClose, onComplete }: BookingFlowPr
 
   return (
     <div
-      className="fixed inset-0 z-[60] bg-[#F8FAFB] flex flex-col"
+      className="fixed inset-0 z-[60] bg-[#F9F7F5] flex flex-col"
       dir="rtl"
       style={{ animation: 'bf-up 0.36s cubic-bezier(0.16,1,0.3,1)' }}
     >
@@ -263,7 +268,7 @@ export function BookingFlow({ event, price, onClose, onComplete }: BookingFlowPr
                 <PayOption id="gpay"        label="Google Pay" selected={selectedMethod === 'gpay'}        onSelect={() => setSelectedMethod('gpay')}        icon={<GPayIcon />} />
                 <PayOption id="apay"        label="Apple Pay"  selected={selectedMethod === 'apay'}        onSelect={() => setSelectedMethod('apay')}        icon={<ApplePayIcon />} />
                 {methods.map(m => (
-                  <PayOption key={m.id} id={m.id} label={`•••• •••• •••• ${m.last4}`} selected={selectedMethod === m.id} onSelect={() => setSelectedMethod(m.id)} icon={<MastercardIcon />} />
+                  <PayOption key={m.id} id={m.id} label={`•••• •••• •••• ${m.last4}`} selected={selectedMethod === m.id} onSelect={() => setSelectedMethod(m.id)} icon={m.brand === 'visa' ? <VisaIcon /> : <MastercardIcon />} />
                 ))}
               </div>
 
@@ -602,7 +607,7 @@ function AddCardSheet({ onClose, onSave }: { onClose: () => void; onSave: (c: Sa
         </div>
 
         <div className="px-5 pt-2">
-          <button onClick={() => onSave({ id: `card-${Date.now()}`, brand: 'visa', last4, name })} disabled={!valid}
+          <button onClick={() => onSave({ id: `card-${Date.now()}`, brand: number.replace(/\s/g, '').startsWith('4') ? 'visa' : 'mastercard', last4, name })} disabled={!valid}
             className="w-full font-black text-[17px] text-white active:scale-[0.97] transition-transform disabled:opacity-50"
             style={{ fontFamily: FONT, height: 54, borderRadius: 27, background: valid ? GRADIENT : '#D1D5DB', boxShadow: valid ? `0 8px 24px ${ORANGE}55` : 'none' }}>
             הוסף כרטיס
@@ -617,6 +622,11 @@ function AddCardSheet({ onClose, onSave }: { onClose: () => void; onSave: (c: Sa
 function MastercardIcon() {
   return (
     <svg width="26" height="26" viewBox="0 0 24 24"><circle cx="9" cy="12" r="6" fill="#EB001B" /><circle cx="15" cy="12" r="6" fill="#F79E1B" fillOpacity="0.9" /></svg>
+  );
+}
+function VisaIcon() {
+  return (
+    <svg width="34" height="22" viewBox="0 0 38 12" fill="none"><text x="0" y="11" fontFamily="Arial, sans-serif" fontWeight="bold" fontSize="12" fill="#1A1F71" letterSpacing="0.5">VISA</text></svg>
   );
 }
 function PayPalIcon() {

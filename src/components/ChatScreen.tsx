@@ -252,13 +252,21 @@ export function ChatScreen({ conversationId, currentUserId, otherUserId, onBack,
   };
 
   const openEventById = async (id: string) => {
-    const { data } = await supabase.from('events').select('*').eq('id', id).maybeSingle();
-    if (data) setOpenEvent(data as Event);
+    try {
+      const { data } = await supabase.from('events').select('*').eq('id', id).maybeSingle();
+      if (data) setOpenEvent(data as Event);
+    } catch (e) {
+      console.error('[ChatScreen] openEventById failed:', e);
+    }
   };
 
   const openPlaceById = async (id: string) => {
-    const { data } = await supabase.from('admin_locations').select('*').eq('id', id).maybeSingle();
-    if (data) setOpenPlace(data as AdminLocation);
+    try {
+      const { data } = await supabase.from('admin_locations').select('*').eq('id', id).maybeSingle();
+      if (data) setOpenPlace(data as AdminLocation);
+    } catch (e) {
+      console.error('[ChatScreen] openPlaceById failed:', e);
+    }
   };
 
   const handleSendMessage = async (e: React.FormEvent) => {
@@ -359,7 +367,7 @@ export function ChatScreen({ conversationId, currentUserId, otherUserId, onBack,
             <div style={popStyle}><PlaceChatCard data={plc} onClick={() => openPlaceById(plc.id)} /></div>
           ) : (
             <div style={{ maxWidth: '78%', ...popStyle }}>
-              <MessageBubble mine={!mine} tail={isLast} color={mine ? '#FFD4A8' : '#FFFFFF'} contentStyle={{ padding: '7px 14px' }}>
+              <MessageBubble mine={mine} tail={isLast} color={mine ? '#FFD4A8' : '#FFFFFF'} contentStyle={{ padding: '7px 14px' }}>
                 <p style={{ fontSize: 14, lineHeight: 1.4, color: mine ? '#7C3400' : '#111111', margin: 0, wordBreak: 'break-word', whiteSpace: 'pre-wrap' }} dir="rtl">
                   {message.content}
                 </p>
@@ -506,6 +514,7 @@ export function ChatScreen({ conversationId, currentUserId, otherUserId, onBack,
           event={openEvent}
           currentUserId={currentUserId}
           onClose={() => setOpenEvent(null)}
+          onNavigateToUserProfile={onNavigateToUserProfile}
         />
       )}
 

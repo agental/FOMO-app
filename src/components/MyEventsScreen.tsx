@@ -85,6 +85,7 @@ export function MyEventsScreen({
   const _cached = _myEventsCache[currentUserId];
   const [tab, setTab] = useState<TabKey>(readTabFromUrl);
   const [loading, setLoading] = useState(!_cached);
+  const [loadError, setLoadError] = useState(false);
   const [pending, setPending] = useState<Item[]>(_cached?.pending ?? []);
   const [confirmed, setConfirmed] = useState<Item[]>(_cached?.confirmed ?? []);
   const [past, setPast] = useState<Item[]>(_cached?.past ?? []);
@@ -135,6 +136,7 @@ export function MyEventsScreen({
       setPending(pendingItems); setConfirmed(confirmedItems); setPast(pastItems);
     } catch (err) {
       console.error('[MyEventsScreen] load failed:', err);
+      setLoadError(true);
     } finally {
       setLoading(false);
     }
@@ -210,6 +212,12 @@ export function MyEventsScreen({
           <div className="space-y-3">
             {[0, 1, 2].map(i => <SkeletonCard key={i} />)}
           </div>
+        ) : loadError ? (
+          <div className="flex flex-col items-center justify-center py-20 gap-4 text-center">
+            <span className="text-4xl">⚠️</span>
+            <p className="text-gray-500 text-[15px]">שגיאה בטעינת האירועים</p>
+            <button onClick={() => { setLoadError(false); load(); }} className="px-5 py-2 rounded-full text-white text-[14px] font-bold" style={{ background: 'linear-gradient(135deg,#F97316,#EA580C)' }}>נסה שוב</button>
+          </div>
         ) : items.length === 0 ? (
           <EmptyState tab={tab} />
         ) : (
@@ -242,7 +250,7 @@ export function MyEventsScreen({
         onMapClick={onMapClick}
         onCreateClick={onCreateClick}
         onChatClick={onMessagesClick}
-        onMyEventsClick={() => {}}
+        onMyEventsClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
       />
     </div>
   );

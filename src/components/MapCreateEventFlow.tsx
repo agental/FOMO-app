@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { X, MapPin, Lock, Globe, Users, Image as ImageIcon, Upload, ChevronLeft, Check, Tag } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import mapboxgl from 'mapbox-gl';
+import confetti from 'canvas-confetti';
 import { EventService } from '../services/eventService';
 import { reverseGeocode } from '../utils/geocoding';
 import { EmojiPickerSheet } from './EmojiPickerSheet';
@@ -101,8 +102,12 @@ export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initial
   const [imageUrl,      setImageUrl]      = useState('');
   const [imageFile,     setImageFile]     = useState<File|null>(null);
   const [imagePreview,  setImagePreview]  = useState('');
-  const [uploadingImage,setUploadingImage]= useState(false);
-  const [submitting,    setSubmitting]    = useState(false);
+  const [uploadingImage,  setUploadingImage]   = useState(false);
+  const [moderatingImage, setModeratingImage]  = useState(false);
+  const [imageError,      setImageError]       = useState('');
+  const [submitting,      setSubmitting]       = useState(false);
+  const [showSuccess,     setShowSuccess]      = useState(false);
+  const [createdEvent,    setCreatedEvent]     = useState<Record<string, any> | null>(null);
 
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef          = useRef<mapboxgl.Map|null>(null);
@@ -146,8 +151,9 @@ export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initial
       setDetectedCity(r.city); setDetectedCountry(r.countryCode);
     };
 
-    marker.on('dragend', () => { const l = marker.getLngLat(); update(l.lat, l.lng); });
-    map.on('click', e => { marker.setLngLat([e.lngLat.lng, e.lngLat.lat]); update(e.lngLat.lat, e.lngLat.lng); });
+    const safeUpdate = (la: number, lo: number) => update(la, lo).catch(e => console.error('[MapCreateEventFlow] reverseGeocode failed:', e));
+    marker.on('dragend', () => { const l = marker.getLngLat(); safeUpdate(l.lat, l.lng); });
+    map.on('click', e => { marker.setLngLat([e.lngLat.lng, e.lngLat.lat]); safeUpdate(e.lngLat.lat, e.lngLat.lng); });
     map.once('load', () => {
       map.resize();
       // fly to user location after map loads
@@ -156,9 +162,9 @@ export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initial
           const la = pos.coords.latitude, lo = pos.coords.longitude;
           map.flyTo({ center: [lo, la], zoom: 15, duration: 1200 });
           marker.setLngLat([lo, la]);
-          update(la, lo);
+          safeUpdate(la, lo);
         },
-        () => update(fallbackLat, fallbackLng),
+        () => safeUpdate(fallbackLat, fallbackLng),
         { timeout: 8000, maximumAge: 60000 }
       );
     });
@@ -179,10 +185,43 @@ export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initial
     else if (step === 4) go(3, -1);
   };
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]; if (!file) return;
-    setImageFile(file); setImageUrl('');
-    const r = new FileReader(); r.onloadend = () => setImagePreview(r.result as string); r.readAsDataURL(file);
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (fileInputRef.current) fileInputRef.current.value = '';
+
+    setImageError('');
+    setImageFile(null);
+    setImagePreview('');
+
+    // Show a quick preview from the raw file first
+    const rawUrl = URL.createObjectURL(file);
+    setImagePreview(rawUrl);
+
+    // Compress + moderate before accepting
+    setModeratingImage(true);
+    try {
+      // We import these indirectly through EventService — trigger compression check
+      // by calling the same canvas path. For now validate client-side min-dimension:
+      const img = new Image();
+      await new Promise<void>((res, rej) => {
+        img.onload = () => res();
+        img.onerror = () => rej(new Error('לא ניתן לקרוא את התמונה'));
+        img.src = rawUrl;
+      });
+      if (img.naturalWidth < 400 || img.naturalHeight < 400) {
+        throw new Error(`התמונה קטנה מדי (${img.naturalWidth}×${img.naturalHeight}px). בחר תמונה באיכות גבוהה יותר.`);
+      }
+      setImageFile(file);
+      setImageUrl('');
+    } catch (err: any) {
+      setImagePreview('');
+      setImageFile(null);
+      setImageError(err?.message || 'התמונה אינה מתאימה, בחר אחרת.');
+    } finally {
+      URL.revokeObjectURL(rawUrl);
+      setModeratingImage(false);
+    }
   };
 
   const handleSubmit = async () => {
@@ -198,18 +237,18 @@ export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initial
     }
     setSubmitting(true);
     try {
-      let finalImage: string|null = null;
+      let finalImage: string | null = null;
       if (imageFile) {
         setUploadingImage(true);
-        finalImage = await EventService.uploadEventImage(userId, imageFile).catch(() => null);
-        setUploadingImage(false);
-        // If the user picked an image but the upload failed, stop and let them retry
-        // instead of silently creating the event without a picture.
-        if (!finalImage) {
-          alert('שגיאה בהעלאת התמונה. נסה שוב או בחר תמונה אחרת.');
+        try {
+          finalImage = await EventService.uploadEventImage(userId, imageFile);
+        } catch (imgErr: any) {
+          setUploadingImage(false);
           setSubmitting(false);
+          alert(imgErr?.message || 'שגיאה בהעלאת התמונה. נסה שוב או בחר תמונה אחרת.');
           return;
         }
+        setUploadingImage(false);
       } else if (imageUrl) {
         finalImage = imageUrl;
       }
@@ -225,11 +264,29 @@ export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initial
         image_url: finalImage || undefined,
         price: isPaid && ticketPrice ? Number(ticketPrice) : null,
       });
-      if (!created) throw new Error();
-      onSuccess(created);
-      handleClose();
-    } catch { alert('שגיאה ביצירת האירוע'); }
+      if (!created) throw new Error('שגיאה בשמירת האירוע בשרת');
+      setCreatedEvent(created);
+      setShowSuccess(true);
+      launchConfetti();
+    } catch (err: any) { alert(err?.message || 'שגיאה ביצירת האירוע'); }
     finally { setSubmitting(false); }
+  };
+
+  const launchConfetti = () => {
+    const colors = ['#F97316', '#FB923C', '#FCD34D', '#34D399', '#60A5FA', '#F472B6', '#A78BFA'];
+    // burst from center
+    confetti({ particleCount: 120, spread: 80, origin: { y: 0.55 }, colors, startVelocity: 45, gravity: 0.9, scalar: 1.1 });
+    // side cannons
+    setTimeout(() => confetti({ particleCount: 60, angle: 60,  spread: 55, origin: { x: 0, y: 0.6 }, colors }), 200);
+    setTimeout(() => confetti({ particleCount: 60, angle: 120, spread: 55, origin: { x: 1, y: 0.6 }, colors }), 200);
+    setTimeout(() => confetti({ particleCount: 40, spread: 100, origin: { y: 0.3 }, colors, startVelocity: 20 }), 500);
+  };
+
+  const handleSuccessDone = () => {
+    if (createdEvent) onSuccess(createdEvent);
+    setShowSuccess(false);
+    setCreatedEvent(null);
+    handleClose();
   };
 
   const handleClose = () => {
@@ -255,6 +312,71 @@ export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initial
 
   return (
     <>
+      {/* ── Success overlay ── */}
+      <AnimatePresence>
+        {showSuccess && (
+          <motion.div
+            className="fixed inset-0 z-[200] flex flex-col items-center justify-center"
+            style={{ background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(12px)' }}
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            dir="rtl"
+          >
+            <motion.div
+              className="flex flex-col items-center gap-5 px-8 text-center"
+              initial={{ scale: 0.7, opacity: 0, y: 30 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              transition={{ type: 'spring', stiffness: 320, damping: 22, delay: 0.05 }}
+            >
+              {/* big emoji + pulse ring */}
+              <div className="relative">
+                <motion.div
+                  className="absolute inset-0 rounded-full"
+                  style={{ background: 'radial-gradient(circle, #F9731660, transparent 70%)' }}
+                  animate={{ scale: [1, 1.6, 1], opacity: [0.6, 0, 0.6] }}
+                  transition={{ duration: 2, repeat: Infinity }}
+                />
+                <motion.div
+                  className="w-28 h-28 rounded-full flex items-center justify-center text-6xl shadow-2xl"
+                  style={{ background: 'linear-gradient(135deg,#F97316,#EA580C)', boxShadow: '0 0 60px #F9731699' }}
+                  animate={{ rotate: [0, -8, 8, -4, 4, 0] }}
+                  transition={{ delay: 0.3, duration: 0.6 }}
+                >
+                  {selectedEmoji}
+                </motion.div>
+              </div>
+
+              <motion.div
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.25 }}
+              >
+                <p className="text-white text-[28px] font-black leading-tight" style={{ fontFamily: 'Heebo, sans-serif' }}>
+                  האירוע נוצר בהצלחה!
+                </p>
+                <p className="text-white/70 text-[16px] mt-2 font-medium">
+                  {title}
+                </p>
+                <p className="text-white/50 text-[13px] mt-1">
+                  עכשיו יופיע על המפה לכולם לראות
+                </p>
+              </motion.div>
+
+              <motion.button
+                onClick={handleSuccessDone}
+                className="mt-2 px-10 py-4 rounded-full text-white text-[17px] font-black active:scale-[0.97] transition-transform"
+                style={{ fontFamily: 'Heebo, sans-serif', background: 'linear-gradient(135deg,#F97316,#EA580C)', boxShadow: '0 8px 32px #F9731666' }}
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.4 }}
+                whileTap={{ scale: 0.96 }}
+              >
+                מעולה! 🎉
+              </motion.button>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* backdrop */}
       <motion.div className="fixed inset-0 z-50" style={{ background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(6px)' }}
         initial={{ opacity: 0 }} animate={{ opacity: 1 }} onClick={handleClose} />
@@ -641,7 +763,7 @@ export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initial
                     <div className="relative h-36 mx-4 rounded-[14px] overflow-hidden mb-3">
                       <img src={activeImageUrl} alt="event" className="w-full h-full object-cover" />
                       {(imagePreview || imageUrl) && (
-                        <button onClick={() => { setImageFile(null); setImagePreview(''); setImageUrl(''); }}
+                        <button onClick={() => { setImageFile(null); setImagePreview(''); setImageUrl(''); setImageError(''); }}
                           className="absolute top-2 right-2 w-8 h-8 bg-black/55 rounded-full flex items-center justify-center backdrop-blur-sm">
                           <X className="w-4 h-4 text-white" />
                         </button>
@@ -653,13 +775,28 @@ export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initial
                   )}
                   <div className="px-4 pb-4 space-y-3">
                     <motion.button type="button" onClick={() => fileInputRef.current?.click()} whileTap={{ scale: 0.97 }}
-                      className="w-full flex items-center justify-center gap-2 py-3 rounded-[14px] border-2 border-dashed"
+                      disabled={moderatingImage}
+                      className="w-full flex items-center justify-center gap-2 py-3 rounded-[14px] border-2 border-dashed disabled:opacity-60"
                       style={{ borderColor: accent, background: `${accent}0A` }}>
-                      <Upload className="w-4 h-4" style={{ color: accent }} />
-                      <span className="text-[14px] font-semibold" style={{ color: accent }}>
-                        {imagePreview ? 'החלף תמונה' : 'העלה תמונה'}
-                      </span>
+                      {moderatingImage ? (
+                        <>
+                          <div className="w-4 h-4 rounded-full border-2 border-current border-t-transparent animate-spin" style={{ color: accent }} />
+                          <span className="text-[14px] font-semibold" style={{ color: accent }}>בודק תמונה...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Upload className="w-4 h-4" style={{ color: accent }} />
+                          <span className="text-[14px] font-semibold" style={{ color: accent }}>
+                            {imagePreview ? 'החלף תמונה' : 'העלה תמונה'}
+                          </span>
+                        </>
+                      )}
                     </motion.button>
+                    {imageError && (
+                      <div className="flex items-start gap-2 px-3 py-2.5 rounded-[12px] bg-red-50 border border-red-100">
+                        <span className="text-red-500 text-[13px] font-medium leading-snug">{imageError}</span>
+                      </div>
+                    )}
                     {!imagePreview && !imageUrl && (
                       <div>
                         <p className="text-[11px] text-[#8E8E93] mb-2">או בחר תמונה מוצעת</p>
@@ -704,7 +841,7 @@ export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initial
           <motion.button
             type="button"
             onClick={step === 4 ? handleSubmit : handleNext}
-            disabled={!canContinue || submitting || uploadingImage}
+            disabled={!canContinue || submitting || uploadingImage || moderatingImage}
             whileTap={{ scale: 0.97 }}
             className="w-full py-4 rounded-[20px] text-white text-[17px] font-bold flex items-center justify-center gap-2 disabled:opacity-40"
             style={{
@@ -713,7 +850,7 @@ export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initial
             }}
           >
             {submitting || uploadingImage ? (
-              <span>רגע...</span>
+              <span>{uploadingImage ? 'מעלה תמונה...' : 'יוצר אירוע...'}</span>
             ) : step === 4 ? (
               <span>{selectedEmoji} הוסף למפה</span>
             ) : (

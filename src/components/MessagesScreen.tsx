@@ -364,7 +364,7 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
       }
       if (data?.display_name) setCurrentUserName(data.display_name);
       if (data?.avatar_url !== undefined) setCurrentUserAvatar(data.avatar_url);
-    } catch {}
+    } catch (e) { console.error('[MessagesScreen] loadUserCountries failed:', e); }
   };
 
   const loadGroupChats = async () => {
@@ -384,7 +384,7 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
       if (!channels) return;
 
       await loadGroupChatsFromChannels(memberships, channels);
-    } catch {}
+    } catch (e) { console.error('[MessagesScreen] loadGroupChats failed:', e); }
   };
 
   const loadGroupChatsFromChannels = async (
@@ -521,12 +521,15 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
 
   const handleDeleteConversation = async (conversationId: string) => {
     setSwipedId(null);
+    const snapshot = conversations.find(c => c.id === conversationId);
     setConversations(prev => prev.filter(c => c.id !== conversationId));
     try {
       await supabase.from('messages').delete().eq('conversation_id', conversationId);
       await supabase.from('conversations').delete().eq('id', conversationId);
     } catch (err) {
       console.error('Delete conversation error:', err);
+      if (snapshot) setConversations(prev => [snapshot, ...prev]);
+      alert('שגיאה במחיקת השיחה, נסה שוב.');
     }
   };
 

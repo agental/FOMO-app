@@ -43,6 +43,7 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
   const [isJoined, setIsJoined]       = useState(false);
   const [requestStatus, setRequestStatus] = useState<'none' | 'pending' | 'approved' | 'rejected'>('none');
   const [joining, setJoining]         = useState(false);
+  const [approvedToast, setApprovedToast] = useState(false);
   const [saved, setSaved]             = useState(false);
   const [showPayment, setShowPayment] = useState(false);
   const [showNav, setShowNav] = useState(false);
@@ -94,7 +95,7 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
     return () => { document.removeEventListener('mousemove', mm); document.removeEventListener('mouseup', mu); };
   }, [dragging, dragDy, snap]);
 
-  const currentUserId = propUserId || '00000000-0000-0000-0000-000000000001';
+  const currentUserId = propUserId || null;
   const isOwner  = event.user_id === currentUserId;
   const cat      = event.event_type ? (CATEGORY_CONFIG[event.event_type] ?? DEFAULT_CONFIG) : DEFAULT_CONFIG;
   const heroImg  = event.image_url || cat.image;
@@ -109,34 +110,72 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
 
   useEffect(() => {
     fetchAttendees();
-    setIsJoined(event.attendees.includes(currentUserId));
+    setIsJoined(event.attendees.includes(currentUserId ?? ''));
     checkRequest();
-  }, [event.id]);
+
+    if (!currentUserId || isOwner) return;
+
+    // Listen for the organizer approving / rejecting this user's join request in real-time
+    const channel = supabase
+      .channel(`join-request-${event.id}-${currentUserId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'event_join_requests',
+          filter: `event_id=eq.${event.id}`,
+        },
+        (payload) => {
+          const row = payload.new as { user_id: string; status: string };
+          if (row.user_id !== currentUserId) return;
+          setRequestStatus(row.status as 'none' | 'pending' | 'approved' | 'rejected');
+          if (row.status === 'approved') {
+            fetchAttendees();
+            setApprovedToast(true);
+            setTimeout(() => setApprovedToast(false), 4000);
+            if ('vibrate' in navigator) navigator.vibrate([30, 60, 30]);
+          }
+        }
+      )
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [event.id, currentUserId]);
 
   const checkRequest = async () => {
     if (!currentUserId || isOwner) return;
-    const { data } = await supabase
-      .from('event_join_requests').select('status')
-      .eq('event_id', event.id).eq('user_id', currentUserId).maybeSingle();
-    if (data) setRequestStatus(data.status as any);
+    try {
+      const { data } = await supabase
+        .from('event_join_requests').select('status')
+        .eq('event_id', event.id).eq('user_id', currentUserId).maybeSingle();
+      if (data) setRequestStatus(data.status as any);
+    } catch (e) {
+      console.error('[EventDetailsModal] checkRequest failed:', e);
+    }
   };
 
   const fetchAttendees = async () => {
     if (!event.attendees?.length) return;
-    const { data } = await supabase
-      .from('users').select('id, display_name, current_country, avatar_url')
-      .in('id', event.attendees);
-    setAttendees((data || []).map(u => ({
-      id: u.id, display_name: u.display_name, country: u.current_country || 'IL',
-      city: null, avatar_url: u.avatar_url,
-    })));
+    try {
+      const { data } = await supabase
+        .from('users').select('id, display_name, current_country, avatar_url')
+        .in('id', event.attendees);
+      setAttendees((data || []).map(u => ({
+        id: u.id, display_name: u.display_name, country: u.current_country || 'IL',
+        city: null, avatar_url: u.avatar_url,
+      })));
+    } catch (e) {
+      console.error('[EventDetailsModal] fetchAttendees failed:', e);
+    }
   };
 
   // add the current user to the event's attendee list (= fully joined)
   const addSelfToAttendees = async () => {
+    if (!currentUserId) return;
     const updated = [...event.attendees, currentUserId];
-    await supabase.from('events').update({ attendees: updated }).eq('id', event.id);
-    event.attendees = updated;
+    const { error } = await supabase.from('events').update({ attendees: updated }).eq('id', event.id);
+    if (error) { console.error('[EventDetailsModal] join failed:', error); throw error; }
     setIsJoined(true);
     fetchAttendees();
   };
@@ -154,6 +193,7 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
 
   const handleJoin = async () => {
     if (joining) return;
+    if (!currentUserId) { alert('יש להתחבר כדי להצטרף לאירוע'); return; }
 
     // Leave / cancel
     if (isJoined) {
@@ -161,10 +201,15 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
       if ('vibrate' in navigator) navigator.vibrate(10);
       try {
         const updated = event.attendees.filter(id => id !== currentUserId);
-        await supabase.from('events').update({ attendees: updated }).eq('id', event.id);
-        await supabase.from('event_join_requests').delete().eq('event_id', event.id).eq('user_id', currentUserId);
+        const { error } = await supabase.from('events').update({ attendees: updated }).eq('id', event.id);
+        if (error) throw error;
+        const { error: reqErr } = await supabase.from('event_join_requests').delete().eq('event_id', event.id).eq('user_id', currentUserId);
+        if (reqErr) console.error('[EventDetailsModal] delete join_request failed:', reqErr);
         setIsJoined(false); setRequestStatus('none');
-        event.attendees = updated; fetchAttendees();
+        fetchAttendees();
+      } catch (e) {
+        console.error('[EventDetailsModal] leave failed:', e);
+        alert('שגיאה, נסה שוב.');
       } finally { setJoining(false); }
       return;
     }
@@ -191,14 +236,35 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
     if (requestStatus === 'pending')  { alert('הבקשה שלך ממתינה לאישור המארגן'); return; }
     if (requestStatus === 'rejected') { alert('הבקשה נדחתה על ידי המארגן'); return; }
 
-    // none → send a join request
+    // status === 'none' locally — but always re-check the DB before sending a new request
+    // to avoid overwriting an approval that arrived while local state was stale
     setJoining(true);
     try {
-      const { error } = await supabase.from('event_join_requests').upsert(
-        { event_id: event.id, user_id: currentUserId, status: 'pending' },
-        { onConflict: 'event_id,user_id' }
+      const { data: live } = await supabase
+        .from('event_join_requests').select('status')
+        .eq('event_id', event.id).eq('user_id', currentUserId!).maybeSingle();
+
+      if (live) {
+        // Row already exists — sync local state and act on the real status
+        const liveStatus = live.status as 'pending' | 'approved' | 'rejected';
+        setRequestStatus(liveStatus);
+        if (liveStatus === 'approved') {
+          if (priced) { setShowPayment(true); }
+          else { await addSelfToAttendees(); }
+        } else if (liveStatus === 'pending') {
+          alert('הבקשה שלך ממתינה לאישור המארגן');
+        } else if (liveStatus === 'rejected') {
+          alert('הבקשה נדחתה על ידי המארגן');
+        }
+        return;
+      }
+
+      // No existing row — safe to create a new join request
+      const { error } = await supabase.from('event_join_requests').insert(
+        { event_id: event.id, user_id: currentUserId, status: 'pending' }
       );
       if (!error) setRequestStatus('pending');
+      else { alert('שגיאה בשליחת הבקשה, נסה שוב.'); }
     } finally { setJoining(false); }
   };
 
@@ -578,7 +644,19 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
     >
       <style>{`
         @keyframes edm-up { from { transform: translateY(100%) } to { transform: translateY(0) } }
+        @keyframes edm-toast { 0% { opacity:0; transform:translateY(-12px) } 15% { opacity:1; transform:translateY(0) } 80% { opacity:1 } 100% { opacity:0 } }
       `}</style>
+
+      {/* ── Approval toast ── */}
+      {approvedToast && (
+        <div
+          className="fixed top-16 left-1/2 -translate-x-1/2 z-[200] flex items-center gap-2 px-4 py-3 rounded-2xl shadow-lg text-white text-[14px] font-bold"
+          style={{ background: 'linear-gradient(135deg,#22c55e,#16a34a)', animation: 'edm-toast 4s ease forwards', whiteSpace: 'nowrap' }}
+        >
+          <span>✅</span>
+          <span>{priced ? 'אושרת! עכשיו תוכל לשלם ולהצטרף' : 'אושרת! תוכל להצטרף לאירוע'}</span>
+        </div>
+      )}
 
       {/* ── Nav bar ── */}
       <div

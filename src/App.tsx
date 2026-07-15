@@ -374,6 +374,8 @@ function App() {
           onBack={() => setCurrentScreen(profileBackScreen)}
           currentUserId={currentUserId}
           onNavigateToMap={() => setCurrentScreen('map')}
+          onNavigateToMyEvents={() => setCurrentScreen('myEvents')}
+          onNavigateToMessages={() => setCurrentScreen('messages')}
           onNavigateToCreate={goCreate}
           viewUserId={viewingUserId}
           onMessageUser={handleMessageUser}

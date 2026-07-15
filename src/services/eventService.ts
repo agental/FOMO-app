@@ -2,6 +2,70 @@ import { supabase } from '../lib/supabase';
 import { calculateDistance } from '../utils/distance';
 import type { Event, CreateEventData, EventFilters } from '../types/event';
 
+// ── Image helpers ──────────────────────────────────────────────────────────
+
+const MIN_DIMENSION = 400; // reject anything under 400×400px
+const MAX_DIMENSION = 1920;
+const JPEG_QUALITY  = 0.85;
+
+/** Compress + validate an image via Canvas. Converts HEIC→JPEG automatically. */
+function compressImage(file: File): Promise<{ blob: Blob; base64: string; width: number; height: number }> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const { naturalWidth: w, naturalHeight: h } = img;
+
+      if (w < MIN_DIMENSION || h < MIN_DIMENSION) {
+        reject(new Error(
+          `התמונה קטנה מדי (${w}×${h} פיקסלים). ` +
+          `בחר תמונה באיכות גבוהה יותר — לפחות ${MIN_DIMENSION}×${MIN_DIMENSION}.`
+        ));
+        return;
+      }
+
+      const scale = Math.min(1, MAX_DIMENSION / Math.max(w, h));
+      const canvas = document.createElement('canvas');
+      canvas.width  = Math.round(w * scale);
+      canvas.height = Math.round(h * scale);
+      const ctx = canvas.getContext('2d')!;
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+      canvas.toBlob(blob => {
+        if (!blob) { reject(new Error('שגיאה בעיבוד התמונה')); return; }
+        // Also produce base64 for moderation (strip the data: prefix)
+        const base64 = canvas.toDataURL('image/jpeg', JPEG_QUALITY).split(',')[1];
+        resolve({ blob, base64, width: canvas.width, height: canvas.height });
+      }, 'image/jpeg', JPEG_QUALITY);
+    };
+
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('לא ניתן לקרוא את קובץ התמונה')); };
+    img.src = url;
+  });
+}
+
+/** Call the Supabase edge function that runs Claude Vision moderation. */
+async function moderateImage(base64: string): Promise<void> {
+  try {
+    const { data, error } = await supabase.functions.invoke('moderate-event-image', {
+      body: { image: base64, mediaType: 'image/jpeg' },
+    });
+    if (error) {
+      console.warn('[moderateImage] edge function error (allowing upload):', error);
+      return; // fail open
+    }
+    if (data && data.approved === false) {
+      throw new Error(data.reason || 'התמונה אינה מתאימה לאירוע — בחר תמונה אחרת.');
+    }
+  } catch (e: any) {
+    // Only rethrow if it's a rejection from Claude, not a network/deploy error
+    if (e?.message && !e.message.includes('fetch') && !e.message.includes('Failed')) throw e;
+    console.warn('[moderateImage] moderation unavailable, allowing upload');
+  }
+}
+
 export class EventService {
   static async createEvent(data: CreateEventData): Promise<Event | null> {
     const insertPayload = {
@@ -119,9 +183,9 @@ export class EventService {
       if (filters?.searchQuery) {
         const searchTerm = filters.searchQuery.toLowerCase();
         processedEvents = processedEvents.filter(event =>
-          event.title.toLowerCase().includes(searchTerm) ||
-          event.description.toLowerCase().includes(searchTerm) ||
-          event.city.toLowerCase().includes(searchTerm) ||
+          event.title?.toLowerCase().includes(searchTerm) ||
+          event.description?.toLowerCase().includes(searchTerm) ||
+          event.city?.toLowerCase().includes(searchTerm) ||
           event.event_type?.toLowerCase().includes(searchTerm)
         );
       }
@@ -211,62 +275,26 @@ export class EventService {
     }
   }
 
-  static async uploadEventImage(userId: string, file: File): Promise<string | null> {
-    try {
-      // Read file fully into memory first — fixes iCloud/HEIC photos that arrive lazily
-      const buffer = await new Promise<ArrayBuffer>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload  = () => resolve(reader.result as ArrayBuffer);
-        reader.onerror = () => reject(reader.error);
-        reader.readAsArrayBuffer(file);
-      });
+  static async uploadEventImage(userId: string, file: File): Promise<string> {
+    // 1. Compress via canvas (validates dimensions, converts HEIC→JPEG)
+    const { blob, base64 } = await compressImage(file);
 
-      // Determine mime type — HEIC from iCloud often has empty type
-      let mimeType = file.type;
-      if (!mimeType || mimeType === 'application/octet-stream') {
-        // Detect by magic bytes
-        const bytes = new Uint8Array(buffer.slice(0, 12));
-        const hex = Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
-        if (hex.startsWith('ffd8ff'))                       mimeType = 'image/jpeg';
-        else if (hex.startsWith('89504e47'))                mimeType = 'image/png';
-        else if (hex.startsWith('47494638'))                mimeType = 'image/gif';
-        else if (hex.startsWith('52494646') && hex.slice(16, 24) === '57454250') mimeType = 'image/webp';
-        else                                                mimeType = 'image/jpeg'; // fallback for HEIC etc.
-      }
+    // 2. AI content moderation — rejects screenshots, memes, NSFW, irrelevant images
+    await moderateImage(base64);
 
-      // Use jpg extension for HEIC since browsers can't display heic anyway
-      const isHeic = file.type === 'image/heic' || file.type === 'image/heif' ||
-                     file.name.toLowerCase().endsWith('.heic') || file.name.toLowerCase().endsWith('.heif');
-      const ext = isHeic ? 'jpg' : (file.name.split('.').pop() || mimeType.split('/')[1] || 'jpg');
-      const uploadMime = isHeic ? 'image/jpeg' : mimeType;
+    // 3. Upload the compressed JPEG
+    const path = `events/${userId}-${Date.now()}.jpg`;
+    const { error } = await supabase.storage
+      .from('images')
+      .upload(path, blob, { contentType: 'image/jpeg', cacheControl: '3600', upsert: false });
 
-      const fileName = `event-${userId}-${Date.now()}.${ext}`;
-      const path = `avatars/${fileName}`;
-
-      const blob = new Blob([buffer], { type: uploadMime });
-
-      const { error } = await supabase.storage
-        .from('images')
-        .upload(path, blob, {
-          contentType: uploadMime,
-          cacheControl: '3600',
-          upsert: false,
-        });
-
-      if (error) {
-        console.error('[uploadEventImage] Supabase error:', JSON.stringify(error));
-        throw error;
-      }
-
-      const { data: urlData } = supabase.storage
-        .from('images')
-        .getPublicUrl(path);
-
-      return urlData.publicUrl;
-    } catch (error) {
-      console.error('[EventService.uploadEventImage] Failed:', error);
-      return null;
+    if (error) {
+      console.error('[uploadEventImage] Supabase error:', JSON.stringify(error));
+      throw new Error(error.message || 'שגיאה בהעלאת התמונה לשרת');
     }
+
+    const { data: urlData } = supabase.storage.from('images').getPublicUrl(path);
+    return urlData.publicUrl;
   }
 
   static subscribeToEvents(callback: (event: Event) => void) {

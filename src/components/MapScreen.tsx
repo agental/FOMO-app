@@ -187,8 +187,11 @@ export function MapScreen({
 
   /* ── data loading ── */
   const loadChabadHouses = async () => {
-    const { data } = await supabase.from('chabad_houses').select('*').order('created_at', { ascending: false });
-    if (data) { _mapChabadHouses = data; setChabadHouses(data); }
+    try {
+      const { data, error } = await supabase.from('chabad_houses').select('*').order('created_at', { ascending: false });
+      if (error) { console.error('[MapScreen] loadChabadHouses:', error); return; }
+      if (data) { _mapChabadHouses = data; setChabadHouses(data); }
+    } catch (e) { console.error('[MapScreen] loadChabadHouses failed:', e); }
   };
 
   const loadAdminLocations = async () => {
@@ -270,7 +273,8 @@ export function MapScreen({
   useEffect(() => {
     let alive = true;
     supabase.from('users').select('role').eq('id', userId).single()
-      .then(({ data }) => { if (alive) setIsAdmin(data?.role === 'admin'); });
+      .then(({ data }) => { if (alive) setIsAdmin(data?.role === 'admin'); })
+      .catch(err => console.error('[MapScreen] admin check failed:', err));
     return () => { alive = false; };
   }, [userId]);
 
@@ -1079,8 +1083,13 @@ export function MapScreen({
 
   const handleMeetupJoined = async (meetupId: string) => {
     await loadMeetups();
-    const fresh = meetups.find(m => m.id === meetupId);
-    if (fresh) setGroupChatMeetup(fresh);
+    // query directly — meetups state is still the old snapshot after loadMeetups
+    const { data } = await supabase
+      .from('meetups')
+      .select('*, users(id, display_name, avatar_url)')
+      .eq('id', meetupId)
+      .maybeSingle();
+    if (data) setGroupChatMeetup(data as Meetup);
   };
 
   const handleOpenChat = (meetupId: string) => {
@@ -1122,11 +1131,6 @@ export function MapScreen({
   /* ─────────────────────────── render ────────────────────────────────── */
   return (
     <div className="h-screen w-screen relative overflow-hidden bg-[#1A1F2E]" dir="rtl">
-
-      {/* TEMPP tiny version marker — confirms fresh code loaded; remove once confirmed */}
-      <div style={{ position: 'fixed', top: 2, left: 2, zIndex: 99999, background: 'rgba(220,38,38,0.85)', color: '#fff', font: '10px monospace', padding: '1px 5px', borderRadius: 4, pointerEvents: 'none' }}>
-        area-1
-      </div>
 
       {/* Loading */}
       {loading && (

@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { Plus, MapPin, Shield, Bell, Calendar, Users, Clock, ChevronDown, Check, X, Search } from 'lucide-react';
+import { Plus, MapPin, Shield, Bell, Calendar, Users, Clock, ChevronDown, Check, X, Search, Zap, Flame } from 'lucide-react';
 import { FilterSheet } from './FilterSheet';
 import { HeaderProfileAvatar } from './HeaderProfileAvatar';
 import { supabase } from '../lib/supabase';
@@ -85,7 +85,7 @@ export function HomeScreen({
   const [activeCountry, setActiveCountry] = useState<string | null>(_cachedCountries[0] || null);
   const [searchQuery, setSearchQuery] = useState('');
   const [loading] = useState(false);
-  const [currentUserId] = useState<string | null>(propUserId || null);
+  const currentUserId = propUserId || null;
   const [createMode, setCreateMode] = useState<CreateMode>('none');
   const [selectedEvent, setSelectedEvent] = useState<Event | null>(null);
   const [selectedInterest, setSelectedInterest] = useState<string | null>(null);
@@ -151,7 +151,7 @@ export function HomeScreen({
       setCreateMode('select');
       onCreateConsumed?.();
     }
-  }, [openCreateSignal]);
+  }, [openCreateSignal, onCreateConsumed]);
 
   // Re-fetch events whenever the country scope or filters change.
   // activeCountry === null → show events from ALL of the user's travel countries.
@@ -1116,13 +1116,13 @@ export function HomeScreen({
                           const cIsFree = !(event as any).price;
 
                           const cUrgencyBadge = cIsToday
-                            ? { label: '⚡ היום!', bg: '#F97316' }
+                            ? { label: <><Zap size={9} style={{ display: 'inline', verticalAlign: 'middle' }} /> היום!</>, bg: '#F97316' }
                             : cIsTomorrow
-                              ? { label: '📅 מחר', bg: '#8B5CF6' }
+                              ? { label: <><Calendar size={9} style={{ display: 'inline', verticalAlign: 'middle' }} /> מחר</>, bg: '#8B5CF6' }
                               : cIsVeryScarce
-                                ? { label: `🔥 רק ${cSpotsLeft}!`, bg: '#ef4444' }
+                                ? { label: <><Flame size={9} style={{ display: 'inline', verticalAlign: 'middle' }} /> רק {cSpotsLeft}!</>, bg: '#ef4444' }
                                 : cIsAlmostFull
-                                  ? { label: '🔥 כמעט מלא', bg: '#ef4444' }
+                                  ? { label: <><Flame size={9} style={{ display: 'inline', verticalAlign: 'middle' }} /> כמעט מלא</>, bg: '#ef4444' }
                                   : null;
 
                           return (
@@ -1162,8 +1162,8 @@ export function HomeScreen({
                                   <div className="flex items-center gap-1">
                                     {cIsFree && (
                                       <span
-                                        className="text-white font-black px-2 py-0.5 rounded-full"
-                                        style={{ fontSize: '10px', background: 'linear-gradient(135deg,#10b981,#059669)', fontFamily: 'Heebo, sans-serif' }}
+                                        className="text-white font-black"
+                                        style={{ fontSize: '12px', padding: '2px 8px', borderRadius: 8, background: 'linear-gradient(135deg,#10b981,#059669)', fontFamily: 'Heebo, sans-serif', boxShadow: '0 2px 6px rgba(16,185,129,0.35)' }}
                                       >
                                         חינם!
                                       </span>

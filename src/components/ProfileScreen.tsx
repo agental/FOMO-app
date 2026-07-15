@@ -186,23 +186,33 @@ export default function ProfileScreen({
 
   const loadProfile = async () => {
     if (!targetUserId) return;
-    const { data } = await supabase.from('users').select('*').eq('id', targetUserId).maybeSingle();
-    if (data) {
-      const countries = data.selected_countries || [];
-      _profileCache[targetId] = { ..._profileCache[targetId], profile: data, selectedCountries: countries };
-      setProfile(data);
-      setSelectedCountries(countries);
+    try {
+      const { data } = await supabase.from('users').select('*').eq('id', targetUserId).maybeSingle();
+      if (data) {
+        const countries = data.selected_countries || [];
+        _profileCache[targetId] = { ..._profileCache[targetId], profile: data, selectedCountries: countries };
+        setProfile(data);
+        setSelectedCountries(countries);
+      }
+    } catch (e) {
+      console.error('[ProfileScreen] loadProfile failed:', e);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   const loadStats = async () => {
     if (!targetUserId) return;
-    const { count } = await supabase
-      .from('events').select('id', { count: 'exact', head: true }).eq('user_id', targetUserId);
-    const n = count || 0;
-    _profileCache[targetId] = { ..._profileCache[targetId], eventsCount: n } as ProfileCache;
-    setEventsCount(n);
+    try {
+      const { count } = await supabase
+        .from('events').select('id', { count: 'exact', head: true }).eq('user_id', targetUserId);
+      const n = count || 0;
+      const existing = _profileCache[targetId] || {};
+      _profileCache[targetId] = { ...existing, eventsCount: n } as ProfileCache;
+      setEventsCount(n);
+    } catch (e) {
+      console.error('[ProfileScreen] loadStats failed:', e);
+    }
   };
 
   const handleLogout = async () => {
@@ -212,9 +222,15 @@ export default function ProfileScreen({
 
   const saveCountries = async () => {
     if (!currentUserId) return;
-    await supabase.from('users').update({ selected_countries: selectedCountries }).eq('id', currentUserId);
-    await loadProfile();
-    setIsSelectingCountries(false);
+    try {
+      const { error } = await supabase.from('users').update({ selected_countries: selectedCountries }).eq('id', currentUserId);
+      if (error) throw error;
+      await loadProfile();
+      setIsSelectingCountries(false);
+    } catch (e) {
+      console.error('[ProfileScreen] saveCountries failed:', e);
+      alert('שגיאה בשמירת המדינות, נסה שוב.');
+    }
   };
 
   /* ── Section editor (interests) ── */
@@ -231,7 +247,8 @@ export default function ProfileScreen({
   };
   const saveEditor = async () => {
     if (!currentUserId || !editField) return;
-    await supabase.from('users').update({ [editField]: editValues }).eq('id', currentUserId);
+    const { error } = await supabase.from('users').update({ [editField]: editValues }).eq('id', currentUserId);
+    if (error) { alert('שגיאה בשמירה, נסה שוב.'); return; }
     setProfile(p => (p ? { ...p, [editField]: editValues } : p));
     setEditField(null);
   };

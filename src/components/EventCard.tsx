@@ -1,7 +1,6 @@
 import { useState } from 'react';
-import { Clock, Tag, MoveVertical as MoreVertical } from 'lucide-react';
+import { Clock, Tag, MoveVertical as MoreVertical, Zap, Calendar, Flame } from 'lucide-react';
 import type { Event } from '../lib/supabase';
-import { UserAvatar } from './UserAvatar';
 import { getCategoryColor, getCategoryEmoji } from '../utils/eventCategories';
 
 type EventCardProps = {
@@ -72,17 +71,17 @@ export function EventCard({
 
   // Urgency badge
   const urgencyBadge = isToday
-    ? { label: '⚡ היום!', bg: '#F97316' }
+    ? { label: <><Zap size={8} style={{ display: 'inline', verticalAlign: 'middle' }} /> היום!</>, bg: '#F97316' }
     : isTomorrow
-      ? { label: '📅 מחר', bg: '#8B5CF6' }
+      ? { label: <><Calendar size={8} style={{ display: 'inline', verticalAlign: 'middle' }} /> מחר</>, bg: '#8B5CF6' }
       : isThisWeek && isAlmostFull
-        ? { label: '🔥 כמעט מלא', bg: '#ef4444' }
+        ? { label: <><Flame size={8} style={{ display: 'inline', verticalAlign: 'middle' }} /> כמעט מלא</>, bg: '#ef4444' }
         : null;
 
   return (
     <div
-      className="bg-white rounded-[20px] overflow-hidden active:scale-[0.98] transition-transform relative"
-      style={{ boxShadow: '0 4px 16px rgba(0,0,0,0.08)' }}
+      className="bg-white overflow-hidden active:scale-[0.98] transition-transform relative"
+      style={{ boxShadow: '0 2px 8px rgba(0,0,0,0.06), 0 8px 24px rgba(0,0,0,0.07)', borderRadius: 'var(--radius-lg)' }}
     >
       {/* manage menu */}
       {canManage && (
@@ -146,6 +145,33 @@ export function EventCard({
               {urgencyBadge.label}
             </div>
           )}
+
+          {/* Creator avatar — bottom-left overlay */}
+          {event.users && (
+            <div
+              className="absolute bottom-1 left-1 cursor-pointer"
+              onClick={e => { e.stopPropagation(); onUserClick?.(event.user_id); }}
+              style={{
+                width: 24, height: 24, borderRadius: '50%',
+                border: '1.5px solid rgba(255,255,255,0.9)',
+                boxShadow: '0 1px 4px rgba(0,0,0,0.25)',
+                overflow: 'hidden', background: accentColor,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}
+            >
+              {event.users.avatar_url ? (
+                <img
+                  src={event.users.avatar_url}
+                  alt={event.users.display_name || ''}
+                  style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                />
+              ) : (
+                <span style={{ fontSize: 10, color: 'white', fontWeight: 900, fontFamily: 'Heebo, sans-serif' }}>
+                  {event.users.display_name?.[0] || '?'}
+                </span>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Info */}
@@ -169,8 +195,14 @@ export function EventCard({
                 </span>
               ) : (
                 <span
-                  className="font-black px-1.5 py-0.5 rounded-md text-white"
-                  style={{ fontSize: '10px', background: 'linear-gradient(135deg,#10b981,#059669)', fontFamily: 'Heebo, sans-serif' }}
+                  className="font-black text-white"
+                  style={{
+                    fontSize: '12px', padding: '2px 8px',
+                    borderRadius: 8,
+                    background: 'linear-gradient(135deg,#10b981,#059669)',
+                    fontFamily: 'Heebo, sans-serif',
+                    boxShadow: '0 2px 6px rgba(16,185,129,0.35)',
+                  }}
                 >
                   חינם!
                 </span>
@@ -205,8 +237,9 @@ export function EventCard({
             <button
               onClick={e => { e.stopPropagation(); if (!isFull || isAttending) onAttendClick(); }}
               disabled={isFull && !isAttending}
-              className="px-4 py-1.5 rounded-[12px] text-[13px] font-bold text-white active:scale-95 transition-all"
+              className="px-4 py-1.5 text-[13px] font-bold text-white active:scale-95 transition-all"
               style={{
+                borderRadius: 'var(--radius-sm)',
                 background: ctaBg,
                 boxShadow: isFull ? 'none' : `0 3px 10px ${isAlmostFull ? '#ef444440' : accentColor + '40'}`,
                 fontFamily: 'Heebo, sans-serif',
@@ -218,15 +251,6 @@ export function EventCard({
           </div>
         </div>
 
-        {/* Creator avatar */}
-        {event.users && (
-          <div
-            className="flex-shrink-0 self-center cursor-pointer"
-            onClick={e => { e.stopPropagation(); onUserClick?.(event.user_id); }}
-          >
-            <UserAvatar avatarUrl={event.users.avatar_url} displayName={event.users.display_name} size="small" />
-          </div>
-        )}
       </div>
     </div>
   );
