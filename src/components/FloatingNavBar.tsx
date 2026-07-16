@@ -140,7 +140,7 @@ export function FloatingNavBar({
                 <MessageCircle className="w-4.5 h-4.5" strokeWidth={2} style={{ color: activeTab === 'chat' ? '#F97316' : '#9ca3af' }} />
               </div>
               {unreadCount > 0 && (
-                <div className="absolute -top-1 -right-1 w-4 h-4 bg-rose-500 rounded-full flex items-center justify-center border-2 border-white shadow-lg animate-pulse">
+                <div className="absolute -top-1 -left-1 w-4 h-4 bg-rose-500 rounded-full flex items-center justify-center border-2 border-white shadow-lg animate-pulse">
                   <span className="text-[10px] font-bold text-white">
                     {unreadCount > 9 ? '9+' : unreadCount}
                   </span>

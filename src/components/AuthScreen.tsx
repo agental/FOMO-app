@@ -180,7 +180,7 @@ export function AuthScreen(_props: AuthScreenProps) {
       {/* ── Heading ── */}
       <div style={{ flexShrink: 0, padding: '26px 26px 0', animation: 'fomoFadeUp 0.7s cubic-bezier(0.22,1,0.36,1) both' }}>
         <h1 style={{ margin: 0, fontSize: 28, lineHeight: 1.2, fontWeight: 900, color: INK, fontFamily: HEEBO }}>
-          מצא חברים לטיול,<br />בכל מקום בעולם 🎉
+          עכשיו אתה יודע מה יש לעשות באותו יעד לפני שאתה נוחת 😉
         </h1>
         <p style={{ margin: '10px 0 0', fontSize: 15.5, fontWeight: 500, color: '#6B7280', fontFamily: RUBIK }}>
           הצטרף לאירועים, דבר עם מטיילים והכיר את המקום — לפני שאתה שם.
@@ -217,12 +217,23 @@ export function AuthScreen(_props: AuthScreenProps) {
         </div>
 
         {/* Event / home card */}
-        <div className="fomo-float" style={{ ...floatCard, top: '60%', insetInlineEnd: '7%', width: 165, animation: 'fomoFloatC 6.6s ease-in-out infinite' }}>
+        <div className="fomo-float" style={{ ...floatCard, top: '60%', insetInlineEnd: '7%', width: 170, animation: 'fomoFloatC 6.6s ease-in-out infinite' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-            <span style={{ width: 40, height: 40, borderRadius: 12, background: 'linear-gradient(135deg,#F97316,#EA580C)', display: 'grid', placeItems: 'center', fontSize: 20, flexShrink: 0 }}>🎉</span>
+            <img src="/villa-party.jpg" alt="מסיבת וילה" style={{ width: 44, height: 44, borderRadius: 12, objectFit: 'cover', flexShrink: 0 }} />
             <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: 12.5, fontWeight: 800, color: INK, fontFamily: HEEBO, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>מסיבת גג · הערב</div>
-              <div style={{ fontSize: 11, fontWeight: 600, color: '#9AA0AC', fontFamily: HEEBO }}>12 מטיילים מגיעים</div>
+              <div style={{ fontSize: 12.5, fontWeight: 800, color: INK, fontFamily: HEEBO, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>מסיבת וילה 🎉</div>
+              <div style={{ display: 'flex', alignItems: 'center', marginTop: 4 }}>
+                {[
+                  { src: 'https://i.pravatar.cc/150?img=47', border: '#F97316' },
+                  { src: 'https://i.pravatar.cc/150?img=12', border: '#F97316' },
+                  { src: 'https://i.pravatar.cc/150?img=32', border: '#F97316' },
+                  { src: 'https://i.pravatar.cc/150?img=5',  border: '#F97316' },
+                  { src: 'https://i.pravatar.cc/150?img=21', border: '#F97316' },
+                ].map((av, i) => (
+                  <img key={i} src={av.src} alt="" style={{ width: 20, height: 20, borderRadius: '50%', objectFit: 'cover', border: '2px solid #fff', marginInlineStart: i === 0 ? 0 : -6, flexShrink: 0 }} />
+                ))}
+                <span style={{ fontSize: 10, fontWeight: 700, color: '#9AA0AC', fontFamily: HEEBO, marginInlineStart: 5 }}>+14</span>
+              </div>
             </div>
           </div>
         </div>

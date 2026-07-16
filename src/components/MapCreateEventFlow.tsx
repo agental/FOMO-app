@@ -14,6 +14,7 @@ interface MapCreateEventFlowProps {
   userId: string;
   initialLocation?: { latitude: number; longitude: number };
   defaultCountry?: string;
+  existingEvent?: Record<string, any>; // edit mode — pre-fills all fields
 }
 
 type FlowStep = 1 | 2 | 3 | 4;
@@ -71,7 +72,8 @@ function getNextDays(count: number) {
   });
 }
 
-export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initialLocation, defaultCountry }: MapCreateEventFlowProps) {
+export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initialLocation, defaultCountry, existingEvent }: MapCreateEventFlowProps) {
+  const isEditMode = !!existingEvent;
   const [step, setStep] = useState<FlowStep>(1);
   const [dir, setDir]   = useState(1);
 
@@ -122,6 +124,33 @@ export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initial
     mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN || '';
     return () => { mapRef.current?.remove(); mapRef.current = null; };
   }, []);
+
+  // Pre-fill fields when opening in edit mode
+  useEffect(() => {
+    if (!isOpen || !existingEvent) return;
+    setTitle(existingEvent.title || '');
+    setDescription(existingEvent.description || '');
+    setSelectedEmoji(existingEvent.emoji || '🎉');
+    setEventType(existingEvent.event_type || 'parties');
+    setLatitude(existingEvent.latitude ?? null);
+    setLongitude(existingEvent.longitude ?? null);
+    setLocationName(existingEvent.address || existingEvent.city || '');
+    setDetectedCity(existingEvent.city || null);
+    setDetectedCountry(existingEvent.country || null);
+    setIsPrivate(existingEvent.is_private ?? false);
+    setMaxAttendees(existingEvent.max_attendees >= 9999 ? 9999 : (existingEvent.max_attendees || 20));
+    setNoLimit(existingEvent.max_attendees >= 9999);
+    setIsPaid(existingEvent.price > 0);
+    setTicketPrice(existingEvent.price > 0 ? String(existingEvent.price) : '');
+    setImageUrl(existingEvent.image_url || '');
+    setImagePreview(existingEvent.image_url || '');
+    // Parse event_date to day + time
+    if (existingEvent.event_date) {
+      const d = new Date(existingEvent.event_date);
+      setSelectedDay(d.toISOString().split('T')[0]);
+      setSelectedTime(`${String(d.getHours()).padStart(2,'0')}:00`);
+    }
+  }, [isOpen, existingEvent]);
 
   // init map once when component opens — map container is always in DOM
   useEffect(() => {
@@ -252,8 +281,8 @@ export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initial
       } else if (imageUrl) {
         finalImage = imageUrl;
       }
-      const created = await EventService.createEvent({
-        user_id: userId, title, description: description || title,
+      const payload = {
+        title, description: description || title,
         emoji: selectedEmoji, event_type: eventType,
         latitude, longitude,
         city: detectedCity || locationName || 'Unknown',
@@ -261,14 +290,22 @@ export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initial
         country: detectedCountry || defaultCountry || undefined,
         event_date: new Date(`${selectedDay}T${selectedTime}`).toISOString(),
         is_private: isPrivate, max_attendees: noLimit ? 9999 : maxAttendees,
-        image_url: finalImage || undefined,
+        image_url: finalImage || imageUrl || existingEvent?.image_url || undefined,
         price: isPaid && ticketPrice ? Number(ticketPrice) : null,
-      });
-      if (!created) throw new Error('שגיאה בשמירת האירוע בשרת');
-      setCreatedEvent(created);
+      };
+
+      let result: Record<string, any>;
+      if (isEditMode && existingEvent?.id) {
+        result = await EventService.updateEvent(existingEvent.id, payload);
+      } else {
+        const created = await EventService.createEvent({ user_id: userId, ...payload });
+        if (!created) throw new Error('שגיאה בשמירת האירוע בשרת');
+        result = created;
+      }
+      setCreatedEvent(result);
       setShowSuccess(true);
-      launchConfetti();
-    } catch (err: any) { alert(err?.message || 'שגיאה ביצירת האירוע'); }
+      if (!isEditMode) launchConfetti();
+    } catch (err: any) { alert(err?.message || (isEditMode ? 'שגיאה בעדכון האירוע' : 'שגיאה ביצירת האירוע')); }
     finally { setSubmitting(false); }
   };
 
@@ -351,13 +388,13 @@ export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initial
                 transition={{ delay: 0.25 }}
               >
                 <p className="text-white text-[28px] font-black leading-tight" style={{ fontFamily: 'Heebo, sans-serif' }}>
-                  האירוע נוצר בהצלחה!
+                  {isEditMode ? 'האירוע עודכן בהצלחה!' : 'האירוע נוצר בהצלחה!'}
                 </p>
                 <p className="text-white/70 text-[16px] mt-2 font-medium">
                   {title}
                 </p>
                 <p className="text-white/50 text-[13px] mt-1">
-                  עכשיו יופיע על המפה לכולם לראות
+                  {isEditMode ? 'השינויים נשמרו ויופיעו מיד' : 'עכשיו יופיע על המפה לכולם לראות'}
                 </p>
               </motion.div>
 
@@ -370,7 +407,7 @@ export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initial
                 transition={{ delay: 0.4 }}
                 whileTap={{ scale: 0.96 }}
               >
-                מעולה! 🎉
+                {isEditMode ? 'מצוין! ✅' : 'מעולה! 🎉'}
               </motion.button>
             </motion.div>
           </motion.div>

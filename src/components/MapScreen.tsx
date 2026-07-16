@@ -240,8 +240,10 @@ export function MapScreen({
 
   const countriesToFilter = buildCountryFilterArray(selectedCountries);
 
+  // Map shows ALL events globally — it's a discovery tool, not a filtered feed.
+  // Country filter applies only to the home screen feed.
   const { events: nearbyEvents, refreshEvents, updateFilters, addEvent } = useEvents({
-    countries: countriesToFilter,
+    countries: [],
     userLocation: location ? { latitude: location.latitude, longitude: location.longitude } : undefined,
   });
 
@@ -289,7 +291,7 @@ export function MapScreen({
   useEffect(() => {
     if (location) {
       updateFilters({
-        countries: countriesToFilter,
+        countries: [], // map shows all events globally
         searchQuery: searchQuery || undefined,
         userLocation: { latitude: location.latitude, longitude: location.longitude },
       });
@@ -539,7 +541,31 @@ export function MapScreen({
       fitBoundsOptions: { maxZoom: map.getZoom() },
     });
     map.addControl(geolocate, 'bottom-right');
-    map.on('load', () => { try { geolocate.trigger(); } catch { /* control/style not ready */ } });
+
+    // When GeolocateControl fails (common in Expo WebView — security model blocks watchPosition),
+    // fall back to the location we already have from the native GPS bridge.
+    geolocate.on('error', () => {
+      if (_mapLocation && mapInstanceRef.current) {
+        mapInstanceRef.current.flyTo({ center: [_mapLocation.longitude, _mapLocation.latitude], zoom: 15, essential: true });
+      }
+    });
+
+    map.on('load', () => {
+      try { geolocate.trigger(); } catch { /* control/style not ready */ }
+
+      // Also override the button's click so it ALWAYS flies to the known location,
+      // regardless of whether the GeolocateControl's internal geolocation resolves.
+      setTimeout(() => {
+        const btn = map.getContainer().querySelector('.mapboxgl-ctrl-geolocate') as HTMLButtonElement | null;
+        if (btn) {
+          btn.addEventListener('click', () => {
+            if (_mapLocation && mapInstanceRef.current) {
+              mapInstanceRef.current.flyTo({ center: [_mapLocation.longitude, _mapLocation.latitude], zoom: 15, essential: true });
+            }
+          });
+        }
+      }, 500);
+    });
 
     mapInstanceRef.current = map;
     setMapReady(true);

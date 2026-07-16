@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
-import { Calendar, MapPin, MessageCircle, Navigation } from 'lucide-react';
+import { Calendar, MapPin, MessageCircle, Navigation, Pencil } from 'lucide-react';
+import { MapCreateEventFlow } from './MapCreateEventFlow';
 import { supabase, type Event } from '../lib/supabase';
 import { flagEmoji } from '../utils/flags';
 import { UserAvatar } from './UserAvatar';
@@ -48,6 +49,7 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
   const [showPayment, setShowPayment] = useState(false);
   const [showNav, setShowNav] = useState(false);
   const [showShare, setShowShare] = useState(false);
+  const [showEdit, setShowEdit] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   /* ── bottom-sheet mode (variant='sheet'): the SAME snap machine as the place sheet — three detents
@@ -560,23 +562,45 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
     </>
   );
 
-  const joinButton = (
+  const soldOut = isFull && !isJoined;
+
+  const joinButton = isOwner ? (
+    // Owner sees an "Edit event" button instead of join
     <button
-      onClick={handleJoin}
-      disabled={joinDisabled}
-      className="w-full font-black text-[17px] text-white active:scale-[0.97] transition-transform disabled:opacity-60"
+      onClick={() => setShowEdit(true)}
+      className="w-full font-black text-[17px] text-white active:scale-[0.97] transition-transform flex items-center justify-center gap-2"
       style={{
         fontFamily: 'Heebo, sans-serif',
         height: 56,
         borderRadius: 28,
-        background: isJoined
-          ? 'linear-gradient(135deg,#ef4444,#dc2626)'
-          : joinDisabled ? '#D1D5DB'
-          : `linear-gradient(135deg, ${'#F97316'}, ${'#F97316'}bb)`,
-        boxShadow: joinDisabled || isJoined ? 'none' : `0 8px 24px ${'#F97316'}55`,
+        background: 'linear-gradient(135deg,#1f2937,#374151)',
+        boxShadow: '0 8px 24px rgba(0,0,0,0.25)',
       }}
     >
-      {joining ? '...' : joinLabel}
+      <Pencil size={18} strokeWidth={2.5} />
+      ערוך אירוע
+    </button>
+  ) : (
+    <button
+      onClick={handleJoin}
+      disabled={joinDisabled}
+      className="w-full font-black text-[17px] active:scale-[0.97] transition-transform disabled:cursor-not-allowed"
+      style={{
+        fontFamily: 'Heebo, sans-serif',
+        height: 56,
+        borderRadius: 28,
+        color: soldOut ? '#6B7280' : 'white',
+        background: soldOut
+          ? '#F3F4F6'
+          : isJoined
+            ? 'linear-gradient(135deg,#ef4444,#dc2626)'
+            : joinDisabled ? '#D1D5DB'
+            : `linear-gradient(135deg, ${'#F97316'}, ${'#F97316'}bb)`,
+        boxShadow: soldOut || joinDisabled || isJoined ? 'none' : `0 8px 24px ${'#F97316'}55`,
+        border: soldOut ? '2px solid #E5E7EB' : 'none',
+      }}
+    >
+      {joining ? '...' : soldOut ? '🔴 Sold Out' : joinLabel}
     </button>
   );
 
@@ -600,6 +624,16 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
           lng={event.longitude}
           name={event.title || event.city || 'מיקום האירוע'}
           onClose={() => setShowNav(false)}
+        />
+      )}
+      {showEdit && isOwner && currentUserId && (
+        <MapCreateEventFlow
+          isOpen={showEdit}
+          onClose={() => setShowEdit(false)}
+          onSuccess={() => setShowEdit(false)}
+          userId={currentUserId}
+          existingEvent={event as any}
+          initialLocation={event.latitude != null ? { latitude: event.latitude, longitude: event.longitude } : undefined}
         />
       )}
     </>
@@ -651,7 +685,7 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
             ref={scrollRef}
             style={{
               flex: '1 1 auto', minHeight: 0,
-              paddingBottom: isOwner ? 24 : 104,
+              paddingBottom: 100,
               // Scrolls only when the card is full and not being dragged — otherwise the card moves,
               // not the content (and iOS can't rubber-band the body inside the sheet).
               overflowY: snap === 'full' && !dragging ? 'auto' : 'hidden',
@@ -724,6 +758,16 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
           פרטי האירוע
         </span>
         <div className="flex items-center gap-1">
+          {isOwner && (
+            <button
+              onClick={() => setShowEdit(true)}
+              aria-label="ערוך אירוע"
+              className="w-10 h-10 flex items-center justify-center rounded-full active:bg-gray-100 transition-colors"
+              style={{ touchAction: 'manipulation' }}
+            >
+              <Pencil size={18} color="#F97316" strokeWidth={2} />
+            </button>
+          )}
           <button
             onClick={handleShare}
             aria-label="שתף אירוע"
@@ -753,7 +797,7 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
       <div
         ref={scrollRef}
         className="overflow-y-auto overscroll-contain"
-        style={{ height: 'calc(100% - 57px)', paddingBottom: isOwner ? 24 : 100 }}
+        style={{ height: 'calc(100% - 57px)', paddingBottom: 100 }}
       >
         {detailBody}
       </div>

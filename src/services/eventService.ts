@@ -197,6 +197,17 @@ export class EventService {
     }
   }
 
+  static async updateEvent(eventId: string, updates: Partial<Omit<Event, 'id' | 'user_id' | 'created_at'>>): Promise<Event> {
+    const { data, error } = await supabase
+      .from('events')
+      .update(updates)
+      .eq('id', eventId)
+      .select('*, users(id, display_name, avatar_url)')
+      .single();
+    if (error) throw error;
+    return data as Event;
+  }
+
   static async getAllEventsNoFilter(): Promise<Event[]> {
     try {
       const { data: events, error } = await supabase
