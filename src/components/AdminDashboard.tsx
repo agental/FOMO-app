@@ -1,8 +1,7 @@
 import { useState, useEffect } from 'react';
 import { supabase, type Event, type User, type AdminAction, type ChabadHouse } from '../lib/supabase';
 import { type MapArea } from '../services/mapAreaService';
-import { Shield, TrendingUp, Users, FileText, Calendar, TriangleAlert as AlertTriangle, Trash2, Eye, Hop as Home, Flag, Search, ShieldCheck, ShieldOff, MapPin } from 'lucide-react';
-import { EventCard } from './EventCard';
+import { Shield, TrendingUp, Users, Calendar, TriangleAlert as AlertTriangle, Trash2, Eye, Hop as Home, Flag, Search, ShieldCheck, ShieldOff, MapPin } from 'lucide-react';
 import { BackButton } from './BackButton';
 import { UserAvatar } from './UserAvatar';
 import { UserProfileModal } from './UserProfileModal';

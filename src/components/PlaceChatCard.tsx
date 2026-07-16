@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { ChevronLeft } from 'lucide-react';
 import { createPlacePinSVG } from '../utils/createLocationPin';
+import { createChabadPinSVG } from '../utils/createChabadPin';
 import { placePinColor } from '../utils/placePinColor';
 import type { PlacePayload } from '../utils/placeMessage';
 
@@ -19,12 +20,13 @@ export function PlaceChatCard({ data, onClick }: { data: PlacePayload; onClick: 
 
   const emoji = data.emoji || '📍';
   const color = data.color || placePinColor(emoji);
+  const isChabad = (data.id || '').startsWith('chabad:'); // shared Chabad house → use its real pin
 
   useEffect(() => {
     const host = pinRef.current;
     if (!host) return;
-    host.replaceChildren(createPlacePinSVG(emoji, color));
-  }, [emoji, color]);
+    host.replaceChildren(isChabad ? createChabadPinSVG() : createPlacePinSVG(emoji, color));
+  }, [emoji, color, isChabad]);
 
   // @2x so it stays sharp on a phone; no logo/attribution chrome inside a chat bubble.
   const mapUrl = TOKEN
@@ -58,7 +60,7 @@ export function PlaceChatCard({ data, onClick }: { data: PlacePayload; onClick: 
           ref={pinRef}
           style={{
             position: 'absolute', left: '50%', top: '50%',
-            transform: 'translate(-50%, -100%) scale(1.15)',
+            transform: `translate(-50%, -100%) scale(${isChabad ? 0.9 : 1.15})`,
             transformOrigin: 'bottom center',
             lineHeight: 0, pointerEvents: 'none',
           }}
@@ -70,7 +72,7 @@ export function PlaceChatCard({ data, onClick }: { data: PlacePayload; onClick: 
           borderRadius: 20, padding: '3px 9px',
           fontSize: 11, fontWeight: 800, color, fontFamily: 'Heebo, sans-serif',
         }}>
-          {emoji} מקום
+          {isChabad ? '🕎 בית חב״ד' : `${emoji} מקום`}
         </span>
       </div>
 

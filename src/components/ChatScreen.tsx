@@ -1,15 +1,14 @@
 import { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { Send, ChevronDown } from 'lucide-react';
-import { supabase, type Event, type AdminLocation } from '../lib/supabase';
+import { supabase, type Event } from '../lib/supabase';
 import { UserAvatar } from './UserAvatar';
 import { BackButton } from './BackButton';
 import { EventChatCard } from './EventChatCard';
 import { PlaceChatCard } from './PlaceChatCard';
-import { AdminLocationBottomSheet } from './AdminLocationBottomSheet';
 import { EventDetailsModal } from './EventDetailsModal';
 import { MessageBubble } from './MessageBubble';
 import { parseEvent } from '../utils/eventMessage';
-import { parsePlace } from '../utils/placeMessage';
+import { parsePlace, type PlacePayload } from '../utils/placeMessage';
 
 type Message = {
   id: string;
@@ -31,6 +30,7 @@ type ChatScreenProps = {
   currentUserId: string;
   otherUserId: string;
   onBack: () => void;
+  onOpenMapAt?: (lat: number, lng: number, placeId?: string, place?: PlacePayload) => void;
   onNavigateToUserProfile?: (userId: string) => void;
 };
 
@@ -38,14 +38,13 @@ type ChatScreenProps = {
 const _chatMsgCache: Record<string, Message[]> = {};
 const _chatUserCache: Record<string, OtherUser> = {};
 
-export function ChatScreen({ conversationId, currentUserId, otherUserId, onBack, onNavigateToUserProfile }: ChatScreenProps) {
+export function ChatScreen({ conversationId, currentUserId, otherUserId, onBack, onOpenMapAt, onNavigateToUserProfile }: ChatScreenProps) {
   const [messages, setMessages] = useState<Message[]>(_chatMsgCache[conversationId] ?? []);
   const [otherUser, setOtherUser] = useState<OtherUser | null>(_chatUserCache[otherUserId] ?? null);
   const [newMessage, setNewMessage] = useState('');
   const [loading, setLoading] = useState(!_chatMsgCache[conversationId]?.length);
   const [sending, setSending] = useState(false);
   const [openEvent, setOpenEvent] = useState<Event | null>(null);
-  const [openPlace, setOpenPlace] = useState<AdminLocation | null>(null);
   const [otherTyping, setOtherTyping] = useState(false); // is the other person typing right now
   const [showScroll, setShowScroll] = useState(false); // show the "jump to bottom" button when scrolled up
   const [unreadNew, setUnreadNew] = useState(0); // count of messages arrived while scrolled up
@@ -364,7 +363,7 @@ export function ChatScreen({ conversationId, currentUserId, otherUserId, onBack,
           {evt ? (
             <div style={popStyle}><EventChatCard data={evt} onClick={() => openEventById(evt.id)} /></div>
           ) : plc ? (
-            <div style={popStyle}><PlaceChatCard data={plc} onClick={() => openPlaceById(plc.id)} /></div>
+            <div style={popStyle}><PlaceChatCard data={plc} onClick={() => onOpenMapAt?.(plc.lat, plc.lng, plc.id, plc)} /></div>
           ) : (
             <div style={{ maxWidth: '78%', ...popStyle }}>
               <MessageBubble mine={mine} tail={isLast} color={mine ? '#FFD4A8' : '#FFFFFF'} contentStyle={{ padding: '7px 14px' }}>
@@ -518,12 +517,6 @@ export function ChatScreen({ conversationId, currentUserId, otherUserId, onBack,
         />
       )}
 
-      <AdminLocationBottomSheet
-        isOpen={!!openPlace}
-        location={openPlace}
-        currentUserId={currentUserId}
-        onClose={() => setOpenPlace(null)}
-      />
     </div>
   );
 }

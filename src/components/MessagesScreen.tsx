@@ -154,7 +154,7 @@ type MessagesScreenProps = {
   onCreateClick?: () => void;
   onMyEventsClick?: () => void;
   onNavigateToCountrySelection?: () => void;
-  onOpenMapAt?: (lat: number, lng: number) => void;
+  onOpenMapAt?: (lat: number, lng: number, placeId?: string) => void;
   onNavigateToUserProfile?: (userId: string) => void;
   initialCountries?: string[];
 };

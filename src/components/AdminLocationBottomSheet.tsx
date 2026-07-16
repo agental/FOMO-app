@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useId } from 'react';
-import { X, Phone, Globe, Navigation, Share2, Star, Send, ChevronDown, ChevronUp, Trash2, Heart, Images, ChevronLeft, Copy } from 'lucide-react';
+import { X, Phone, Globe, Navigation, Share2, Star, Send, ChevronDown, ChevronUp, Trash2, Heart, Images, ImageOff, Copy, Plus, Loader2 } from 'lucide-react';
 import { type AdminLocation, supabase } from '../lib/supabase';
 import { OpenLocationSheet } from './OpenLocationSheet';
 import { WebViewModal } from './WebViewModal';
@@ -39,6 +39,7 @@ const DAY_NAMES = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמיש
 const HEEBO = "'Heebo', sans-serif";
 const INK   = '#111827';
 const MUTED = '#9AA0AC';
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function getOpenStatus(hours: Record<string, { open: string; close: string; closed: boolean }> | null | undefined) {
   if (!hours) return null;
@@ -111,6 +112,106 @@ function HangingSign({ open, sub }: { open: boolean; sub?: string | null }) {
   );
 }
 
+/**
+ * Apple-style photo mosaic: one big photo on the right with up to two stacked on the left, and a
+ * "+N" veil on the last when there are more. Keeps its shape (and the space) even with no photos —
+ * then it's muted skeleton squares, so the card never jumps between a place with and without pics.
+ */
+function PhotoMosaic({ photos, color, canAdd, uploading, onOpen, onAdd }: {
+  photos: string[]; color: string; canAdd: boolean; uploading: boolean;
+  onOpen: (i: number) => void; onAdd: () => void;
+}) {
+  const H = 178, GAP = 6, RADIUS = 18;
+  const cell = (child: React.ReactNode, key: React.Key, onClick?: () => void): React.ReactNode => (
+    <button
+      key={key} onClick={onClick} disabled={!onClick}
+      style={{
+        position: 'relative', flex: 1, minHeight: 0, width: '100%', padding: 0, border: 'none',
+        background: '#EEF0F3', cursor: onClick ? 'pointer' : 'default', overflow: 'hidden',
+      }}
+    >
+      {child}
+    </button>
+  );
+
+  const img = (src: string) => (
+    <img src={src} alt="" loading="lazy" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+  );
+
+  // Empty state — skeleton squares + (admins) an add button.
+  if (photos.length === 0) {
+    const skeleton = (label?: React.ReactNode, onClick?: () => void) => (
+      <div
+        onClick={onClick}
+        style={{
+          flex: 1, minHeight: 0, background: '#F1F2F5', display: 'flex', flexDirection: 'column',
+          alignItems: 'center', justifyContent: 'center', gap: 5, cursor: onClick ? 'pointer' : 'default',
+        }}
+      >
+        {label}
+      </div>
+    );
+    return (
+      <div style={{ display: 'flex', gap: GAP, height: H, borderRadius: RADIUS, overflow: 'hidden' }} dir="rtl">
+        {skeleton(
+          canAdd
+            ? (uploading
+                ? <Loader2 size={22} className="animate-spin" color={color} />
+                : <><Plus size={26} strokeWidth={2.4} color={color} /><span style={{ fontSize: 13, fontWeight: 800, color, fontFamily: HEEBO }}>הוסף תמונה</span></>)
+            : <><ImageOff size={22} strokeWidth={1.8} color="#C4C9D2" /><span style={{ fontSize: 12.5, fontWeight: 700, color: '#A6ACB8', fontFamily: HEEBO }}>אין תמונות עדיין</span></>,
+          canAdd && !uploading ? onAdd : undefined,
+        )}
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: GAP, minWidth: 0 }}>
+          {skeleton(<Images size={18} strokeWidth={1.8} color="#CDD2DB" />)}
+          {skeleton(<Images size={18} strokeWidth={1.8} color="#CDD2DB" />)}
+        </div>
+      </div>
+    );
+  }
+
+  // One photo → full-width hero.
+  if (photos.length === 1) {
+    return (
+      <div style={{ height: H, borderRadius: RADIUS, overflow: 'hidden' }} dir="rtl">
+        {cell(img(photos[0]), 0, () => onOpen(0))}
+      </div>
+    );
+  }
+
+  const rightCount = Math.min(photos.length - 1, 2); // 1 or 2 stacked cells beside the hero
+  return (
+    <div style={{ display: 'flex', gap: GAP, height: H, borderRadius: RADIUS, overflow: 'hidden' }} dir="rtl">
+      {/* hero */}
+      <div style={{ flex: 1.55, minWidth: 0, display: 'flex' }}>
+        {cell(img(photos[0]), 'hero', () => onOpen(0))}
+      </div>
+      {/* stacked column */}
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: GAP }}>
+        {Array.from({ length: rightCount }).map((_, k) => {
+          const i = k + 1;
+          const isLast = k === rightCount - 1;
+          const extra = photos.length - 3;
+          return cell(
+            <>
+              {img(photos[i])}
+              {isLast && extra > 0 && (
+                <span style={{
+                  position: 'absolute', inset: 0, background: 'rgba(17,24,39,0.5)',
+                  display: 'grid', placeItems: 'center', color: '#fff', fontSize: 20, fontWeight: 900, fontFamily: HEEBO,
+                }}>
+                  +{extra}
+                </span>
+              )}
+            </>,
+            i,
+            () => onOpen(i),
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 const pillBase: React.CSSProperties = {
   flexShrink: 0, display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap',
   background: '#F1F2F5', border: 'none', borderRadius: 50, padding: '9px 15px',
@@ -119,6 +220,9 @@ const pillBase: React.CSSProperties = {
 
 export function AdminLocationBottomSheet({ isOpen, onClose, location, currentUserId, userLocation }: AdminLocationBottomSheetProps) {
   const uid = useId();
+  // A tapped base-map POI is fed in as a synthetic place keyed by a text id (not an admin_locations
+  // uuid). Its photos/upload live only on real admin places; save + reviews work for both.
+  const isRealPlace = !!location && UUID_RE.test(location.id);
 
   /* ── sheet snap machine: three detents, like Apple Maps ──
      peek  — title + address only; the map is yours again
@@ -143,9 +247,12 @@ export function AdminLocationBottomSheet({ isOpen, onClose, location, currentUse
   const [showFullHours, setShowFullHours] = useState(false);
   const [showNav, setShowNav] = useState(false);
   const [webUrl, setWebUrl]   = useState<string | null>(null);
-  const [lightbox, setLightbox] = useState(false);
+  const [lightbox, setLightbox] = useState<number | null>(null); // index being viewed, or null
   const [showShare, setShowShare] = useState(false);
   const [savers, setSavers]   = useState<PlaceSaver[]>([]);
+  const [photos, setPhotos]   = useState<string[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   /* reviews */
   const [reviews, setReviews]                 = useState<Review[]>([]);
@@ -167,12 +274,48 @@ export function AdminLocationBottomSheet({ isOpen, onClose, location, currentUse
   useEffect(() => {
     if (!isOpen || !location) return;
     setSnap('half'); setDragDy(0); setEntered(false);
-    setShowFullHours(false); setShowNav(false); setWebUrl(null); setLightbox(false);
+    setShowFullHours(false); setShowNav(false); setWebUrl(null); setLightbox(null);
+    // Seed instantly from the (possibly stale) prop so the mosaic paints…
+    setPhotos(location.place_photos?.length ? location.place_photos
+      : location.place_photo_url ? [location.place_photo_url]
+      : location.image_url ? [location.image_url] : []);
+    // …then refresh from the DB, so photos an admin added earlier are always remembered even if the
+    // map's copy of this place hasn't reloaded yet.
+    if (isRealPlace) {
+      supabase.from('admin_locations').select('place_photos').eq('id', location.id).maybeSingle()
+        .then(({ data }) => { if (data?.place_photos?.length) setPhotos(data.place_photos); });
+    }
     fetchReviews();
     loadPlaceSavers(location.id).then(setSavers);
     const id = requestAnimationFrame(() => setEntered(true));
     return () => cancelAnimationFrame(id);
   }, [isOpen, location?.id]);
+
+  /* Admins can add photos to a place (RLS only lets admins UPDATE admin_locations). Uploads every
+     picked file to the shared `images` bucket, then writes the whole list back to place_photos in
+     one update — so a refresh (or reopening the sheet) always finds them. */
+  const addPhotos = async (files: FileList) => {
+    if (!location || files.length === 0) return;
+    setUploading(true);
+    try {
+      const uploaded: string[] = [];
+      for (const file of Array.from(files)) {
+        const ext = file.name.split('.').pop() || 'jpg';
+        const key = `place-photos/${location.id}/${Date.now()}-${Math.random().toString(36).slice(2, 7)}.${ext}`;
+        const { error: upErr } = await supabase.storage.from('images').upload(key, file, { cacheControl: '3600', upsert: false });
+        if (upErr) { console.error('photo upload:', upErr.message); continue; }
+        uploaded.push(supabase.storage.from('images').getPublicUrl(key).data.publicUrl);
+      }
+      if (uploaded.length === 0) { alert('העלאת התמונות נכשלה'); return; }
+
+      const next = [...photos, ...uploaded];
+      const { error: dbErr } = await supabase.from('admin_locations').update({ place_photos: next }).eq('id', location.id);
+      if (dbErr) { alert('רק מנהל יכול להוסיף תמונות כאן'); return; }
+      setPhotos(next); // persisted — reopening will refetch the same list
+    } finally {
+      setUploading(false);
+    }
+  };
 
   const fetchReviews = async () => {
     if (!location) return;
@@ -290,10 +433,6 @@ export function AdminLocationBottomSheet({ isOpen, onClose, location, currentUse
   if (!isOpen || !location) return null;
 
   /* ── derived ── */
-  const photos = location.place_photos?.length ? location.place_photos
-    : location.place_photo_url ? [location.place_photo_url]
-    : location.image_url ? [location.image_url] : [];
-
   const displayName    = location.place_name || location.name;
   const displayAddress = location.place_address || location.address || '';
   const displayPhone   = location.place_phone || location.phone || '';
@@ -360,7 +499,7 @@ export function AdminLocationBottomSheet({ isOpen, onClose, location, currentUse
   const sheetTranslate = !entered ? SHEET_FULL : Math.min(SHEET_FULL, Math.max(0, basePx + dragDy));
 
   // The map is the point of this screen — the lower the sheet sits, the clearer it gets.
-  const scrim = !entered ? 0 : 0.42 * (1 - Math.min(1, sheetTranslate / OFF_PEEK)) + 0.04;
+  const scrim = 0; // no dark backdrop — keep the map fully bright behind the sheet
 
   return (
     <>
@@ -449,11 +588,36 @@ export function AdminLocationBottomSheet({ isOpen, onClose, location, currentUse
             </div>
           </div>
 
+          {/* ── Subtitle: category · rating · distance (Apple-style, one clean line) ── */}
+          <div className="px-5 mt-1.5" style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
+            {category && (
+              <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13.5, fontWeight: 800, color: pinColor, fontFamily: HEEBO }}>
+                <span>{pinEmoji}</span>{category}
+              </span>
+            )}
+            {rating != null && (
+              <>
+                {category && <span style={{ color: '#D7DAE0', fontSize: 12 }}>·</span>}
+                <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13.5, fontWeight: 800, color: INK, fontFamily: HEEBO }}>
+                  <Star size={13} className="fill-amber-400 text-amber-400" strokeWidth={0} />
+                  {rating.toFixed(1)}
+                  {reviewCount ? <span style={{ color: MUTED, fontWeight: 700 }}>({reviewCount.toLocaleString()})</span> : null}
+                </span>
+              </>
+            )}
+            {distanceText && (
+              <>
+                {(category || rating != null) && <span style={{ color: '#D7DAE0', fontSize: 12 }}>·</span>}
+                <span style={{ fontSize: 13.5, fontWeight: 700, color: MUTED, fontFamily: HEEBO }}>{distanceText}</span>
+              </>
+            )}
+          </div>
+
           {/* ── Address ── */}
           {displayAddress && (
             <button
               onClick={copyAddress}
-              className="px-5 mt-2"
+              className="px-5 mt-1.5"
               style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'none', border: 'none', cursor: 'pointer', textAlign: 'right', width: '100%' }}
             >
               <Copy size={13} strokeWidth={2.2} color={MUTED} style={{ flexShrink: 0 }} />
@@ -481,43 +645,38 @@ export function AdminLocationBottomSheet({ isOpen, onClose, location, currentUse
             touchAction: snap === 'full' && !dragging ? 'pan-y' : 'none',
           }}
         >
-          {/* ── Facts: saved · distance · photos ── */}
-          <div className="pl-hscroll" style={{ display: 'flex', gap: 8, overflowX: 'auto', padding: '14px 20px 0' }}>
-            <span style={{ ...pillBase, cursor: 'default' }}>
-              <b style={{ color: pinColor, fontWeight: 900, fontSize: 14 }}>{savers.length}</b>
-              <span style={{ color: '#6C727E', fontWeight: 700 }}>שמרו את זה</span>
-            </span>
-
-            {distanceText && (
-              <span style={{ ...pillBase, cursor: 'default' }}>
-                <span style={{ width: 9, height: 9, borderRadius: '50%', background: '#2F80ED', boxShadow: '0 0 0 3px #2F80ED33', flexShrink: 0 }} />
-                {distanceText}
-              </span>
-            )}
-
-            {photos.length > 0 && (
-              <button onClick={() => setLightbox(true)} style={pillBase}>
-                <Images size={15} strokeWidth={2.2} />
-                תמונות
-                <span style={{ color: MUTED, fontWeight: 800 }}>{photos.length}</span>
+          {/* ── Photo mosaic (Apple-style) — the hero of the card ── */}
+          <div className="px-5" style={{ paddingTop: 14 }}>
+            <PhotoMosaic
+              photos={photos}
+              color={pinColor}
+              canAdd={isAdmin && isRealPlace}
+              uploading={uploading}
+              onOpen={(i) => setLightbox(i)}
+              onAdd={() => fileRef.current?.click()}
+            />
+            {/* admins can keep adding once there are already photos */}
+            {isAdmin && photos.length > 0 && (
+              <button
+                onClick={() => fileRef.current?.click()}
+                disabled={uploading}
+                style={{
+                  marginTop: 8, width: '100%', height: 40, borderRadius: 13, cursor: 'pointer',
+                  border: `1.5px dashed ${pinColor}66`, background: `${pinColor}0D`, color: pinColor,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
+                  fontSize: 13.5, fontWeight: 800, fontFamily: HEEBO,
+                }}
+              >
+                {uploading
+                  ? <><Loader2 size={15} className="animate-spin" /> מעלה…</>
+                  : <><Plus size={16} strokeWidth={2.6} /> הוסף תמונות</>}
               </button>
             )}
-
-            {category && (
-              <span style={{ ...pillBase, cursor: 'default', background: `${pinColor}16`, color: pinColor }}>
-                {pinEmoji} {category}
-              </span>
-            )}
           </div>
-
-          {/* ── Rating ── */}
-          {rating != null && (
-            <div className="px-5 mt-3" style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-              <span style={{ fontSize: 15, fontWeight: 900, color: INK, fontFamily: HEEBO }}>{rating.toFixed(1)}</span>
-              <Stars rating={rating} uid={uid} size={14} />
-              {reviewCount ? <span style={{ fontSize: 12.5, color: MUTED, fontWeight: 700, fontFamily: HEEBO }}>({reviewCount.toLocaleString()})</span> : null}
-            </div>
-          )}
+          <input
+            ref={fileRef} type="file" accept="image/*" multiple hidden
+            onChange={(e) => { if (e.target.files?.length) addPhotos(e.target.files); e.currentTarget.value = ''; }}
+          />
 
           {/* ── Description ── */}
           {location.description && (
@@ -587,50 +746,15 @@ export function AdminLocationBottomSheet({ isOpen, onClose, location, currentUse
             </div>
           )}
 
-          {/* ── Who loved it ── */}
-          <section className="px-5 mt-7">
-            <h3 style={{ fontSize: 16.5, fontWeight: 900, color: INK, fontFamily: HEEBO, margin: '0 0 10px' }}>
-              מי אהב את המקום
-            </h3>
-
-            {savers.length === 0 ? (
-              <div style={{ background: '#F8F9FB', borderRadius: 18, padding: '22px 16px', textAlign: 'center' }}>
-                <Heart size={22} strokeWidth={1.8} color="#CBD0DA" style={{ margin: '0 auto 7px' }} />
-                <p style={{ fontSize: 13.5, fontWeight: 800, color: INK, fontFamily: HEEBO, margin: 0 }}>אף אחד עדיין לא שמר</p>
-                <p style={{ fontSize: 12, color: MUTED, fontFamily: HEEBO, margin: '3px 0 0' }}>היה הראשון — הקש על הלב למעלה</p>
-              </div>
-            ) : (
-              <div style={{ background: '#F8F9FB', borderRadius: 18, overflow: 'hidden' }}>
-                {savers.map((s, i) => (
-                  <div
-                    key={s.userId}
-                    style={{
-                      display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px',
-                      borderTop: i > 0 ? '1px solid #EDEFF3' : 'none',
-                    }}
-                  >
-                    <span style={{
-                      flexShrink: 0, minWidth: 26, fontSize: 13, fontWeight: 900, fontFamily: HEEBO,
-                      color: i === 0 ? '#E9A400' : '#C3C8D2', textAlign: 'center',
-                    }}>
-                      {i === 0 ? '👑' : `#${i + 1}`}
-                    </span>
-
-                    <UserAvatar userId={s.userId} displayName={s.name} avatarUrl={s.avatarUrl || undefined} size="small" />
-
-                    <span style={{
-                      flex: 1, minWidth: 0, fontSize: 14, fontWeight: 800, color: INK, fontFamily: HEEBO,
-                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                    }}>
-                      {s.userId === currentUserId ? 'את/ה' : s.name}
-                    </span>
-
-                    <ChevronLeft size={16} color="#C3C8D2" style={{ flexShrink: 0 }} />
-                  </div>
-                ))}
-              </div>
-            )}
-          </section>
+          {/* ── How many liked it (just the count) ── */}
+          <div className="px-5 mt-6" style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+            <Heart size={17} strokeWidth={0} fill={savers.length ? '#EF4444' : '#CBD0DA'} />
+            <span style={{ fontSize: 14, fontWeight: 800, color: savers.length ? INK : MUTED, fontFamily: HEEBO }}>
+              {savers.length > 0
+                ? <><b style={{ fontWeight: 900 }}>{savers.length}</b> אהבו את המקום</>
+                : 'היה הראשון שאוהב — הקש על הלב'}
+            </span>
+          </div>
 
           {/* ── Reviews ── */}
           <div className="px-5 mt-7">
@@ -724,10 +848,10 @@ export function AdminLocationBottomSheet({ isOpen, onClose, location, currentUse
       </div>
 
       {/* ── Photo lightbox ── */}
-      {lightbox && photos.length > 0 && (
+      {lightbox !== null && photos.length > 0 && (
         <div className="fixed inset-0 z-[70]" style={{ background: '#000' }} dir="ltr">
           <button
-            onClick={() => setLightbox(false)}
+            onClick={() => setLightbox(null)}
             aria-label="סגור"
             style={{
               position: 'absolute', top: 'max(16px, env(safe-area-inset-top))', right: 16, zIndex: 2,
@@ -740,6 +864,8 @@ export function AdminLocationBottomSheet({ isOpen, onClose, location, currentUse
           </button>
 
           <div
+            // jump straight to the tapped photo (dir=ltr, so scrollLeft = index × width)
+            ref={(el) => { if (el && lightbox) el.scrollLeft = lightbox * el.clientWidth; }}
             className="pl-hscroll"
             style={{ display: 'flex', height: '100%', overflowX: 'auto', scrollSnapType: 'x mandatory' }}
           >

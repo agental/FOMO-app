@@ -1,14 +1,13 @@
-import { Calendar, Star, MapPin, X, ChevronLeft } from 'lucide-react';
+import { Calendar, MapPin, X, ChevronLeft } from 'lucide-react';
 
 type CreateModalProps = {
   onSelectEvent: () => void;
-  onSelectPost: () => void;
   onSelectLocation?: () => void;
   onClose: () => void;
   isAdmin?: boolean;
 };
 
-export function CreateModal({ onSelectEvent, onSelectPost, onSelectLocation, onClose, isAdmin = false }: CreateModalProps) {
+export function CreateModal({ onSelectEvent, onSelectLocation, onClose, isAdmin = false }: CreateModalProps) {
   return (
     <div
       className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-end justify-center z-40 animate-fade-in"
@@ -62,26 +61,6 @@ export function CreateModal({ onSelectEvent, onSelectPost, onSelectLocation, onC
                 </p>
               </div>
               <ChevronLeft className="w-5 h-5 text-white/70 flex-shrink-0" strokeWidth={2.5} />
-            </div>
-          </button>
-
-          {/* SECONDARY — Recommendation */}
-          <button
-            onClick={onSelectPost}
-            className="w-full p-5 rounded-3xl bg-white border border-gray-100 active:scale-[0.98] transition-transform"
-            style={{ boxShadow: 'var(--shadow-card)' }}
-          >
-            <div className="flex items-center gap-4">
-              <div className="w-14 h-14 rounded-2xl flex items-center justify-center flex-shrink-0" style={{ background: '#FFF7ED' }}>
-                <Star className="w-7 h-7" style={{ color: '#F97316' }} strokeWidth={2.2} />
-              </div>
-              <div className="flex-1 text-right min-w-0">
-                <h3 className="text-[18px] font-black text-gray-900 mb-0.5" style={{ fontFamily: 'Heebo, sans-serif' }}>המלצה</h3>
-                <p className="text-[13px] text-gray-500" style={{ fontFamily: 'Rubik, sans-serif' }}>
-                  שתפו מקום שאהבתם — מסעדה, בר או נקודה שווה
-                </p>
-              </div>
-              <ChevronLeft className="w-5 h-5 text-gray-300 flex-shrink-0" strokeWidth={2.5} />
             </div>
           </button>
 

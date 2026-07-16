@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useMemo, type CSSProperties } from 'react';
-import { Loader as Loader2, CircleAlert as AlertCircle, Search, List, X, Users } from 'lucide-react';
+import { Loader as Loader2, CircleAlert as AlertCircle, Search, List, X, Users, MapPin, Clock } from 'lucide-react';
 import { getCategoryColor, getCategoryEmoji } from '../utils/eventCategories';
+import { calculateDistance } from '../utils/distance';
 import { supabase, type ChabadHouse, type AdminLocation, type Meetup } from '../lib/supabase';
 import { FloatingNavBar } from './FloatingNavBar';
 import { EventMapBottomSheet } from './EventMapBottomSheet';
@@ -8,18 +9,17 @@ import { ChabadHouseBottomSheet } from './ChabadHouseBottomSheet';
 import { AdminLocationBottomSheet } from './AdminLocationBottomSheet';
 import { MeetupBottomSheet } from './MeetupBottomSheet';
 import { MeetupGroupChat } from './MeetupGroupChat';
-import { EventCard } from './EventCard';
 import { EventDetailsModal } from './EventDetailsModal';
 import { MapCreateActionSheet } from './MapCreateActionSheet';
 import { MapCreateEventFlow } from './MapCreateEventFlow';
 import { CreateMeetupFlow } from './CreateMeetupFlow';
 import { createEventPinSVG } from '../utils/createEventPin';
-import { createCirclePin } from '../utils/createCirclePin';
 import { createChabadPinSVG } from '../utils/createChabadPin';
+import type { PlacePayload } from '../utils/placeMessage';
 import { createPlacePinSVG } from '../utils/createLocationPin';
-import { postPinStyle } from '../utils/postCategory';
-import { createRecommendationBubble } from '../utils/createRecommendationBubble';
-import { RecommendationModal } from './RecommendationModal';
+import { categoryFromPoi, postCategoryEmoji } from '../utils/postCategory';
+import { placePinColor } from '../utils/placePinColor';
+import { createRecommendationPin } from '../utils/createRecommendationPin';
 import { getMeetupPinColor } from '../utils/meetupPinColor';
 import { buildAreasFC, polygonCentroid, type AreaShape } from '../utils/areaHighlights';
 import { loadMapAreas, insertMapArea, deleteMapArea, type MapArea } from '../services/mapAreaService';
@@ -40,7 +40,7 @@ interface MapScreenProps {
   onNavigateToMessages?: () => void;
   onNavigateToUserProfile?: (userId: string) => void;
   onMessageUser?: (userId: string) => void;
-  focusLocation?: { latitude: number; longitude: number } | null;
+  focusLocation?: { latitude: number; longitude: number; placeId?: string; place?: PlacePayload } | null;
   onFocusHandled?: () => void;
 }
 
@@ -49,7 +49,7 @@ interface UserLocation { latitude: number; longitude: number; }
 type MapFilter = 'all' | 'events' | 'places' | 'meetups';
 
 /* ── unified point model for the pin manager (clustering removed — every pin shows on its own) ── */
-type LeafType = 'event' | 'chabad' | 'admin' | 'post' | 'meetup';
+type LeafType = 'event' | 'chabad' | 'admin' | 'meetup';
 interface MapPoint { id: string; type: LeafType; lng: number; lat: number; title: string; data: any; }
 interface MarkerEntry { marker: mapboxgl.Marker; el: HTMLElement; kind: 'leaf' | 'cluster'; }
 
@@ -66,13 +66,70 @@ const AREA_COLORS = ['#F97316', '#EF4444', '#EC4899', '#8B5CF6', '#2563EB', '#06
 /* below this zoom an isolated leaf pin collapses to a small colour dot; above it the full pin
    shows and grows toward zoom-in (Apple-style). */
 const PIN_DOT_ZOOM = 12;
-const PIN_DOT_D = 13; // dot diameter in px
+const MEETUP_PIN_ZOOM = 15; // meetups are a tiny growing dot until this zoom, then open into the full pin
+const NEARBY_RADIUS_KM = 20; // the "אירועים קרובים" sidebar only shows events within this radius
 
-// A recommendation bubble carries text, so it would swamp the map at normal zooms. It stays folded
-// into the author's avatar until you're really close in.
-// A recommendation looks exactly like a place (dot → teardrop) and only differs when you're really
-// close in, where it unfolds into the author's chat bubble.
-const POST_BUBBLE_ZOOM = 15.6;
+// Hebrew/Arabic map labels render left-to-right (reversed) unless Mapbox's RTL text plugin is
+// loaded. Register it once at module load, before any map is built; lazy = fetch it when RTL text
+// first appears, then Mapbox re-shapes the labels correctly.
+try {
+  mapboxgl.setRTLTextPlugin(
+    'https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-rtl-text/v0.3.0/mapbox-gl-rtl-text.js',
+    ((err: any) => { if (err) console.error('RTL_PLUGIN_ERROR: ' + err); }) as any,
+    true,
+  );
+} catch { /* already registered */ }
+
+// In the Expo WebView, navigator.geolocation doesn't work — but the native wrapper streams GPS via
+// window._nativeLocation + a "nativeLocation" event. Polyfill navigator.geolocation on top of that so
+// Mapbox's own GeolocateControl (the real blue dot + accuracy circle) works exactly as designed.
+// Only inside the wrapper — on desktop we keep the browser's real geolocation.
+if (typeof window !== 'undefined' && (window as any).ReactNativeWebView) {
+  const toPos = (d: any) => ({
+    coords: {
+      latitude: d.lat, longitude: d.lng,
+      accuracy: typeof d.accuracy === 'number' ? d.accuracy : 25,
+      altitude: null, altitudeAccuracy: null,
+      heading: typeof (window as any)._nativeHeading === 'number' ? (window as any)._nativeHeading : null,
+      speed: null,
+    },
+    timestamp: Date.now(),
+  });
+  let seq = 1;
+  const watchers: Record<number, (e: any) => void> = {};
+  const geo = {
+    getCurrentPosition(success: any) {
+      const cur = (window as any)._nativeLocation;
+      if (cur && cur.lat != null) { success(toPos(cur)); return; }
+      const once = (e: any) => { window.removeEventListener('nativeLocation', once); success(toPos(e.detail)); };
+      window.addEventListener('nativeLocation', once);
+    },
+    watchPosition(success: any) {
+      const id = seq++;
+      const handler = (e: any) => success(toPos(e.detail));
+      watchers[id] = handler;
+      window.addEventListener('nativeLocation', handler);
+      const cur = (window as any)._nativeLocation;
+      if (cur && cur.lat != null) success(toPos(cur));
+      return id;
+    },
+    clearWatch(id: any) {
+      if (watchers[id]) { window.removeEventListener('nativeLocation', watchers[id]); delete watchers[id]; }
+    },
+  };
+  // navigator.geolocation is a getter-only property — a plain `navigator.geolocation = …` throws in
+  // strict mode (ES modules) and crashes the whole app to a WHITE SCREEN. defineProperty shadows it
+  // on the instance safely.
+  try {
+    Object.defineProperty(navigator, 'geolocation', { configurable: true, value: geo });
+  } catch { /* keep the browser's native geolocation */ }
+}
+
+const PIN_DOT_D = 13; // dot diameter in px (full size, just before it morphs into the pin)
+const DOT_MIN = 3;         // smallest the colour dot shrinks to before vanishing
+const DOT_FADE_RANGE = 5;  // zoom levels below the pin threshold over which the dot shrinks → gone
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i; // admin place id vs POI/chabad key
+
 const CHABAD_PURPLE = '#972689'; // matches the Chabad pin's outer frame
 // place teardrop is 36×41; scale it up to the Chabad pin's height (54) so they match in size
 const PLACE_PIN_SCALE = 54 / 41;
@@ -80,7 +137,6 @@ const PLACE_PIN_SCALE = 54 / 41;
 /* ── module-level cache (survives navigation) ── */
 let _mapChabadHouses:   ChabadHouse[]   | null = null;
 let _mapAdminLocations: AdminLocation[] | null = null;
-let _mapPosts:          any[]           | null = null;
 let _mapMeetups:        Meetup[]        | null = null;
 let _mapLocation:       { latitude: number; longitude: number } | null = null;
 
@@ -106,6 +162,11 @@ export function MapScreen({
 
   /* map filter */
   const [mapFilter, setMapFilter] = useState<MapFilter>('all');
+
+  /* geographic search (autocomplete → fly there) */
+  const [geoResults, setGeoResults] = useState<any[]>([]);
+  const geoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
 
   /* admin-drawn central areas (polygons in `map_areas`, shown to everyone, updated live) */
   const [isAdmin, setIsAdmin] = useState(false);
@@ -133,7 +194,6 @@ export function MapScreen({
   /* data */
   const [chabadHouses,    setChabadHouses]    = useState<ChabadHouse[]>(_mapChabadHouses ?? []);
   const [adminLocations,  setAdminLocations]  = useState<AdminLocation[]>(_mapAdminLocations ?? []);
-  const [posts,           setPosts]           = useState<any[]>(_mapPosts ?? []);
   const [meetups,         setMeetups]         = useState<Meetup[]>(_mapMeetups ?? []);
 
   /* preview card (mini card above pin) */
@@ -150,7 +210,6 @@ export function MapScreen({
   const [selectedChabadHouse,   setSelectedChabadHouse]   = useState<ChabadHouse | null>(null);
   const [showAdminLocation,     setShowAdminLocation]     = useState(false);
   const [selectedAdminLocation, setSelectedAdminLocation] = useState<AdminLocation | null>(null);
-  const [selectedRec,           setSelectedRec]           = useState<any | null>(null); // recommendation bubble → modal
   const [selectedMeetup,        setSelectedMeetup]        = useState<Meetup | null>(null);
   const [showMeetup,            setShowMeetup]            = useState(false);
   const [groupChatMeetup,       setGroupChatMeetup]       = useState<Meetup | null>(null);
@@ -178,6 +237,7 @@ export function MapScreen({
   const zoomRef         = useRef<() => void>(() => {});
   const clearRef        = useRef<() => void>(() => {});
 
+
   const countriesToFilter = buildCountryFilterArray(selectedCountries);
 
   const { events: nearbyEvents, refreshEvents, updateFilters, addEvent } = useEvents({
@@ -201,16 +261,6 @@ export function MapScreen({
       .order('created_at', { ascending: false });
     if (e) { console.error('loadAdminLocations:', e); return; }
     if (data) { _mapAdminLocations = data; setAdminLocations(data); }
-  };
-
-  const loadPosts = async () => {
-    const { data, error: e } = await supabase
-      .from('posts')
-      .select('*, users(display_name, avatar_url)') // the author powers the map bubble's photo
-      .not('latitude', 'is', null)
-      .order('created_at', { ascending: false });
-    if (e) { console.error('loadPosts:', e); return; }
-    if (data) { _mapPosts = data; setPosts(data); }
   };
 
   const loadMeetups = async () => {
@@ -244,7 +294,6 @@ export function MapScreen({
         userLocation: { latitude: location.latitude, longitude: location.longitude },
       });
       loadAdminLocations();
-      loadPosts();
       loadMeetups();
     }
   }, [location, selectedCountries, searchQuery]);
@@ -255,7 +304,6 @@ export function MapScreen({
       .channel('admin-locations-sync')
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'admin_locations' }, () => loadAdminLocations())
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'admin_locations' }, () => loadAdminLocations())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'posts' }, () => loadPosts())
       .subscribe();
     return () => { supabase.removeChannel(ch); };
   }, []);
@@ -347,6 +395,73 @@ export function MapScreen({
     };
   }, []);
 
+
+  /* Map search: geocode what the user types (Mapbox Search Box), show suggestions, fly on tap. */
+  useEffect(() => {
+    const q = searchQuery.trim();
+    if (geoTimerRef.current) clearTimeout(geoTimerRef.current);
+    if (q.length < 2) { setGeoResults([]); return; }
+    geoTimerRef.current = setTimeout(async () => {
+      const token = import.meta.env.VITE_MAPBOX_TOKEN;
+      if (!token) return;
+      const ctr = mapInstanceRef.current?.getCenter();
+      const prox = ctr ? `${ctr.lng},${ctr.lat}` : (location ? `${location.longitude},${location.latitude}` : '');
+      try {
+        const url = `https://api.mapbox.com/search/searchbox/v1/forward?q=${encodeURIComponent(q)}&limit=6&language=en${prox ? `&proximity=${prox}` : ''}&access_token=${token}`;
+        const res = await fetch(url);
+        const data = await res.json();
+        setGeoResults(Array.isArray(data.features) ? data.features : []);
+      } catch { setGeoResults([]); }
+    }, 300);
+    return () => { if (geoTimerRef.current) clearTimeout(geoTimerRef.current); };
+  }, [searchQuery]);
+
+  const goToSearchResult = (f: any) => {
+    const c = f?.geometry?.coordinates;
+    if (!c || !mapInstanceRef.current) return;
+    stopOrbit();
+    setGeoResults([]);
+    setSearchQuery('');
+    (document.activeElement as HTMLElement)?.blur?.();
+    mapInstanceRef.current.flyTo({ center: [c[0], c[1]], zoom: 15, pitch: 45, duration: 1400, essential: true });
+  };
+
+  /* A tapped base-map POI opens in the EXACT same sheet as an admin place — fed in as a synthetic
+     place keyed by a text id, then enriched with the Mapbox place details in the background. */
+  const openPoiAsPlace = (key: string, name: string, lat: number, lng: number, emoji: string) => {
+    const now = new Date().toISOString();
+    const base: AdminLocation = {
+      id: key, name, country: '', latitude: lat, longitude: lng,
+      emoji, pin_color: placePinColor(emoji), place_name: name, place_photos: [],
+      created_at: now, updated_at: now,
+    };
+    setSelectedAdminLocation(base);
+    setShowAdminLocation(true);
+    (async () => {
+      const token = import.meta.env.VITE_MAPBOX_TOKEN;
+      if (!token) return;
+      try {
+        const url = `https://api.mapbox.com/search/searchbox/v1/reverse?longitude=${lng}&latitude=${lat}&types=poi&limit=10&language=en&access_token=${token}`;
+        const data = await (await fetch(url)).json();
+        const feats: any[] = data.features || [];
+        const match = feats.find(f => (f.properties?.name || '').trim().toLowerCase() === name.trim().toLowerCase()) || feats[0];
+        const p = match?.properties || {};
+        const meta = p.metadata || {};
+        const ctx = p.context || {};
+        setSelectedAdminLocation(prev => (prev && prev.id === key) ? {
+          ...prev,
+          address: p.full_address || p.place_formatted || p.address || prev.address,
+          city: ctx.place?.name || prev.city,
+          country: (ctx.country?.country_code || '').toUpperCase() || prev.country,
+          phone: meta.phone, website: meta.website,
+          place_phone: meta.phone, place_website: meta.website,
+          place_address: p.full_address || p.place_formatted,
+        } : prev);
+      } catch { /* keep the basics */ }
+    })();
+  };
+
+
   /* ── Build map ── */
   useEffect(() => {
     if (!location || !mapRef.current || mapInstanceRef.current) return;
@@ -361,9 +476,14 @@ export function MapScreen({
     try {
       map = new mapboxgl.Map({
         container: mapRef.current,
-        style: 'mapbox://styles/mapbox/streets-v12',
+        style: 'mapbox://styles/ahon3210/cmrm5coki000b01qk9ley18e6',
         center: [location.longitude, location.latitude],
         zoom: 12,
+        pitch: 45, // slight tilt so the 3D buildings read as 3D
+        // Flat (mercator), NOT globe: the app pins are DOM markers, and on a globe projection in a
+        // WebView they desync and jump to the top-left corner while panning. Mercator keeps them glued
+        // and still supports pitch + 3D buildings.
+        projection: 'mercator',
         failIfMajorPerformanceCaveat: false,
       });
     } catch (err: any) {
@@ -376,10 +496,50 @@ export function MapScreen({
       console.error('MAPBOX_TILE_ERROR: ' + msg);
     });
 
-    new mapboxgl.Marker({ color: '#3B82F6' })
-      .setLngLat([location.longitude, location.latitude])
-      .setPopup(new mapboxgl.Popup().setHTML('<p style="color:black;font-weight:bold;">אתה כאן</p>'))
-      .addTo(map);
+    // Extrude the base map's building footprints into 3D (visible from zoom 15, under the labels).
+    map.on('load', () => {
+      try {
+        map.setProjection('mercator'); // Standard style defaults to globe — force flat so DOM pins stay glued
+        // English map labels (Hebrew has poor coverage abroad and falls back to the local script, e.g. Thai).
+        try { (map as any).setLanguage?.('en'); } catch { /* older SDK */ }
+        try { map.setConfigProperty('basemap', 'language', 'en'); } catch { /* style has no language config */ }
+        if (map.getLayer('fomo-3d-buildings')) return;
+        const layers = map.getStyle().layers || [];
+        if (layers.some(l => l.type === 'fill-extrusion')) return; // the custom style already has 3D
+        if (!map.getSource('composite')) return;                   // no building tiles to extrude
+        const firstSymbol = layers.find(l => l.type === 'symbol' && (l as any).layout?.['text-field'])?.id;
+        map.addLayer({
+          id: 'fomo-3d-buildings',
+          source: 'composite',
+          'source-layer': 'building',
+          filter: ['==', 'extrude', 'true'],
+          type: 'fill-extrusion',
+          minzoom: 15,
+          paint: {
+            'fill-extrusion-color': '#d6dae1',
+            'fill-extrusion-height': ['interpolate', ['linear'], ['zoom'], 15, 0, 15.6, ['get', 'height']],
+            'fill-extrusion-base': ['interpolate', ['linear'], ['zoom'], 15, 0, 15.6, ['get', 'min_height']],
+            'fill-extrusion-opacity': 0.85,
+          },
+        }, firstSymbol);
+      } catch (err) {
+        console.error('3D_BUILDINGS_ERROR: ' + (err instanceof Error ? err.message : String(err)));
+      }
+    });
+
+    // Live user location — the REAL Mapbox dot (blue dot + accuracy circle + heading), fed by the
+    // native GPS via the navigator.geolocation polyfill. Capping fitBounds' maxZoom at the current
+    // zoom means locating NEVER zooms the map; the map already opens centred on you, so the dot just
+    // appears (and the button lets you recenter). It shows automatically, without a zoom jump.
+    const geolocate = new mapboxgl.GeolocateControl({
+      positionOptions: { enableHighAccuracy: true },
+      trackUserLocation: true,
+      showUserHeading: true,
+      showAccuracyCircle: true,
+      fitBoundsOptions: { maxZoom: map.getZoom() },
+    });
+    map.addControl(geolocate, 'bottom-right');
+    map.on('load', () => { try { geolocate.trigger(); } catch { /* control/style not ready */ } });
 
     mapInstanceRef.current = map;
     setMapReady(true);
@@ -426,10 +586,6 @@ export function MapScreen({
         if (l.latitude == null || l.longitude == null) return;
         pts.push({ id: `admin:${l.id}`, type: 'admin', lng: l.longitude, lat: l.latitude, title: l.name || 'מקום', data: l });
       });
-      posts.forEach(r => {
-        if (r.latitude == null || r.longitude == null) return;
-        pts.push({ id: `post:${r.id}`, type: 'post', lng: r.longitude, lat: r.latitude, title: r.place_name || 'המלצה', data: r });
-      });
     }
     if (showMeetups) {
       meetups.forEach(m => {
@@ -438,7 +594,23 @@ export function MapScreen({
       });
     }
     return pts;
-  }, [nearbyEvents, chabadHouses, adminLocations, posts, meetups, showEvents, showPlaces, showMeetups]);
+  }, [nearbyEvents, chabadHouses, adminLocations, meetups, showEvents, showPlaces, showMeetups]);
+
+  /* The "אירועים קרובים" sidebar shows only events actually within NEARBY_RADIUS_KM of you, nearest
+     first — the map pins still show them all. Falls back to every event until GPS lands. */
+  const radiusEvents = useMemo(() => {
+    if (!location) return nearbyEvents;
+    return nearbyEvents
+      .map(e => ({
+        e,
+        d: (e.latitude != null && e.longitude != null)
+          ? calculateDistance(location.latitude, location.longitude, e.latitude, e.longitude)
+          : Infinity,
+      }))
+      .filter(x => x.d <= NEARBY_RADIUS_KM)
+      .sort((a, b) => a.d - b.d)
+      .map(x => x.e);
+  }, [nearbyEvents, location]);
 
   /* ── Pin builders / interaction (used by the cluster manager) ── */
   const isTodayDate = (dateStr?: string | null) => {
@@ -457,7 +629,7 @@ export function MapScreen({
       'transform:translate(-50%,-50%)', 'transform-origin:center',
       `width:${PIN_DOT_D}px`, `height:${PIN_DOT_D}px`, 'border-radius:50%',
       `background:${color}`, 'box-shadow:0 0 0 2px #fff, 0 1px 4px rgba(0,0,0,0.4)',
-      'display:none', 'pointer-events:none', 'transition:width 0.12s linear,height 0.12s linear',
+      'display:none', 'pointer-events:none', 'transition:width 0.12s linear,height 0.12s linear,opacity 0.12s linear',
     ].join(';');
     root.appendChild(dot);
   }
@@ -486,26 +658,24 @@ export function MapScreen({
      always shows the full pin so its morph + sheet work). */
   function setLeafDotMode(el: HTMLElement, selected: boolean) {
     const z = mapInstanceRef.current?.getZoom() ?? 20;
-    // each pin can demand its own zoom before it expands — recommendation bubbles carry text,
-    // so they only unfold when you're really close (see POST_BUBBLE_ZOOM).
     const threshold = Number(el.dataset.dotZoom) || PIN_DOT_ZOOM;
     const asDot = z < threshold && !selected;
     const scaleEl = el.querySelector('.fomo-pin-scale') as HTMLElement | null;
     const dotEl   = el.querySelector('.fomo-pin-dot') as HTMLElement | null;
     if (scaleEl) scaleEl.style.display = asDot ? 'none' : '';
+    if (!dotEl) return;
+    if (!asDot) { dotEl.style.display = 'none'; return; }
 
-    // Recommendations carry a second threshold: below it they wear the same teardrop as the
-    // places; at/above it the pin unfolds into the chat bubble.
-    const bubbleZoom = Number(el.dataset.bubbleZoom);
-    if (bubbleZoom) {
-      const bubble = el.querySelector('.fomo-rec-bubble') as HTMLElement | null;
-      const pin    = el.querySelector('.fomo-rec-pin') as HTMLElement | null;
-      const unfold = z >= bubbleZoom;
-      if (bubble) bubble.style.display = unfold ? 'flex' : 'none';
-      if (pin)    pin.style.display    = unfold ? 'none' : 'block';
-    }
-
-    if (dotEl) dotEl.style.display = asDot ? 'block' : 'none';
+    // Dot mode: the colour dot shrinks + fades as you zoom out, and vanishes entirely once you're far
+    // enough (below threshold − DOT_FADE_RANGE). Zoom back in and it grows into the full pin again.
+    const hideZoom = threshold - DOT_FADE_RANGE;
+    if (z < hideZoom) { dotEl.style.display = 'none'; return; } // zoomed too far out — gone
+    const t = Math.max(0, Math.min(1, (z - hideZoom) / (threshold - hideZoom))); // 0 at hide → 1 at pin
+    const d = DOT_MIN + t * (PIN_DOT_D - DOT_MIN);
+    dotEl.style.display = 'block';
+    dotEl.style.width = `${d}px`;
+    dotEl.style.height = `${d}px`;
+    dotEl.style.opacity = String(t);
   }
 
   function buildLeafPin(pt: MapPoint): HTMLElement {
@@ -537,44 +707,20 @@ export function MapScreen({
       el = wrapTeardrop(adminPin);
       dotColor = pinColor;
       dotAtBottom = true;
-    } else if (pt.type === 'post') {
-      /* A recommendation reads exactly like a place until you're right on top of it:
-           far      → the same colour dot the places use
-           mid      → the same teardrop pin, wearing its category emoji
-           close in → unfolds into the chat bubble: the author's photo and what they said   */
-      const r = pt.data as any;
-      const { emoji: recEmoji, color: recColor } = postPinStyle(r); // author's choice, else category
-
-      const teardrop = createPlacePinSVG(recEmoji, recColor);
-      teardrop.classList.add('fomo-rec-pin');
-      teardrop.style.transformOrigin = 'bottom center';
-      teardrop.style.transform = `scale(${PLACE_PIN_SCALE})`;
-
-      const bubble = createRecommendationBubble({
-        author:    r.users?.display_name || 'מטייל',
-        avatarUrl: r.users?.avatar_url,
-        placeName: r.place_name || 'המלצה',
-        content:   r.content,
-        emoji:     recEmoji,
-        color:     recColor,
-      });
-      bubble.classList.add('fomo-rec-bubble');
-      bubble.style.display = 'none'; // the teardrop leads; setLeafDotMode swaps them by zoom
-
-      const stack = document.createElement('div');
-      stack.style.cssText = 'display:flex;flex-direction:column;align-items:center;line-height:0;';
-      stack.appendChild(bubble);
-      stack.appendChild(teardrop);
-
-      el = wrapTeardrop(stack);
-      el.dataset.bubbleZoom = String(POST_BUBBLE_ZOOM); // only unfold the text this close in
-      dotColor = recColor; // same dot as the places — recommendations read identically when far
-      dotAtBottom = true;
     } else {
-      /* meetup */
+      /* meetup — a round photo pin (the host's avatar). Far away it's a tiny colour dot that grows
+         as you approach, then opens into the full pin past MEETUP_PIN_ZOOM. */
       const m = pt.data as Meetup;
       dotColor = getMeetupPinColor(m.emoji);
-      el = createCirclePin({ size: 42, color: dotColor, label: m.text || 'מפגש', variant: 'color', emoji: m.emoji });
+      const pin = createRecommendationPin({
+        avatarUrl: m.users?.avatar_url,
+        name:      m.users?.display_name,
+        color:     dotColor,
+        emoji:     m.emoji,
+      });
+      el = wrapTeardrop(pin);
+      el.dataset.dotZoom = String(MEETUP_PIN_ZOOM);
+      dotAtBottom = true;
     }
 
     appendPinDot(el, dotColor, dotAtBottom);
@@ -654,11 +800,14 @@ export function MapScreen({
   const ORBIT_STEP_DEG = 150;
 
   function stopOrbit() {
-    orbitGenRef.current++; // invalidates any in-flight step AND any pending `once('moveend')`
-    const wasOrbiting = orbitingRef.current;
+    // Bumping the generation is what actually stops the orbit: the current easeTo's moveend sees a
+    // stale gen and doesn't queue the next step. We deliberately DON'T call map.stop() — this runs
+    // on touchstart, and calling stop() mid-gesture jams Mapbox's own drag-pan so markers freeze
+    // until you lift your finger. The camera animation is superseded anyway: a user drag interrupts
+    // it, and focusPin/resetView issue a fresh easeTo over it.
+    orbitGenRef.current++;
     orbitingRef.current = false;
     focusingRef.current = false;
-    if (wasOrbiting) mapInstanceRef.current?.stop(); // halt the easeTo that's driving the turn
   }
 
   /* Rotate with ONE long, linear easeTo per step — never `setBearing` in a rAF loop.
@@ -741,6 +890,36 @@ export function MapScreen({
     if (had) resetView();
   }
 
+  /* A Chabad house opens in the SAME rich sheet as places — fed in as a synthetic place. Keyed with
+     a non-uuid id so it isn't treated as an admin_locations row (no admin photo upload), while save +
+     reviews still work (they're keyed by this text id). Its photo seeds the mosaic. */
+  const chabadToPlace = (ch: ChabadHouse): AdminLocation => {
+    const now = new Date().toISOString();
+    return {
+      id: `chabad:${ch.id}`,
+      name: ch.name,
+      description: ch.description,
+      address: ch.address,
+      city: ch.city,
+      country: ch.country,
+      latitude: ch.latitude,
+      longitude: ch.longitude,
+      phone: ch.phone,
+      email: ch.email,
+      website: ch.website,
+      image_url: ch.image_url,
+      emoji: '🕎',
+      pin_color: `${CHABAD_PURPLE}|🕎`, // "color|emoji" — the sheet reads the pin look from here
+      place_name: ch.name,
+      place_address: ch.address,
+      place_phone: ch.phone,
+      place_website: ch.website,
+      place_photos: ch.image_url ? [ch.image_url] : [],
+      created_at: ch.created_at || now,
+      updated_at: ch.updated_at || now,
+    };
+  };
+
   function handleLeafClick(pt: MapPoint, el: HTMLElement) {
     if (drawingRef.current) return; // ignore pin taps while drawing an area
     selectLeaf(pt.id, el);
@@ -752,9 +931,10 @@ export function MapScreen({
       setPreviewEvent(null); setPreviewPos(null);
       setSelectedMeetup(null); setShowMeetup(false); setShowChabadHouse(false); setShowAdminLocation(false);
     } else if (pt.type === 'chabad') {
-      setShowChabadHouse(true); setSelectedChabadHouse(pt.data as ChabadHouse);
+      // Same rich sheet as places, fed a synthetic place built from the Chabad house.
+      setSelectedAdminLocation(chabadToPlace(pt.data as ChabadHouse)); setShowAdminLocation(true);
       setSelectedEvent(null); setPreviewEvent(null); setPreviewPos(null);
-      setSelectedMeetup(null); setShowMeetup(false); setShowAdminLocation(false);
+      setSelectedMeetup(null); setShowMeetup(false); setShowChabadHouse(false);
     } else if (pt.type === 'admin') {
       setShowAdminLocation(true); setSelectedAdminLocation(pt.data as AdminLocation);
       setSelectedEvent(null); setPreviewEvent(null); setPreviewPos(null);
@@ -763,11 +943,6 @@ export function MapScreen({
       setSelectedMeetup(pt.data as Meetup); setShowMeetup(true);
       setSelectedEvent(null); setPreviewEvent(null); setPreviewPos(null);
       setShowChabadHouse(false); setShowAdminLocation(false);
-    } else {
-      // tapping the bubble opens the full recommendation (same sheet as the home feed)
-      setSelectedRec(pt.data);
-      setSelectedEvent(null); setPreviewEvent(null); setPreviewPos(null);
-      setSelectedMeetup(null); setShowMeetup(false); setShowChabadHouse(false); setShowAdminLocation(false);
     }
   }
 
@@ -795,9 +970,9 @@ export function MapScreen({
         const el = buildLeafPin(pt);
         applyLeafScale(el, scale, showLabels, key === selectedIdRef.current);
         el.addEventListener('click', (ev) => { ev.stopPropagation(); handleLeafClick(pt, el); });
-        // Teardrop pins (Chabad + places) anchor at their tip ('bottom'); circle pins (events,
-        // meetups) at 'center'.
-        const anchor = (pt.type === 'chabad' || pt.type === 'admin' || pt.type === 'post') ? 'bottom' : 'center';
+        // Bottom-anchored pins (Chabad + places teardrops, recommendation + meetup coins) plant
+        // their tip/base on the coord; event circles anchor at 'center'.
+        const anchor = (pt.type === 'chabad' || pt.type === 'admin' || pt.type === 'meetup') ? 'bottom' : 'center';
         const marker = new mapboxgl.Marker({ element: el, anchor }).setLngLat([pt.lng, pt.lat]).addTo(map);
         markerMapRef.current.set(key, { marker, el, kind: 'leaf' });
       }
@@ -837,23 +1012,15 @@ export function MapScreen({
       const dot = el.querySelector('.fomo-area-dot') as HTMLElement | null;
       if (!txt || !dot) return;
       if (z >= 11.5) {
-        // full name (+ area marking), shrinking as we near the collapse point (z 11.5 → 12.5)
+        // full name, shrinking as we near the collapse point
         const scale = Math.max(0.7, Math.min(1, 0.7 + (z - 11.5) * 0.3));
         txt.style.display = '';
         txt.style.transform = `scale(${scale})`;
-        dot.style.display = 'none';
-      } else if (z >= 9.5) {
-        // name + area marking gone — only the coloured dot, shrinking as we zoom out (z 11.5 → 9.5)
-        const d = Math.max(5, Math.min(11, 5 + (z - 9.5) * 3));
-        txt.style.display = 'none';
-        dot.style.display = 'block';
-        dot.style.width  = `${d}px`;
-        dot.style.height = `${d}px`;
       } else {
-        // zoomed further out — nothing on the map
+        // zoomed out — hide the label entirely (no collapsed dot)
         txt.style.display = 'none';
-        dot.style.display = 'none';
       }
+      dot.style.display = 'none'; // the coloured area dot was removed — never shown
     });
   }
 
@@ -899,6 +1066,44 @@ export function MapScreen({
     const onUserGrab = () => stopOrbit();
     const onClick   = (e: mapboxgl.MapMouseEvent) => {
       if (drawingRef.current) { addVertexRef.current(e.lngLat); return; } // add a polygon vertex
+      // Tapped a POI baked into the base map (hotel/restaurant/café…)? Open its info card.
+      let poiFeat: any = null;
+      const pad = 8; // forgiving tap radius around the finger
+      const box: [mapboxgl.PointLike, mapboxgl.PointLike] =
+        [[e.point.x - pad, e.point.y - pad], [e.point.x + pad, e.point.y + pad]];
+      // (a) Mapbox Standard style (mapbox-gl v3) exposes POIs via a 'poi' featureset.
+      try {
+        const fs = map.queryRenderedFeatures(box, { target: { featuresetId: 'poi', importId: 'basemap' } } as any);
+        if (fs && fs.length) poiFeat = fs[0];
+      } catch { /* not a Standard style */ }
+      // (b) Classic Streets-based styles: the 'poi_label' source-layer, or any poi-ish layer.
+      if (!poiFeat) {
+        try {
+          const feats = map.queryRenderedFeatures(box);
+          poiFeat = feats.find(f => {
+            const p: any = f.properties || {};
+            if (!(p.name_he || p.name_en || p.name)) return false;
+            const sl = (f.sourceLayer || '').toLowerCase();
+            const lid = ((f.layer && f.layer.id) || '').toLowerCase();
+            return sl.includes('poi') || lid.includes('poi');
+          }) || null;
+        } catch { /* nothing queryable here */ }
+      }
+      if (poiFeat) {
+        const p = poiFeat.properties || {};
+        const name = p.name_en || p.name || p.name_he; // prefer English, then whatever the tile has
+        if (name) {
+          const g = poiFeat.geometry as any;
+          const c = g && g.type === 'Point' ? g.coordinates as [number, number] : [e.lngLat.lng, e.lngLat.lat];
+          const lng = c[0], lat = c[1];
+          const cat = categoryFromPoi({ maki: p.maki, class: p.class });
+          const emoji = postCategoryEmoji(cat);
+          const key = `${lat.toFixed(5)},${lng.toFixed(5)}|${String(name)}`;
+          focusPin(lng, lat); // same fly-in + orbit the app's own pins get
+          openPoiAsPlace(key, String(name), lat, lng, emoji);
+          return;
+        }
+      }
       clearRef.current();
     };
     // Admin: tap an existing area to delete it (confirmed). Registered by layer id — fires only
@@ -928,13 +1133,72 @@ export function MapScreen({
     };
   }, [mapReady]);
 
-  /* ── Fly to a focused location (e.g. "open in map" from a recommendation) ── */
+  /* ── Fly to a focused location (e.g. "open in map" from a recommendation or a shared place card) ── */
   useEffect(() => {
     if (!focusLocation || !mapInstanceRef.current) return;
     setMapFilter(f => (f === 'all' || f === 'places') ? f : 'all');
-    mapInstanceRef.current.flyTo({ center: [focusLocation.longitude, focusLocation.latitude], zoom: 15, essential: true });
+
+    const { latitude, longitude, placeId, place } = focusLocation;
+
+    if (place && !UUID_RE.test(place.id)) {
+      // A shared POI / Chabad house has no admin_locations row — open its card straight from the
+      // shared payload (name, coords, emoji…), the same card tapping it on the map opens.
+      openSharedPlace(place);
+    } else if (placeId) {
+      // Shared admin place → do exactly what tapping its pin does: fly in, tilt, orbit, open the sheet.
+      openPlaceOnMap(`admin:${placeId}`, longitude, latitude);
+    } else {
+      mapInstanceRef.current.flyTo({ center: [longitude, latitude], zoom: 15, essential: true });
+    }
     onFocusHandled?.();
   }, [focusLocation, mapReady]);
+
+  /* Open a place's pin from elsewhere in the app (a chat card, a link). Mirrors a real pin tap:
+     selects it (so a rebuilt marker keeps the selected look), opens the sheet, and runs the focus
+     animation + orbit. The point lives in pointByIdRef whether or not its marker is on screen yet. */
+  /* Open a shared POI / Chabad card straight from its payload — no admin_locations row needed. */
+  function openSharedPlace(p: PlacePayload) {
+    const now = new Date().toISOString();
+    const emoji = p.emoji || '📍';
+    const color = p.color || placePinColor(emoji);
+    selectedIdRef.current = p.id;
+    setSelectedAdminLocation({
+      id: p.id, name: p.name, address: p.address || undefined, country: '',
+      latitude: p.lat, longitude: p.lng,
+      emoji, pin_color: `${color}|${emoji}`,
+      place_name: p.name, place_address: p.address || undefined, place_photos: [],
+      created_at: now, updated_at: now,
+    });
+    setShowAdminLocation(true);
+    focusPin(p.lng, p.lat);
+  }
+
+  function openPlaceOnMap(id: string, lng: number, lat: number) {
+    const pt = pointByIdRef.current.get(id);
+    // Set the selection first, so if the marker is (re)built by the fly-in it's born selected.
+    selectedIdRef.current = id;
+
+    if (pt?.type === 'admin') {
+      setShowAdminLocation(true);
+      setSelectedAdminLocation(pt.data as AdminLocation);
+    } else {
+      // Arrived before loadLocations finished (or the pin was filtered out) — fetch the row so the
+      // sheet still opens. The fly-in below doesn't wait on this.
+      const rawId = id.startsWith('admin:') ? id.slice(6) : id;
+      supabase.from('admin_locations').select('*').eq('id', rawId).maybeSingle()
+        .then(({ data }) => {
+          if (data && selectedIdRef.current === id) { // still the active selection
+            setSelectedAdminLocation(data as AdminLocation);
+            setShowAdminLocation(true);
+          }
+        });
+    }
+
+    const marker = markerMapRef.current.get(id);
+    if (marker) setPinSelected(marker.el, true); // gives the swing too
+
+    focusPin(lng, lat);
+  }
 
   /* ── Render admin-drawn central areas (polygons from the DB, shown to everyone) ── */
   useEffect(() => {
@@ -1289,6 +1553,11 @@ export function MapScreen({
         }
         .fomo-cluster-inner { transition: transform 0.15s ease; }
         .fomo-cluster:active .fomo-cluster-inner { transform: scale(0.9); }
+
+        /* Lift the location button up the right side so it clears the floating nav bar (and the
+           search chrome up top), instead of sitting jammed in the very corner. */
+        .mapboxgl-ctrl-bottom-right { margin-bottom: calc(env(safe-area-inset-bottom) + 92px); margin-right: 6px; }
+        .mapboxgl-ctrl-bottom-right .mapboxgl-ctrl-group { box-shadow: 0 4px 16px rgba(0,0,0,0.22); }
       `}</style>
 
       {/* Map canvas */}
@@ -1434,11 +1703,61 @@ export function MapScreen({
                 type="text"
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
-                placeholder="חיפוש אירועים ומקומות..."
-                className="w-full bg-white text-gray-900 rounded-full h-11 pr-11 pl-4 text-sm placeholder:text-gray-400 focus:ring-2 focus:ring-orange-400 focus:outline-none"
-                style={{ boxShadow: '0 4px 20px rgba(0,0,0,0.18)' }}
+                placeholder="חיפוש מקום, עיר או כתובת..."
+                className="w-full text-gray-900 rounded-full h-11 pr-11 pl-4 text-sm placeholder:text-gray-500 focus:ring-2 focus:ring-orange-400 focus:outline-none"
+                style={{
+                  // Frosted glass, not solid — a pin that slides under it stays visible through the
+                  // blur instead of vanishing (DOM pins can't paint above the search UI overlay).
+                  background: 'rgba(255,255,255,0.6)',
+                  backdropFilter: 'blur(10px) saturate(150%)', WebkitBackdropFilter: 'blur(10px) saturate(150%)',
+                  boxShadow: '0 4px 20px rgba(0,0,0,0.18)',
+                }}
               />
             </div>
+
+            {/* Geographic search suggestions — tap to fly there */}
+            {geoResults.length > 0 && (
+              <div style={{
+                position: 'absolute', top: 53, left: 0, right: 0, zIndex: 30, background: '#fff',
+                borderRadius: 16, boxShadow: '0 10px 30px rgba(0,0,0,0.25)', overflow: 'hidden',
+                maxHeight: '52vh', overflowY: 'auto',
+              }}>
+                {geoResults.map((f, i) => {
+                  const p = f.properties || {};
+                  const name = p.name || p.name_preferred || 'תוצאה';
+                  const addr = p.full_address || p.place_formatted || '';
+                  const m = (p.maki || '').toLowerCase();
+                  const emoji = m.includes('airport') ? '✈️'
+                    : (p.feature_type === 'place' || p.feature_type === 'city' || p.feature_type === 'region' || p.feature_type === 'country') ? '🏙️'
+                    : (p.feature_type === 'address' || p.feature_type === 'street') ? '🏠' : '📍';
+                  return (
+                    <button
+                      key={p.mapbox_id || i}
+                      onClick={() => goToSearchResult(f)}
+                      style={{
+                        width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '11px 14px',
+                        background: 'none', border: 'none', borderTop: i > 0 ? '1px solid #F1F2F5' : 'none',
+                        textAlign: 'right', cursor: 'pointer',
+                      }}
+                    >
+                      <span style={{ width: 34, height: 34, borderRadius: 10, flexShrink: 0, background: '#F3F4F6', display: 'grid', placeItems: 'center', fontSize: 16 }}>
+                        {emoji}
+                      </span>
+                      <span style={{ flex: 1, minWidth: 0 }}>
+                        <span style={{ display: 'block', fontSize: 14, fontWeight: 800, color: '#111827', fontFamily: 'Heebo, sans-serif', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {name}
+                        </span>
+                        {addr && (
+                          <span style={{ display: 'block', fontSize: 12, color: '#8B90A0', fontFamily: 'Rubik, sans-serif', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {addr}
+                          </span>
+                        )}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
 
             {/* Filter pills — always visible */}
             <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 2 }}>
@@ -1453,7 +1772,8 @@ export function MapScreen({
                       padding: '7px 14px',
                       borderRadius: 50,
                       border: 'none',
-                      background: active ? 'linear-gradient(135deg,#F97316,#EA580C)' : 'rgba(255,255,255,0.95)',
+                      background: active ? 'linear-gradient(135deg,#F97316,#EA580C)' : 'rgba(255,255,255,0.72)',
+                      backdropFilter: 'blur(10px) saturate(150%)', WebkitBackdropFilter: 'blur(10px) saturate(150%)',
                       boxShadow: active ? '0 4px 14px rgba(249,115,22,0.4)' : '0 2px 10px rgba(0,0,0,0.14)',
                       cursor: 'pointer',
                       whiteSpace: 'nowrap',
@@ -1496,58 +1816,96 @@ export function MapScreen({
             )}
           </div>
 
-          {/* Events sidebar toggle */}
+          {/* Events sidebar toggle — glass */}
           {(mapFilter === 'all' || mapFilter === 'events') && (
             <button
               onClick={() => setEventsSheetExpanded(!eventsSheetExpanded)}
-              className={`absolute top-1/2 -translate-y-1/2 z-20 bg-[#1A1F2E] shadow-xl transition-all duration-300 ${
+              className={`absolute top-1/2 -translate-y-1/2 z-20 transition-all duration-300 ${
                 eventsSheetExpanded ? 'right-80' : 'right-0'
-              } rounded-l-xl py-4 px-2 flex flex-col items-center gap-1`}
+              } rounded-l-2xl py-4 px-2.5 flex flex-col items-center gap-1`}
+              style={{ background: 'rgba(255,255,255,0.82)', backdropFilter: 'blur(14px)', WebkitBackdropFilter: 'blur(14px)', boxShadow: '-4px 0 18px rgba(0,0,0,0.14)' }}
             >
-              <List className="w-5 h-5 text-white" />
-              <span className="text-white text-xs font-bold">{nearbyEvents.length}</span>
+              <List className="w-5 h-5" style={{ color: '#F97316' }} />
+              <span className="text-xs font-black" style={{ color: '#111827', fontFamily: "'Heebo', sans-serif" }}>{radiusEvents.length}</span>
             </button>
           )}
 
-          {/* Events sidebar panel */}
+          {/* Events sidebar panel — frosted glass */}
           <div
-            className={`absolute top-0 bottom-0 right-0 w-80 bg-[#1A1F2E] shadow-2xl transition-all duration-300 ease-out z-20 ${
+            className={`absolute top-0 bottom-0 right-0 w-80 transition-all duration-300 ease-out z-20 ${
               eventsSheetExpanded ? 'translate-x-0' : 'translate-x-full'
             }`}
+            style={{
+              background: 'rgba(255,255,255,0.72)',
+              backdropFilter: 'blur(22px) saturate(140%)', WebkitBackdropFilter: 'blur(22px) saturate(140%)',
+              borderLeft: '1px solid rgba(255,255,255,0.6)', boxShadow: '-10px 0 34px rgba(0,0,0,0.15)',
+            }}
           >
-            <div className="p-4 border-b border-gray-700">
+            <div style={{ padding: '16px', paddingTop: 'max(16px, env(safe-area-inset-top))', borderBottom: '1px solid rgba(17,24,39,0.08)' }}>
               <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2 text-white">
-                  <List className="w-5 h-5" />
-                  <span className="font-semibold">אירועים קרובים ({nearbyEvents.length})</span>
+                <div className="flex items-center gap-2" style={{ color: '#111827' }}>
+                  <List className="w-5 h-5" style={{ color: '#F97316' }} />
+                  <span className="font-black" style={{ fontFamily: "'Heebo', sans-serif" }}>אירועים קרובים ({radiusEvents.length})</span>
                 </div>
-                <button onClick={() => setEventsSheetExpanded(false)} className="p-1.5 hover:bg-gray-700 rounded-full transition-colors">
-                  <X className="w-5 h-5 text-gray-400" />
+                <button onClick={() => setEventsSheetExpanded(false)} className="p-1.5 rounded-full transition-colors" style={{ background: 'rgba(17,24,39,0.06)' }}>
+                  <X className="w-5 h-5" style={{ color: '#6B7280' }} />
                 </button>
               </div>
-              <span className="text-xs text-gray-400">ברדיוס 20 ק״מ</span>
+              <span style={{ fontSize: 12, color: '#8B90A0', fontFamily: "'Heebo', sans-serif" }}>ברדיוס 20 ק״מ</span>
             </div>
-            <div className="px-4 py-3 overflow-y-auto h-[calc(100%-80px)]">
-              {nearbyEvents.length === 0 ? (
-                <div className="text-center py-12 bg-[#252B3D] rounded-2xl">
-                  <p className="text-gray-400">לא נמצאו אירועים קרובים</p>
+            <div className="overflow-y-auto" style={{ height: 'calc(100% - 82px)', padding: '12px' }}>
+              {radiusEvents.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '48px 16px', background: 'rgba(255,255,255,0.6)', borderRadius: 18 }}>
+                  <p style={{ color: '#8B90A0', fontFamily: "'Heebo', sans-serif", margin: 0 }}>לא נמצאו אירועים קרובים</p>
                 </div>
               ) : (
-                <div className="space-y-4 pb-24">
-                  {nearbyEvents.map(event => (
-                    <div
-                      key={event.id}
-                      onClick={() => setDetailsEvent(event)}
-                      className={`cursor-pointer ${selectedEvent?.id === event.id ? 'ring-2 ring-blue-500 rounded-[20px]' : ''}`}
-                    >
-                      <EventCard
-                        event={event}
-                        currentUserId={userId}
-                        onAttendClick={() => setDetailsEvent(event)}
-                        onUserClick={onNavigateToUserProfile}
-                      />
-                    </div>
-                  ))}
+                <div style={{ background: '#FFFFFF', borderRadius: 20, overflow: 'hidden', boxShadow: '0 2px 16px rgba(0,0,0,0.06)', marginBottom: 96 }}>
+                  {radiusEvents.map((event, idx) => {
+                    const type = event.event_type || '';
+                    const time = new Date(event.event_date).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' });
+                    const tint = getCategoryColor(type);
+                    return (
+                      <div key={event.id}>
+                        {idx > 0 && <div style={{ height: 1, background: '#F5F5F7', margin: '0 14px' }} />}
+                        <div
+                          onClick={() => setDetailsEvent(event)}
+                          style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '16px 14px', cursor: 'pointer' }}
+                        >
+                          {/* Thumbnail */}
+                          <div style={{ width: 80, height: 80, flexShrink: 0, borderRadius: 16, overflow: 'hidden', background: `${tint}20` }}>
+                            {event.image_url ? (
+                              <img src={event.image_url} alt={event.title} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                            ) : (
+                              <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 34 }}>
+                                {event.emoji || getCategoryEmoji(type) || '📍'}
+                              </div>
+                            )}
+                          </div>
+                          {/* Text */}
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <p style={{ fontSize: 15, fontWeight: 800, color: '#111827', fontFamily: "'Heebo', sans-serif", margin: '0 0 6px', lineHeight: 1.3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {event.title}
+                            </p>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                              <span style={{ fontSize: 13, color: '#9CA3AF', fontWeight: 500, display: 'flex', alignItems: 'center', gap: 4, fontFamily: "'Heebo', sans-serif" }}>
+                                <MapPin size={12} strokeWidth={2} />{event.city}
+                              </span>
+                              <span style={{ fontSize: 13, color: '#9CA3AF', fontWeight: 500, display: 'flex', alignItems: 'center', gap: 4, fontFamily: "'Heebo', sans-serif" }}>
+                                <Clock size={12} strokeWidth={2} />{time}
+                              </span>
+                            </div>
+                          </div>
+                          {/* Attendees badge */}
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 3, background: '#FFF7ED', borderRadius: 20, padding: '5px 9px', flexShrink: 0 }}>
+                            <Users size={11} color="#F97316" strokeWidth={2} />
+                            <span style={{ fontSize: 12, fontWeight: 700, color: '#F97316', fontFamily: "'Heebo', sans-serif" }}>
+                              {event.attendees.length}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -1581,17 +1939,10 @@ export function MapScreen({
         chabadHouse={selectedChabadHouse}
       />
 
-      {selectedRec && (
-        <RecommendationModal
-          rec={selectedRec}
-          currentUserId={userId}
-          onClose={() => { setSelectedRec(null); clearRef.current(); }}
-        />
-      )}
 
       <AdminLocationBottomSheet
         isOpen={showAdminLocation}
-        onClose={() => { setShowAdminLocation(false); setSelectedAdminLocation(null); clearRef.current(); }}
+        onClose={() => { setShowAdminLocation(false); setSelectedAdminLocation(null); stopOrbit(); clearRef.current(); }}
         location={selectedAdminLocation}
         currentUserId={userId}
         userLocation={location}
@@ -1650,7 +2001,21 @@ export function MapScreen({
       <CreateMeetupFlow
         isOpen={showCreateMeetupFlow}
         onClose={() => setShowCreateMeetupFlow(false)}
-        onSuccess={() => { loadMeetups(); setMapFilter('meetups'); }}
+        onSuccess={(loc) => {
+          loadMeetups();
+          setMapFilter('meetups');
+          // A meetup only opens into its full pin past MEETUP_PIN_ZOOM — fly in so the host sees it.
+          const map = mapInstanceRef.current;
+          if (loc && map) {
+            stopOrbit();
+            map.flyTo({
+              center: [loc.longitude, loc.latitude],
+              zoom: Math.max(map.getZoom(), MEETUP_PIN_ZOOM + 1),
+              essential: true,
+              duration: 900,
+            });
+          }
+        }}
         userId={userId}
         initialLocation={location || undefined}
       />
