@@ -530,12 +530,12 @@ export function MapScreen({
     });
 
     // Live user location — the REAL Mapbox dot (blue dot + accuracy circle + heading), fed by the
-    // native GPS via the navigator.geolocation polyfill. Capping fitBounds' maxZoom at the current
-    // zoom means locating NEVER zooms the map; the map already opens centred on you, so the dot just
-    // appears (and the button lets you recenter). It shows automatically, without a zoom jump.
+    // native GPS via the navigator.geolocation polyfill. trackUserLocation:false so the camera NEVER
+    // follows/recenters on GPS updates (that was pulling the map away from a tapped shared place);
+    // the dot shows on open (maxZoom cap → no zoom jump) and the button recenters on demand.
     const geolocate = new mapboxgl.GeolocateControl({
       positionOptions: { enableHighAccuracy: true },
-      trackUserLocation: true,
+      trackUserLocation: false,
       showUserHeading: true,
       showAccuracyCircle: true,
       fitBoundsOptions: { maxZoom: map.getZoom() },
