@@ -2,6 +2,7 @@ import { useState, useEffect, type ReactNode } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Plus, Minus, Check, ChevronLeft, Calendar, MapPin, Delete, Lock } from 'lucide-react';
 import type { Event } from '../lib/supabase';
+import type { TicketType } from '../types/event';
 import { flagEmoji } from '../utils/flags';
 import { COUNTRIES } from '../utils/countries';
 
@@ -14,10 +15,11 @@ import { COUNTRIES } from '../utils/countries';
 
 type BookingFlowProps = {
   event: Event;
-  price: number;                 // base ticket price (₪)
+  price: number;                 // entry (lowest) ticket price (₪) — used as a fallback
+  ticketTypes?: TicketType[];    // creator-defined ticket types (רגיל / VIP / …); overrides the built-in tiers
   currentUserId?: string | null;
   onClose: () => void;
-  onComplete: () => Promise<void> | void; // called after a successful payment
+  onComplete: (info?: { ticketLabel: string; amount: number }) => Promise<void> | void; // called after a successful payment
 };
 
 const ORANGE = '#F97316';
@@ -41,12 +43,18 @@ const slide = (dir: number) => ({
   exit:    { x: dir * -50, opacity: 0 },
 });
 
-export function BookingFlow({ event, price, onClose, onComplete }: BookingFlowProps) {
+export function BookingFlow({ event, price, ticketTypes, onClose, onComplete }: BookingFlowProps) {
+  // The selectable tickets: creator-defined types when present (absolute prices),
+  // otherwise the built-in רגיל/VIP tiers derived from the single price.
+  const tickets = (ticketTypes && ticketTypes.length > 0)
+    ? ticketTypes.map(t => ({ id: t.id, label: t.name, price: t.price, perk: '' }))
+    : TIERS.map(t => ({ id: t.id, label: t.label, price: Math.round(price * t.mult), perk: t.perk }));
+
   const [step, setStep] = useState<Step>('tickets');
   const [dir, setDir]   = useState(1);
 
   /* ── tickets ── */
-  const [tier, setTier]   = useState<typeof TIERS[number]['id']>('economy');
+  const [tier, setTier]   = useState<string>(tickets[0].id);
   const [seats, setSeats] = useState(1);
 
   /* ── contact ── */
@@ -67,8 +75,8 @@ export function BookingFlow({ event, price, onClose, onComplete }: BookingFlowPr
   const [pin, setPin]       = useState('');
   const [status, setStatus] = useState<Status>('idle');
 
-  const tierObj   = TIERS.find(t => t.id === tier)!;
-  const unitPrice = Math.round(price * tierObj.mult);
+  const tierObj   = tickets.find(t => t.id === tier) ?? tickets[0];
+  const unitPrice = tierObj.price;
   const subtotal  = unitPrice * seats;
   const fee       = Math.round(subtotal * 0.1);   // עמלת שירות 10%
   const total     = subtotal + fee;
@@ -93,7 +101,7 @@ export function BookingFlow({ event, price, onClose, onComplete }: BookingFlowPr
     if ('vibrate' in navigator) navigator.vibrate(20);
     const t = setTimeout(async () => {
       try {
-        await onComplete();
+        await onComplete({ ticketLabel: tierObj.label, amount: total });
       } catch {
         // DB write failed after payment "succeeded" — show failure so user can retry
         setStatus('failed');
@@ -129,15 +137,15 @@ export function BookingFlow({ event, price, onClose, onComplete }: BookingFlowPr
           <motion.div key="tickets" {...slide(dir)} transition={{ duration: 0.25 }} className="flex flex-col h-full">
             <Header title="הזמנת כרטיסים" onBack={onClose} />
 
-            {/* tier tabs */}
-            <div className="flex px-5 gap-6 border-b border-gray-200 bg-white flex-shrink-0">
-              {TIERS.map(t => {
+            {/* ticket-type tabs */}
+            <div className="flex px-5 gap-6 border-b border-gray-200 bg-white flex-shrink-0 overflow-x-auto">
+              {tickets.map(t => {
                 const active = tier === t.id;
                 return (
                   <button
                     key={t.id}
                     onClick={() => setTier(t.id)}
-                    className="relative pb-3 pt-1 text-[15px] font-bold transition-colors"
+                    className="relative pb-3 pt-1 text-[15px] font-bold transition-colors whitespace-nowrap flex-shrink-0"
                     style={{ fontFamily: FONT, color: active ? ORANGE : '#9CA3AF' }}
                   >
                     {t.label}
@@ -161,7 +169,7 @@ export function BookingFlow({ event, price, onClose, onComplete }: BookingFlowPr
                 </div>
               </div>
 
-              <p className="text-[11px] font-semibold text-[#8E8E93] uppercase tracking-wider mb-1">{tierObj.perk}</p>
+              <p className="text-[11px] font-semibold text-[#8E8E93] uppercase tracking-wider mb-1">{tierObj.perk || `כרטיס ${tierObj.label}`}</p>
               <p className="text-[15px] font-bold text-gray-900 mb-7" style={{ fontFamily: FONT }}>בחר כמות כרטיסים</p>
 
               {/* seat stepper */}

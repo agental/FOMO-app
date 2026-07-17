@@ -1,11 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { X, MapPin, Lock, Globe, Users, Image as ImageIcon, Upload, ChevronLeft, Check, Tag } from 'lucide-react';
+import { X, MapPin, Lock, Users, Upload, ChevronLeft, Check, Tag, Plus, Trash2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import mapboxgl from 'mapbox-gl';
 import confetti from 'canvas-confetti';
 import { EventService } from '../services/eventService';
 import { reverseGeocode } from '../utils/geocoding';
-import { EmojiPickerSheet } from './EmojiPickerSheet';
+import type { TicketType } from '../types/event';
 
 interface MapCreateEventFlowProps {
   isOpen: boolean;
@@ -19,19 +19,17 @@ interface MapCreateEventFlowProps {
 
 type FlowStep = 1 | 2 | 3 | 4;
 
+/** Editable ticket row (price kept as a string while typing). */
+type TicketDraft = { id: string; name: string; price: string };
+const newTicketId = () => Math.random().toString(36).slice(2, 9);
+const freshTicket = (name = ''): TicketDraft => ({ id: newTicketId(), name, price: '' });
+
 const EVENT_TYPES = [
   { id: 'parties',   label: 'מסיבות',   emoji: '🎉', color: '#A855F7' },
   { id: 'sports',    label: 'אטרקציות', emoji: '🎡', color: '#0EA5E9' },
   { id: 'treks',     label: 'טיולים',   emoji: '🏕️', color: '#22C55E' },
   { id: 'workshops', label: 'סדנאות',   emoji: '🧘', color: '#FACC15' },
 ];
-
-const EMOJI_BY_TYPE: Record<string, string[]> = {
-  parties:   ['🎉','🥳','🎊','🪩','🍾','🎈','🕺','💃','🎵','🎶','🥂','✨'],
-  sports:    ['🎡','🎢','🎠','🗼','🏛️','🎭','🎪','🖼️','🏟️','🎨','🌉','🎆'],
-  treks:     ['🏕️','⛺','🥾','🏔️','🌲','🌄','🌿','🌊','🦅','🌅','🗺️','🧭'],
-  workshops: ['🧘','🎨','📚','💡','🎸','📷','🖌️','✂️','🎭','🪴','🧪','🛠️'],
-};
 
 const SUGGESTED_IMAGES: Record<string, string[]> = {
   parties: [
@@ -82,7 +80,6 @@ export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initial
   const [selectedEmoji, setSelectedEmoji] = useState('🎉');
   const [description,   setDescription]   = useState('');
   const [title,         setTitle]         = useState('');
-  const [emojiOpen,     setEmojiOpen]     = useState(false);
 
   /* step 2 */
   const [latitude,       setLatitude]       = useState<number|null>(initialLocation?.latitude||null);
@@ -94,13 +91,12 @@ export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initial
   /* step 3 */
   const [selectedDay,  setSelectedDay]  = useState('');
   const [selectedTime, setSelectedTime] = useState('20:00');
-  const [isPrivate,    setIsPrivate]    = useState(false);
 
   /* step 4 */
   const [maxAttendees,  setMaxAttendees]  = useState(20);
   const [noLimit,       setNoLimit]       = useState(false);
   const [isPaid,        setIsPaid]        = useState(false);
-  const [ticketPrice,   setTicketPrice]   = useState('');
+  const [ticketTypes,   setTicketTypes]   = useState<TicketDraft[]>([freshTicket('כרטיס רגיל')]);
   const [imageUrl,      setImageUrl]      = useState('');
   const [imageFile,     setImageFile]     = useState<File|null>(null);
   const [imagePreview,  setImagePreview]  = useState('');
@@ -137,11 +133,19 @@ export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initial
     setLocationName(existingEvent.address || existingEvent.city || '');
     setDetectedCity(existingEvent.city || null);
     setDetectedCountry(existingEvent.country || null);
-    setIsPrivate(existingEvent.is_private ?? false);
     setMaxAttendees(existingEvent.max_attendees >= 9999 ? 9999 : (existingEvent.max_attendees || 20));
     setNoLimit(existingEvent.max_attendees >= 9999);
-    setIsPaid(existingEvent.price > 0);
-    setTicketPrice(existingEvent.price > 0 ? String(existingEvent.price) : '');
+    const existingTickets = (existingEvent.ticket_types as TicketType[] | undefined) || [];
+    if (existingTickets.length > 0) {
+      setIsPaid(true);
+      setTicketTypes(existingTickets.map(t => ({ id: t.id || newTicketId(), name: t.name, price: String(t.price) })));
+    } else if (existingEvent.price > 0) {
+      setIsPaid(true);
+      setTicketTypes([{ id: newTicketId(), name: 'כרטיס רגיל', price: String(existingEvent.price) }]);
+    } else {
+      setIsPaid(false);
+      setTicketTypes([freshTicket('כרטיס רגיל')]);
+    }
     setImageUrl(existingEvent.image_url || '');
     setImagePreview(existingEvent.image_url || '');
     // Parse event_date to day + time
@@ -281,6 +285,15 @@ export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initial
       } else if (imageUrl) {
         finalImage = imageUrl;
       }
+      // Build the ticket types from the editor rows (only rows with a real price count).
+      const validTickets: TicketType[] = isPaid
+        ? ticketTypes
+            .map(t => ({ id: t.id, name: t.name.trim() || 'כרטיס', price: Number(t.price) }))
+            .filter(t => Number.isFinite(t.price) && t.price > 0)
+        : [];
+      // `price` stays the entry (lowest) price so event cards keep showing a value.
+      const entryPrice = validTickets.length ? Math.min(...validTickets.map(t => t.price)) : null;
+
       const payload = {
         title, description: description || title,
         emoji: selectedEmoji, event_type: eventType,
@@ -289,9 +302,10 @@ export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initial
         address: locationName || undefined,
         country: detectedCountry || defaultCountry || undefined,
         event_date: new Date(`${selectedDay}T${selectedTime}`).toISOString(),
-        is_private: isPrivate, max_attendees: noLimit ? 9999 : maxAttendees,
+        is_private: true, max_attendees: noLimit ? 9999 : maxAttendees,
         image_url: finalImage || imageUrl || existingEvent?.image_url || undefined,
-        price: isPaid && ticketPrice ? Number(ticketPrice) : null,
+        price: entryPrice,
+        ticket_types: validTickets,
       };
 
       let result: Record<string, any>;
@@ -329,8 +343,8 @@ export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initial
   const handleClose = () => {
     mapRef.current?.remove(); mapRef.current = null;
     setStep(1); setTitle(''); setDescription(''); setSelectedEmoji('🎉'); setEventType('parties');
-    setSelectedDay(''); setSelectedTime('20:00'); setIsPrivate(false); setMaxAttendees(20);
-    setIsPaid(false); setTicketPrice('');
+    setSelectedDay(''); setSelectedTime('20:00'); setMaxAttendees(20);
+    setIsPaid(false); setTicketTypes([freshTicket('כרטיס רגיל')]);
     setImageUrl(''); setImageFile(null); setImagePreview(''); setLocationName('');
     setDetectedCountry(null); setLatitude(initialLocation?.latitude||null); setLongitude(initialLocation?.longitude||null);
     onClose();
@@ -507,20 +521,15 @@ export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initial
                 initial={{ x: dir * 50, opacity: 0 }} animate={{ x: 0, opacity: 1 }} exit={{ x: dir * -50, opacity: 0 }}
                 transition={{ type: 'spring', damping: 26, stiffness: 260 }}
               >
-                {/* big emoji pin */}
+                {/* big emoji pin (driven by the selected category) */}
                 <div className="flex flex-col items-center py-4">
-                  <motion.button type="button" onClick={() => setEmojiOpen(true)} whileTap={{ scale: 0.9 }} className="relative">
+                  <div className="relative">
                     <div className="absolute inset-0 rounded-full blur-2xl opacity-30" style={{ background: accent, transform: 'scale(1.6)' }} />
                     <div className="relative w-28 h-28 rounded-full flex items-center justify-center shadow-xl"
                       style={{ background: `linear-gradient(145deg, ${accent}dd, ${accent})` }}>
                       <span className="text-6xl">{selectedEmoji}</span>
                     </div>
-                    <div className="absolute -bottom-1 -left-1 w-9 h-9 rounded-full border-[3px] border-[#F2F2F7] flex items-center justify-center shadow"
-                      style={{ background: accent }}>
-                      <span className="text-[15px]">✏️</span>
-                    </div>
-                  </motion.button>
-                  <p className="mt-2 text-[13px] text-[#8E8E93]">לחץ לבחירת אימוג׳י</p>
+                  </div>
                 </div>
 
                 {/* category grid */}
@@ -630,30 +639,17 @@ export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initial
                   </div>
                 </div>
 
-                {/* privacy */}
+                {/* approval — every event requires the organizer's approval */}
                 <div className="bg-white rounded-[20px] p-4 shadow-sm border border-black/[0.05]">
-                  <p className="text-[11px] font-semibold text-[#8E8E93] uppercase tracking-wider mb-3">מי יכול להצטרף?</p>
-                  <div className="grid grid-cols-2 gap-3">
-                    {[
-                      { val: false, icon: Globe, label: 'פתוח', sub: 'כולם יכולים להצטרף ישירות', color: '#22C55E' },
-                      { val: true,  icon: Lock,  label: 'פרטי', sub: 'דורש אישור ממני', color: '#8B5CF6' },
-                    ].map(opt => {
-                      const active = isPrivate === opt.val;
-                      const Icon = opt.icon;
-                      return (
-                        <motion.button key={String(opt.val)} type="button" whileTap={{ scale: 0.95 }}
-                          onClick={() => setIsPrivate(opt.val)}
-                          className="relative flex flex-col gap-1 p-4 rounded-[16px] text-right border-2 transition-all"
-                          style={active
-                            ? { borderColor: opt.color, background: `${opt.color}12` }
-                            : { borderColor: 'transparent', background: '#F2F2F7' }}>
-                          {active && <Check className="absolute top-2 left-2 w-4 h-4" style={{ color: opt.color }} strokeWidth={3} />}
-                          <Icon className="w-7 h-7 mb-1" style={{ color: active ? opt.color : '#9CA3AF' }} />
-                          <span className="text-[15px] font-bold text-[#1C1C1E]">{opt.label}</span>
-                          <span className="text-[11px] text-[#8E8E93] leading-snug">{opt.sub}</span>
-                        </motion.button>
-                      );
-                    })}
+                  <p className="text-[11px] font-semibold text-[#8E8E93] uppercase tracking-wider mb-3">הצטרפות לאירוע</p>
+                  <div className="flex items-center gap-3 rounded-[16px] p-3.5" style={{ background: '#8B5CF612' }}>
+                    <div className="w-11 h-11 rounded-full flex items-center justify-center flex-shrink-0" style={{ background: '#8B5CF6' }}>
+                      <Lock className="w-5 h-5 text-white" strokeWidth={2.2} />
+                    </div>
+                    <div>
+                      <p className="text-[15px] font-bold text-[#1C1C1E]">כל מצטרף דורש את אישורך</p>
+                      <p className="text-[12px] text-[#8E8E93] leading-snug mt-0.5">קונה כרטיס ממתין לאישורך; דחייה מחזירה לו את התשלום אוטומטית.</p>
+                    </div>
                   </div>
                 </div>
               </motion.div>
@@ -740,7 +736,7 @@ export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initial
                   </AnimatePresence>
                 </div>
 
-                {/* ticket price */}
+                {/* tickets — one or more paid ticket types (e.g. רגיל / VIP) */}
                 <div className="bg-white rounded-[20px] p-4 shadow-sm border border-black/[0.05]">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2.5">
@@ -748,13 +744,15 @@ export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initial
                         <Tag className="w-4 h-4" style={{ color: accent }} />
                       </div>
                       <div>
-                        <p className="text-[15px] font-semibold text-[#1C1C1E]">מחיר כרטיס</p>
-                        <p className="text-[11px] text-[#8E8E93]">{isPaid && ticketPrice ? `₪${ticketPrice}` : 'חינם'}</p>
+                        <p className="text-[15px] font-semibold text-[#1C1C1E]">כרטיסים בתשלום</p>
+                        <p className="text-[11px] text-[#8E8E93]">
+                          {isPaid ? `${ticketTypes.length} ${ticketTypes.length === 1 ? 'סוג כרטיס' : 'סוגי כרטיסים'}` : 'האירוע חינמי'}
+                        </p>
                       </div>
                     </div>
                     <div dir="ltr" className="relative w-[50px] h-[30px] rounded-full flex-shrink-0 overflow-hidden transition-colors duration-200 cursor-pointer"
                       style={{ background: isPaid ? accent : '#D1D1D6' }}
-                      onClick={() => { setIsPaid(v => !v); if (isPaid) setTicketPrice(''); }}>
+                      onClick={() => setIsPaid(v => !v)}>
                       <motion.div
                         animate={{ x: isPaid ? 22 : 2 }}
                         transition={{ type: 'spring', damping: 22, stiffness: 320 }}
@@ -773,19 +771,48 @@ export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initial
                         transition={{ duration: 0.2 }}
                         className="overflow-hidden"
                       >
-                        <div className="flex items-center gap-2 bg-[#F2F2F7] rounded-[14px] px-4 py-3">
-                          <span className="text-[22px] font-bold text-[#1C1C1E]">₪</span>
-                          <input
-                            type="number"
-                            inputMode="numeric"
-                            value={ticketPrice}
-                            onChange={e => setTicketPrice(e.target.value)}
-                            placeholder="0"
-                            min="0"
-                            className="flex-1 text-[22px] font-bold text-[#1C1C1E] placeholder-[#C7C7CC] bg-transparent outline-none"
-                          />
+                        <div className="space-y-2.5">
+                          {ticketTypes.map(t => (
+                            <div key={t.id} className="flex items-center gap-2">
+                              <input
+                                type="text"
+                                value={t.name}
+                                onChange={e => setTicketTypes(list => list.map(x => x.id === t.id ? { ...x, name: e.target.value } : x))}
+                                placeholder="שם הכרטיס (למשל VIP)"
+                                className="flex-1 min-w-0 text-[14px] font-semibold text-[#1C1C1E] placeholder-[#C7C7CC] bg-[#F2F2F7] rounded-[12px] px-3 py-2.5 outline-none"
+                              />
+                              <div className="flex items-center gap-1 bg-[#F2F2F7] rounded-[12px] px-3 py-2.5 w-[92px] flex-shrink-0">
+                                <span className="text-[16px] font-bold text-[#1C1C1E]">₪</span>
+                                <input
+                                  type="number"
+                                  inputMode="numeric"
+                                  min="0"
+                                  value={t.price}
+                                  onChange={e => setTicketTypes(list => list.map(x => x.id === t.id ? { ...x, price: e.target.value } : x))}
+                                  placeholder="0"
+                                  className="w-full text-[16px] font-bold text-[#1C1C1E] placeholder-[#C7C7CC] bg-transparent outline-none"
+                                />
+                              </div>
+                              {ticketTypes.length > 1 && (
+                                <button type="button"
+                                  onClick={() => setTicketTypes(list => list.filter(x => x.id !== t.id))}
+                                  className="w-9 h-9 rounded-[12px] flex items-center justify-center flex-shrink-0 bg-[#FEF2F2] active:scale-90 transition-transform">
+                                  <Trash2 className="w-4 h-4 text-[#EF4444]" />
+                                </button>
+                              )}
+                            </div>
+                          ))}
                         </div>
-                        <p className="text-[11px] text-[#8E8E93] mt-2 text-center">המחיר יוצג על כרטיסית האירוע</p>
+
+                        <button type="button"
+                          onClick={() => setTicketTypes(list => [...list, freshTicket('')])}
+                          className="mt-3 w-full flex items-center justify-center gap-1.5 py-2.5 rounded-[12px] border-2 border-dashed active:scale-[0.98] transition-transform"
+                          style={{ borderColor: `${accent}55`, color: accent }}>
+                          <Plus className="w-4 h-4" strokeWidth={2.5} />
+                          <span className="text-[13px] font-bold">הוסף סוג כרטיס</span>
+                        </button>
+
+                        <p className="text-[11px] text-[#8E8E93] mt-2 text-center">הקונה יבחר איזה כרטיס לקנות בדף האירוע</p>
                       </motion.div>
                     )}
                   </AnimatePresence>
@@ -900,7 +927,6 @@ export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initial
         </div>
       </motion.div>
 
-      <EmojiPickerSheet isOpen={emojiOpen} onClose={() => setEmojiOpen(false)} selectedEmoji={selectedEmoji} onSelect={e => setSelectedEmoji(e)} />
     </>
   );
 }

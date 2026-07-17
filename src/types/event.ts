@@ -4,6 +4,13 @@ export interface EventUser {
   avatar_url: string | null;
 }
 
+/** A single purchasable ticket type on an event (e.g. "רגיל" ₪50, "VIP" ₪120). */
+export interface TicketType {
+  id: string;
+  name: string;
+  price: number;
+}
+
 export interface Event {
   id: string;
   user_id: string;
@@ -22,6 +29,7 @@ export interface Event {
   max_attendees: number;
   attendees: string[];
   price?: number | null;
+  ticket_types?: TicketType[];
   created_at: string;
   users?: EventUser;
   distance?: number;
@@ -43,6 +51,7 @@ export interface CreateEventData {
   is_private: boolean;
   max_attendees: number;
   price?: number | null;
+  ticket_types?: TicketType[];
 }
 
 export interface EventFilters {

@@ -14,6 +14,7 @@ type RequestDecision = {
   updated_at: string;
   eventTitle: string;
   isNew: boolean;
+  paidAmount?: number | null;
 };
 
 type JoinRequest = {
@@ -22,6 +23,8 @@ type JoinRequest = {
   user_id: string;
   status: 'pending' | 'approved' | 'rejected';
   created_at: string;
+  paid_amount?: number | null;
+  ticket_label?: string | null;
   user: {
     id: string;
     display_name: string;
@@ -88,7 +91,7 @@ export function RequestsScreen({ currentUserId, onBack, onHomeClick, onMapClick,
       const lastSeen = getNotifLastSeen(currentUserId);
       const { data, error } = await supabase
         .from('event_join_requests')
-        .select('id, event_id, status, updated_at')
+        .select('id, event_id, status, updated_at, paid_amount')
         .eq('user_id', currentUserId)
         .in('status', ['approved', 'rejected'])
         .order('updated_at', { ascending: false })
@@ -110,6 +113,7 @@ export function RequestsScreen({ currentUserId, onBack, onHomeClick, onMapClick,
         updated_at: d.updated_at,
         eventTitle: events?.find(e => e.id === d.event_id)?.title || 'אירוע',
         isNew: new Date(d.updated_at).getTime() > lastSeen,
+        paidAmount: (d as any).paid_amount ?? null,
       })));
 
       // Mark everything seen as of now (badge clears on next home refresh).
@@ -242,14 +246,12 @@ export function RequestsScreen({ currentUserId, onBack, onHomeClick, onMapClick,
 
       const { data: event } = await supabase
         .from('events')
-        .select('attendees, price')
+        .select('attendees')
         .eq('id', request.event_id)
         .maybeSingle();
 
-      // Free event → approval also adds the attendee.
-      // Paid event → approval only; the user is added once they pay.
-      const isPaid = !!((event as any)?.price && (event as any).price > 0);
-      if (event && !isPaid) {
+      // Approval always admits the buyer now (they already paid, for paid events).
+      if (event && !(event.attendees || []).includes(request.user_id)) {
         const updatedAttendees = [...(event.attendees || []), request.user_id];
         await supabase
           .from('events')
@@ -415,6 +417,13 @@ export function RequestsScreen({ currentUserId, onBack, onHomeClick, onMapClick,
                                 {request.event.title}
                               </span>
                             </div>
+                            {(request.paid_amount != null && request.paid_amount > 0) && (
+                              <div className="flex items-center gap-1.5 mt-1.5 px-3 py-1.5 bg-amber-50 rounded-xl border border-amber-100">
+                                <span className="text-xs font-bold text-amber-800" style={{ fontFamily: 'Rubik, sans-serif' }}>
+                                  🎟️ {request.ticket_label || 'כרטיס'} · שילם ₪{request.paid_amount}
+                                </span>
+                              </div>
+                            )}
                           </div>
                         </div>
                         <div className="flex gap-2">
@@ -432,7 +441,7 @@ export function RequestsScreen({ currentUserId, onBack, onHomeClick, onMapClick,
                             style={{ fontFamily: 'Heebo, sans-serif' }}
                           >
                             <X className="w-4 h-4" strokeWidth={2.5} />
-                            דחה
+                            {(request.paid_amount != null && request.paid_amount > 0) ? 'דחה והחזר' : 'דחה'}
                           </button>
                         </div>
                       </div>
@@ -467,7 +476,7 @@ export function RequestsScreen({ currentUserId, onBack, onHomeClick, onMapClick,
                         </div>
                         <div className="flex-1 min-w-0">
                           <p className="text-sm font-bold text-gray-900" style={{ fontFamily: 'Heebo, sans-serif' }}>
-                            {approved ? 'בקשתך אושרה 🎉' : 'בקשתך נדחתה'}
+                            {approved ? 'בקשתך אושרה 🎉' : (d.paidAmount ? `בקשתך נדחתה — הוחזרו ₪${d.paidAmount}` : 'בקשתך נדחתה')}
                           </p>
                           <div className="flex items-center gap-1.5 mt-1">
                             <Calendar className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" strokeWidth={2.5} />

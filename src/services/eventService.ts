@@ -85,6 +85,7 @@ export class EventService {
       max_attendees: data.max_attendees,
       attendees: [],
       ...(data.price != null ? { price: data.price } : {}),
+      ...(data.ticket_types && data.ticket_types.length ? { ticket_types: data.ticket_types } : {}),
     };
 
     try {

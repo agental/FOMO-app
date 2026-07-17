@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { Calendar, MapPin, MessageCircle, Navigation, Pencil } from 'lucide-react';
 import { MapCreateEventFlow } from './MapCreateEventFlow';
 import { supabase, type Event } from '../lib/supabase';
+import type { TicketType } from '../types/event';
 import { flagEmoji } from '../utils/flags';
 import { UserAvatar } from './UserAvatar';
 import { getCategoryEmoji } from '../utils/eventCategories';
@@ -45,6 +46,8 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
   const [requestStatus, setRequestStatus] = useState<'none' | 'pending' | 'approved' | 'rejected'>('none');
   const [joining, setJoining]         = useState(false);
   const [approvedToast, setApprovedToast] = useState(false);
+  const [pendingToast, setPendingToast]   = useState(false);
+  const [rejectedToast, setRejectedToast] = useState(false);
   const [saved, setSaved]             = useState(false);
   const [showPayment, setShowPayment] = useState(false);
   const [showNav, setShowNav] = useState(false);
@@ -141,8 +144,12 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
   const heroImg  = event.image_url || cat.image;
   const emoji    = (event as any).emoji || '';
   const price    = (event as any).price as number | null | undefined;
-  const priced   = !!(price && price > 0);
-  const isPrivate = !!(event as any).is_private;
+  const ticketTypes = (((event as any).ticket_types as TicketType[] | undefined) || []).filter(t => t && t.price > 0);
+  const hasTickets  = ticketTypes.length > 0;
+  const multiTicket = ticketTypes.length > 1;
+  // Entry (lowest) price — from the ticket types when present, else the legacy single price.
+  const entryPrice  = hasTickets ? Math.min(...ticketTypes.map(t => t.price)) : (price || 0);
+  const priced      = hasTickets || !!(price && price > 0);
   const isUnlimited = event.max_attendees >= 9999;
   const spotsLeft   = isUnlimited ? Infinity : event.max_attendees - event.attendees.length;
   const isFull      = !isUnlimited && spotsLeft === 0;
@@ -171,10 +178,17 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
           if (row.user_id !== currentUserId) return;
           setRequestStatus(row.status as 'none' | 'pending' | 'approved' | 'rejected');
           if (row.status === 'approved') {
+            // organizer approved → they added us to attendees → we're in.
             fetchAttendees();
+            setIsJoined(true);
             setApprovedToast(true);
-            setTimeout(() => setApprovedToast(false), 4000);
+            setTimeout(() => setApprovedToast(false), 4500);
             if ('vibrate' in navigator) navigator.vibrate([30, 60, 30]);
+          } else if (row.status === 'rejected') {
+            // organizer rejected → a paid ticket is refunded (simulated).
+            setRejectedToast(true);
+            setTimeout(() => setRejectedToast(false), 5000);
+            if ('vibrate' in navigator) navigator.vibrate([60, 40, 60]);
           }
         }
       )
@@ -210,23 +224,42 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
     }
   };
 
-  // add the current user to the event's attendee list (= fully joined)
-  const addSelfToAttendees = async () => {
+  // Create the (pending) join request — AFTER payment for a paid event. The buyer is NOT
+  // added to attendees here; the organizer's approval does that (RequestsScreen). This is the
+  // "pay first → wait for approval → refund on reject" model, applied to every event.
+  const createPendingRequest = async (paymentInfo?: { ticketLabel: string; amount: number }) => {
     if (!currentUserId) return;
-    const updated = [...event.attendees, currentUserId];
-    const { error } = await supabase.from('events').update({ attendees: updated }).eq('id', event.id);
-    if (error) { console.error('[EventDetailsModal] join failed:', error); throw error; }
-    setIsJoined(true);
-    fetchAttendees();
+    // Re-check live so we never clobber an existing row (approval may have arrived).
+    const { data: live } = await supabase
+      .from('event_join_requests').select('status')
+      .eq('event_id', event.id).eq('user_id', currentUserId).maybeSingle();
+    if (live) {
+      setRequestStatus(live.status as 'none' | 'pending' | 'approved' | 'rejected');
+      if (live.status === 'pending') { setPendingToast(true); setTimeout(() => setPendingToast(false), 4500); }
+      return;
+    }
+    const { error } = await supabase.from('event_join_requests').insert({
+      event_id: event.id, user_id: currentUserId, status: 'pending',
+      ...(paymentInfo ? { paid_amount: paymentInfo.amount, ticket_label: paymentInfo.ticketLabel } : {}),
+    });
+    if (!error) {
+      setRequestStatus('pending');
+      setPendingToast(true);
+      if ('vibrate' in navigator) navigator.vibrate([20, 40]);
+      setTimeout(() => setPendingToast(false), 4500);
+    } else {
+      console.error('[EventDetailsModal] create request failed:', error);
+      alert('שגיאה בשליחת הבקשה, נסה שוב.');
+    }
   };
 
-  // called when the payment sheet's method is chosen (mock — see note to user)
-  const completePayment = async () => {
+  // Called after the (mock) payment succeeds → record the paid, pending-approval request.
+  const completePayment = async (info?: { ticketLabel: string; amount: number }) => {
     if (joining) return;
     setJoining(true);
     if ('vibrate' in navigator) navigator.vibrate(15);
     try {
-      await addSelfToAttendees();
+      await createPendingRequest(info);
       setShowPayment(false);
     } finally { setJoining(false); }
   };
@@ -235,7 +268,7 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
     if (joining) return;
     if (!currentUserId) { alert('יש להתחבר כדי להצטרף לאירוע'); return; }
 
-    // Leave / cancel
+    // Leave — approved attendee cancels their participation (also drops the request row).
     if (isJoined) {
       setJoining(true);
       if ('vibrate' in navigator) navigator.vibrate(10);
@@ -255,57 +288,14 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
     }
 
     if (isFull) return;
+    // Already in a decided/awaiting state — the button is disabled in these, but guard anyway.
+    if (requestStatus === 'pending' || requestStatus === 'rejected' || requestStatus === 'approved') return;
+
+    // status === 'none' → request to join. Paid event pays first; the request is created on success.
     if ('vibrate' in navigator) navigator.vibrate(10);
-
-    // ── PUBLIC event — no approval needed ──
-    if (!isPrivate) {
-      if (priced) { setShowPayment(true); return; }   // pay → join
-      setJoining(true);
-      try { await addSelfToAttendees(); } finally { setJoining(false); }
-      return;
-    }
-
-    // ── PRIVATE event — manager approval required first ──
-    if (requestStatus === 'approved') {
-      // approved by the manager → now pay (if priced), otherwise join
-      if (priced) { setShowPayment(true); return; }
-      setJoining(true);
-      try { await addSelfToAttendees(); } finally { setJoining(false); }
-      return;
-    }
-    if (requestStatus === 'pending')  { alert('הבקשה שלך ממתינה לאישור המארגן'); return; }
-    if (requestStatus === 'rejected') { alert('הבקשה נדחתה על ידי המארגן'); return; }
-
-    // status === 'none' locally — but always re-check the DB before sending a new request
-    // to avoid overwriting an approval that arrived while local state was stale
+    if (priced) { setShowPayment(true); return; }
     setJoining(true);
-    try {
-      const { data: live } = await supabase
-        .from('event_join_requests').select('status')
-        .eq('event_id', event.id).eq('user_id', currentUserId!).maybeSingle();
-
-      if (live) {
-        // Row already exists — sync local state and act on the real status
-        const liveStatus = live.status as 'pending' | 'approved' | 'rejected';
-        setRequestStatus(liveStatus);
-        if (liveStatus === 'approved') {
-          if (priced) { setShowPayment(true); }
-          else { await addSelfToAttendees(); }
-        } else if (liveStatus === 'pending') {
-          alert('הבקשה שלך ממתינה לאישור המארגן');
-        } else if (liveStatus === 'rejected') {
-          alert('הבקשה נדחתה על ידי המארגן');
-        }
-        return;
-      }
-
-      // No existing row — safe to create a new join request
-      const { error } = await supabase.from('event_join_requests').insert(
-        { event_id: event.id, user_id: currentUserId, status: 'pending' }
-      );
-      if (!error) setRequestStatus('pending');
-      else { alert('שגיאה בשליחת הבקשה, נסה שוב.'); }
-    } finally { setJoining(false); }
+    try { await createPendingRequest(); } finally { setJoining(false); }
   };
 
   const fmtDate = (d: string) => new Date(d).toLocaleDateString('he-IL', { day: 'numeric', month: 'long', year: 'numeric' });
@@ -324,16 +314,17 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
     else setShowNav(true);
   };
 
+  // Every event now requires the organizer's approval (pay first → pending → approve/reject).
+  const buyLabel = multiTicket ? 'בחר כרטיס' : `קנה כרטיס · ₪${entryPrice}`;
   const joinLabel = isJoined ? 'ביטול השתתפות'
     : isFull ? 'האירוע מלא'
-    : isPrivate
-      ? (requestStatus === 'pending'  ? '⏳ ממתין לאישור המארגן'
-         : requestStatus === 'rejected' ? '❌ הבקשה נדחתה'
-         : requestStatus === 'approved' ? (priced ? `שלם · ₪${price}` : 'אושרת — הצטרף')
-         : 'בקש להצטרף')
-      : (priced ? `קנה כרטיס · ₪${price}` : 'הצטרף לאירוע');
+    : requestStatus === 'pending'  ? '⏳ ממתין לאישור המארגן'
+    : requestStatus === 'rejected' ? (priced ? '❌ נדחתה — התשלום הוחזר' : '❌ הבקשה נדחתה')
+    : requestStatus === 'approved' ? '✓ אושרת'
+    : priced ? buyLabel
+    : 'בקש להצטרף';
   const joinDisabled = (isFull && !isJoined) || joining ||
-    (isPrivate && (requestStatus === 'pending' || requestStatus === 'rejected'));
+    requestStatus === 'pending' || requestStatus === 'rejected';
 
   /* ── shared detail body (identical in modal + sheet so the design is 1:1) ── */
   const detailBody = (
@@ -466,9 +457,9 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
             style={{  }}
           >
             <div>
-              <p className="text-[11px] text-gray-400 font-medium mb-0.5">כרטיס</p>
+              <p className="text-[11px] text-gray-400 font-medium mb-0.5">{multiTicket ? 'החל מ־' : 'כרטיס'}</p>
               <p className="text-[26px] font-black leading-none" style={{ color: '#F97316' }}>
-                {price ? `₪${price}` : 'חינם'}
+                {priced ? `₪${entryPrice}` : 'חינם'}
               </p>
             </div>
 
@@ -489,6 +480,21 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
               </div>
             )}
           </div>
+
+          {/* Ticket options — the buyer picks one when tapping "בחר כרטיס" */}
+          {multiTicket && (
+            <div className="pt-1 pb-2">
+              <p className="text-[11px] text-gray-400 font-semibold mb-2 tracking-wide uppercase">סוגי כרטיסים</p>
+              <div className="space-y-2">
+                {ticketTypes.map(t => (
+                  <div key={t.id} className="flex items-center justify-between bg-gray-50 rounded-[14px] px-4 py-3 border border-black/[0.04]">
+                    <span className="text-[14px] font-bold text-gray-900" style={{ fontFamily: 'Heebo, sans-serif' }}>{t.name}</span>
+                    <span className="text-[15px] font-black" style={{ color: '#F97316' }}>₪{t.price}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Map → opens the exact location inside the app */}
           {event.latitude && event.longitude && (
@@ -609,7 +615,8 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
       {showPayment && (
         <BookingFlow
           event={event}
-          price={price || 0}
+          price={entryPrice}
+          ticketTypes={hasTickets ? ticketTypes : undefined}
           currentUserId={currentUserId}
           onClose={() => setShowPayment(false)}
           onComplete={completePayment}
@@ -732,10 +739,32 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
       {approvedToast && (
         <div
           className="fixed top-16 left-1/2 -translate-x-1/2 z-[200] flex items-center gap-2 px-4 py-3 rounded-2xl shadow-lg text-white text-[14px] font-bold"
-          style={{ background: 'linear-gradient(135deg,#22c55e,#16a34a)', animation: 'edm-toast 4s ease forwards', whiteSpace: 'nowrap' }}
+          style={{ background: 'linear-gradient(135deg,#22c55e,#16a34a)', animation: 'edm-toast 4.5s ease forwards', whiteSpace: 'nowrap' }}
         >
           <span>✅</span>
-          <span>{priced ? 'אושרת! עכשיו תוכל לשלם ולהצטרף' : 'אושרת! תוכל להצטרף לאירוע'}</span>
+          <span>אושרת לאירוע! נתראה שם 🎉</span>
+        </div>
+      )}
+
+      {/* ── Pending (awaiting approval) toast ── */}
+      {pendingToast && (
+        <div
+          className="fixed top-16 left-1/2 -translate-x-1/2 z-[200] flex items-center gap-2 px-4 py-3 rounded-2xl shadow-lg text-white text-[14px] font-bold"
+          style={{ background: 'linear-gradient(135deg,#F59E0B,#D97706)', animation: 'edm-toast 4.5s ease forwards', whiteSpace: 'nowrap' }}
+        >
+          <span>⏳</span>
+          <span>{priced ? 'הכרטיס נרכש! ממתין לאישור המארגן' : 'הבקשה נשלחה! ממתין לאישור המארגן'}</span>
+        </div>
+      )}
+
+      {/* ── Rejected (refund) toast ── */}
+      {rejectedToast && (
+        <div
+          className="fixed top-16 left-1/2 -translate-x-1/2 z-[200] flex items-center gap-2 px-4 py-3 rounded-2xl shadow-lg text-white text-[14px] font-bold"
+          style={{ background: 'linear-gradient(135deg,#ef4444,#dc2626)', animation: 'edm-toast 5s ease forwards', whiteSpace: 'nowrap' }}
+        >
+          <span>↩️</span>
+          <span>{priced ? 'הבקשה נדחתה — התשלום הוחזר' : 'הבקשה נדחתה על ידי המארגן'}</span>
         </div>
       )}
 
