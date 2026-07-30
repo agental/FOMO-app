@@ -8,6 +8,7 @@ import { CreateProfileWizard } from './components/CreateProfileWizard';
 import { CountrySelectionScreen } from './components/CountrySelectionScreen';
 import { MapScreen } from './components/MapScreen';
 import { useRealtimeNotifications } from './hooks/useRealtimeNotifications';
+import { savePushToken } from './services/pushToken';
 import { preloadAppData } from './boot/preload';
 import { fetchChatList } from './services/chatListService';
 import type { PlacePayload } from './utils/placeMessage';
@@ -66,6 +67,13 @@ function App() {
         console.error('OAuth setSession failed:', err);
       }
     };
+  }, []);
+
+  // Push-token bridge: the native wrapper hands us the device's Expo push token; store it so the
+  // server can send BACKGROUND notifications (see services/pushToken + the send-push Edge Function).
+  useEffect(() => {
+    (window as unknown as { __fomoSetPushToken?: (t: string, p?: string) => void }).__fomoSetPushToken =
+      (token: string, platform?: string) => { savePushToken(token, platform); };
   }, []);
 
   // Remember the screen the user came from, so a viewed profile can return there

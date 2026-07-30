@@ -7,10 +7,56 @@ if (!supabaseUrl || !supabaseAnonKey) {
   throw new Error('Missing Supabase environment variables');
 }
 
+/*
+  Auth session storage that SURVIVES an Expo WebView relaunch — so the user stays logged in.
+
+  In the Expo WebView, localStorage is dropped between app launches, so the default Supabase storage
+  loses the session and the user has to log in every time. The native wrapper already mirrors storage
+  into AsyncStorage: on startup it injects the saved blob as window.__FOMO_NATIVE_CACHE, and it persists
+  every write we post via ReactNativeWebView. We route the auth session through that bridge:
+    - read: localStorage first (fresh within a session); on a cold start it's empty, so fall back to
+      the native blob (which holds the last-persisted session) → the login is restored.
+    - write/remove: localStorage + post to the bridge so it lands in AsyncStorage for next launch.
+  On plain web (no wrapper) this is just localStorage.
+*/
+type BridgeWin = typeof window & {
+  __FOMO_NATIVE_CACHE?: Record<string, string>;
+  ReactNativeWebView?: { postMessage: (msg: string) => void };
+};
+const bw = (typeof window !== 'undefined' ? window : {}) as BridgeWin;
+
+const nativeSessionStorage = {
+  getItem(key: string): string | null {
+    try {
+      const ls = typeof localStorage !== 'undefined' ? localStorage.getItem(key) : null;
+      if (ls != null) return ls;                       // fresh within the current session
+      const nc = bw.__FOMO_NATIVE_CACHE;               // cold start on the phone: localStorage is empty
+      return nc && nc[key] != null ? nc[key] : null;   // restore from the native blob
+    } catch {
+      return null;
+    }
+  },
+  setItem(key: string, value: string): void {
+    try { if (typeof localStorage !== 'undefined') localStorage.setItem(key, value); } catch { /* ignore */ }
+    if (bw.ReactNativeWebView) {
+      try { bw.ReactNativeWebView.postMessage(JSON.stringify({ type: 'cacheSet', key, value })); } catch { /* ignore */ }
+    }
+  },
+  removeItem(key: string): void {
+    try { if (typeof localStorage !== 'undefined') localStorage.removeItem(key); } catch { /* ignore */ }
+    if (bw.ReactNativeWebView) {
+      try { bw.ReactNativeWebView.postMessage(JSON.stringify({ type: 'cacheRemove', key })); } catch { /* ignore */ }
+    }
+  },
+};
+
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
     detectSessionInUrl: true,
     persistSession: true,
+    autoRefreshToken: true,
+    // Persist the session through the native bridge so a WebView relaunch stays logged in.
+    storage: nativeSessionStorage,
     // Implicit flow: OAuth returns access_token + refresh_token directly in the URL
     // fragment. The native wrapper reads them and calls setSession — no PKCE code
     // exchange / code_verifier (which is fragile in a non-secure http WebView).

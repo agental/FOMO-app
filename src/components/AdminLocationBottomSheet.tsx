@@ -746,15 +746,43 @@ export function AdminLocationBottomSheet({ isOpen, onClose, location, currentUse
             </div>
           )}
 
-          {/* ── How many liked it (just the count) ── */}
-          <div className="px-5 mt-6" style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-            <Heart size={17} strokeWidth={0} fill={savers.length ? '#EF4444' : '#CBD0DA'} />
-            <span style={{ fontSize: 14, fontWeight: 800, color: savers.length ? INK : MUTED, fontFamily: HEEBO }}>
-              {savers.length > 0
-                ? <><b style={{ fontWeight: 900 }}>{savers.length}</b> אהבו את המקום</>
-                : 'היה הראשון שאוהב — הקש על הלב'}
-            </span>
-          </div>
+          {/* ── Popularity: ❤️ count + progress toward the "featured spot" threshold ── */}
+          {(() => {
+            const GOAL = 50;                                   // saves needed to become a featured spot
+            const n = savers.length;
+            const remaining = Math.max(0, GOAL - n);
+            const pct = Math.min(100, Math.round((n / GOAL) * 100));
+            const reached = n >= GOAL;
+            return (
+              <div className="px-5 mt-6">
+                <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+                  <Heart size={17} strokeWidth={0} fill={n ? '#EF4444' : '#CBD0DA'} />
+                  <span style={{ fontSize: 14, fontWeight: 800, color: n ? INK : MUTED, fontFamily: HEEBO }}>
+                    {n > 0
+                      ? <><b style={{ fontWeight: 900 }}>{n}</b> אהבו את המקום</>
+                      : 'היה הראשון שאוהב — הקש על הלב'}
+                  </span>
+                </div>
+
+                {/* progress bar toward becoming a featured spot ⭐ */}
+                <div style={{ marginTop: 12, position: 'relative', height: 9, borderRadius: 999, background: '#EEF0F4', overflow: 'hidden' }}>
+                  <div style={{
+                    position: 'absolute', top: 0, bottom: 0, right: 0, width: `${pct}%`, borderRadius: 999,
+                    background: reached ? 'linear-gradient(90deg,#16A34A,#22C55E)' : 'linear-gradient(90deg,#EC4899,#F97316)',
+                    transition: 'width 0.6s cubic-bezier(0.22,1,0.32,1)',
+                  }} />
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 7, gap: 10 }}>
+                  <span style={{ fontSize: 12.5, fontWeight: 700, color: reached ? '#16A34A' : '#6B7280', fontFamily: HEEBO }}>
+                    {reached
+                      ? <>🎉 עבר את הרף! בקרוב יסומן כמקום מומלץ ⭐</>
+                      : <>עוד <b style={{ fontWeight: 900, color: '#F97316' }}>{remaining}</b> לייקים והמקום יהפוך למומלץ ⭐</>}
+                  </span>
+                  <span style={{ fontSize: 12, fontWeight: 800, color: MUTED, fontFamily: HEEBO, whiteSpace: 'nowrap' }}>{n}/{GOAL}</span>
+                </div>
+              </div>
+            );
+          })()}
 
           {/* ── Reviews ── */}
           <div className="px-5 mt-7">

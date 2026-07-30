@@ -55,6 +55,8 @@ export function AdminDashboard({ currentUserId, onBack }: AdminDashboardProps) {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [userSearch, setUserSearch] = useState('');
   const [viewUser, setViewUser] = useState<User | null>(null);
+  // Locations that crossed the like threshold and still need their map pin upgraded to the featured design.
+  const [pendingFeatured, setPendingFeatured] = useState<{ id: string; name: string; saves: number }[]>([]);
 
   useEffect(() => {
     loadCurrentUser();
@@ -63,6 +65,7 @@ export function AdminDashboard({ currentUserId, onBack }: AdminDashboardProps) {
   useEffect(() => {
     if (currentUser?.role === 'admin') {
       loadStats();
+      loadPendingFeatured();
       if (activeTab === 'events') loadEvents();
       if (activeTab === 'users') loadUsers();
       if (activeTab === 'locations') loadLocations();
@@ -112,6 +115,27 @@ export function AdminDashboard({ currentUserId, onBack }: AdminDashboardProps) {
     } finally {
       setLoading(false);
     }
+  };
+
+  // Places that passed the like/save threshold (default 50) and aren't featured yet → the admin needs
+  // to change their map pin to the featured design. Server-side RPC counts saved_places (bypasses RLS).
+  const loadPendingFeatured = async () => {
+    try {
+      const { data, error } = await supabase.rpc('admin_pending_featured_locations');
+      if (error) { console.error('loadPendingFeatured:', error.message); return; }
+      setPendingFeatured((data || []).map((r: { id: string; name: string; saves: number | string }) => ({
+        id: r.id, name: r.name, saves: Number(r.saves),
+      })));
+    } catch (e) {
+      console.error('loadPendingFeatured:', e);
+    }
+  };
+
+  // Admin handled it (upgraded the pin) → mark featured so the alert stops showing.
+  const markFeatured = async (id: string) => {
+    const { error } = await supabase.from('admin_locations').update({ is_featured: true }).eq('id', id);
+    if (error) { showToast({ title: 'שגיאה', text: error.message, emoji: '⚠️', background: 'linear-gradient(135deg,#EF4444,#DC2626)' }); return; }
+    setPendingFeatured((prev) => prev.filter((p) => p.id !== id));
   };
 
   const loadEvents = async () => {
@@ -458,7 +482,31 @@ export function AdminDashboard({ currentUserId, onBack }: AdminDashboardProps) {
 
       <div className="max-w-7xl mx-auto px-4 py-6">
         {activeTab === 'overview' && (
-          <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
+          <div className="space-y-4">
+            {pendingFeatured.length > 0 && (
+              <div className="rounded-2xl p-4" style={{ background: 'linear-gradient(135deg,#FFF7ED,#FFEDD5)', border: '1px solid #FDBA74' }}>
+                <div className="flex items-center gap-2 mb-3">
+                  <Star className="w-5 h-5" style={{ color: '#EA580C' }} fill="#F97316" />
+                  <h3 className="text-[15px] font-black" style={{ color: '#9A3412', fontFamily: 'Heebo, sans-serif' }}>
+                    {pendingFeatured.length} מקומות עברו 50 לייקים — צריך לשדרג את הפין ⭐
+                  </h3>
+                </div>
+                <div className="space-y-2">
+                  {pendingFeatured.map((p) => (
+                    <div key={p.id} className="flex items-center justify-between bg-white rounded-xl px-3 py-2.5" style={{ boxShadow: '0 1px 4px rgba(0,0,0,0.05)' }}>
+                      <div className="min-w-0">
+                        <p className="text-[14px] font-bold text-gray-900 truncate" style={{ fontFamily: 'Heebo, sans-serif' }}>{p.name}</p>
+                        <p className="text-[12px] text-gray-500">❤️ {p.saves} לייקים</p>
+                      </div>
+                      <button onClick={() => markFeatured(p.id)} className="flex-shrink-0 text-[13px] font-bold px-3 py-1.5 rounded-lg active:scale-95 transition-transform" style={{ background: '#16A34A', color: '#fff', fontFamily: 'Heebo, sans-serif' }}>
+                        סמן כשודרג
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
             {([
               { label: 'אירועים',        value: stats.totalEvents,    icon: Calendar, tint: '#F97316', bg: '#FFF3E9', tab: 'events' as TabType },
               { label: 'משתמשים',        value: stats.totalUsers,     icon: Users,    tint: '#2563EB', bg: '#EAF1FE', tab: 'users' as TabType },
@@ -484,6 +532,7 @@ export function AdminDashboard({ currentUserId, onBack }: AdminDashboardProps) {
                 <p className="text-[13px] font-semibold text-gray-500" style={{ fontFamily: 'Heebo, sans-serif' }}>{c.label}</p>
               </button>
             ))}
+            </div>
           </div>
         )}
 
