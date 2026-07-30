@@ -114,22 +114,16 @@
     scrollbar-width: none;
   }
 
+  /* No visible scrollbars anywhere — native mobile-app feel (content still scrolls via touch/wheel).
+     Replaces the old bright-orange bar that looked like a stuck/draggable UI element. */
   *::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
+    width: 0;
+    height: 0;
+    display: none;
   }
-
-  *::-webkit-scrollbar-track {
-    background: transparent;
-  }
-
-  *::-webkit-scrollbar-thumb {
-    background: linear-gradient(135deg, #F97316 0%, #EA580C 100%);
-    border-radius: 10px;
-  }
-
-  *::-webkit-scrollbar-thumb:hover {
-    background: linear-gradient(135deg, #EA580C 0%, #C2410C 100%);
+  * {
+    scrollbar-width: none;        /* Firefox */
+    -ms-overflow-style: none;     /* old Edge/IE */
   }
 }
 

@@ -1,9 +1,10 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { Plus, MapPin, Shield, Bell, Calendar, Users, Clock, ChevronDown, Check, X, Search, Zap, Flame } from 'lucide-react';
+import { Plus, MapPin, Compass, Shield, Bell, Calendar, Users, Clock, ChevronDown, Check, X, Search, Zap, Flame } from 'lucide-react';
 import { FilterSheet } from './FilterSheet';
 import { HeaderProfileAvatar } from './HeaderProfileAvatar';
 import { supabase } from '../lib/supabase';
 import { SkeletonCard } from './SkeletonCard';
+import { CachedImage } from './CachedImage';
 import { eventCategories } from '../utils/eventCategories';
 import { CreateModal } from './CreateModal';
 import { MapCreateEventFlow } from './MapCreateEventFlow';
@@ -15,14 +16,16 @@ import { FloatingNavBar } from './FloatingNavBar';
 import { COUNTRIES } from '../utils/countries';
 import { useEvents } from '../hooks/useEvents';
 import { getNotifLastSeen } from '../utils/notificationsSeen';
+import { createPersistedRecord } from '../utils/warmCache';
 import type { Event } from '../types/event';
 import type { AdminLocation } from '../lib/supabase';
 
 type FeedMode = 'events' | 'locations';
 
-/* ── module-level cache (survives navigation) ── */
+/* ── module-level cache (survives navigation AND cold start via localStorage) ── */
 type HomeUserCache = { userName: string; userAvatarUrl: string | null; isAdmin: boolean; selectedCountries: string[] };
-const _homeUserCache: Record<string, HomeUserCache> = {};
+const _homeUserCache = createPersistedRecord<HomeUserCache>('homeUser');
+export { _homeUserCache };
 // Tracks whether the one-time "first open" refresh animation has already played.
 // Module-level so it survives navigation remounts, but resets on a full page reload.
 let _homeDidInitialRefresh = false;
@@ -81,6 +84,13 @@ export function HomeScreen({
   const [selectedCountries, setSelectedCountries] = useState<string[]>(_cachedCountries);
   const [activeCountry, setActiveCountry] = useState<string | null>(_cachedCountries[0] || null);
   const [searchQuery, setSearchQuery] = useState('');
+  // Debounced copy of the search text — the events refetch keys off this, so typing doesn't fire
+  // a query on every keystroke (the input itself stays instant via searchQuery).
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  useEffect(() => {
+    const id = setTimeout(() => setDebouncedSearch(searchQuery), 300);
+    return () => clearTimeout(id);
+  }, [searchQuery]);
   const [loading] = useState(false);
   const currentUserId = propUserId || null;
   const [createMode, setCreateMode] = useState<CreateMode>('none');
@@ -92,7 +102,7 @@ export function HomeScreen({
   const [selectedDateFilter, setSelectedDateFilter] = useState<string | null>(null);
   const _huc = propUserId ? _homeUserCache[propUserId] : undefined;
   const [isAdmin, setIsAdmin] = useState(_huc?.isAdmin ?? false);
-  const [pendingRequestsCount, setPendingRequestsCount] = useState(0);
+  const [pendingRequestsCount, setPendingRequestsCount] = useState(globalThis.__fomoPendingCount ?? 0);
   const [userName, setUserName] = useState(_huc?.userName ?? '');
   const [userAvatarUrl, setUserAvatarUrl] = useState<string | null>(_huc?.userAvatarUrl ?? null);
   const [feedMode, setFeedMode] = useState<FeedMode>('events');
@@ -154,9 +164,9 @@ export function HomeScreen({
     updateFilters({
       countries: activeCountry ? [activeCountry] : selectedCountries,
       eventType: selectedInterest || undefined,
-      searchQuery: searchQuery || undefined,
+      searchQuery: debouncedSearch || undefined,
     });
-  }, [activeCountry, selectedInterest, searchQuery, selectedCountries]);
+  }, [activeCountry, selectedInterest, debouncedSearch, selectedCountries]);
 
   useEffect(() => {
     if (initialCountries && initialCountries.length > 0) {
@@ -553,9 +563,11 @@ export function HomeScreen({
     });
   }, [dateFilteredEvents]);
 
-  // Feed skeleton shows during: (a) first open until data loads, or (b) a
-  // pull/tap refresh where we already have data and want skeletons during the spin.
-  const showFeedSkeleton = firstOpenLoading || (logoAnimActive && events.length > 0);
+  // Feed skeleton shows during: (a) a cold first open until data loads, or (b) a USER pull-to-refresh
+  // where we already have data. It must NOT show during the first-open logo animation when the feed
+  // is warm from cache — that's what made cached events hide behind a skeleton on every refresh.
+  // (firstOpenLoading clears the instant cached events exist; isRefreshing is only the user's pull.)
+  const showFeedSkeleton = firstOpenLoading || (isRefreshing && events.length > 0);
 
   return (
     <div className="min-h-screen overflow-x-hidden max-w-full" style={{ background: '#ffffff' }} dir="rtl">
@@ -805,7 +817,7 @@ export function HomeScreen({
               }}
               title="מקומות"
             >
-              <MapPin
+              <Compass
                 size={18}
                 strokeWidth={2}
                 color={feedMode === 'locations' ? '#F97316' : '#9CA3AF'}
@@ -945,8 +957,9 @@ export function HomeScreen({
               </button>
             </div>
 
-          /* Empty state — no events at all for this country (suppressed while the first-open animation runs) */
-          ) : (events.length === 0 && !logoAnimActive && !firstOpenLoading) ? (
+          /* Empty state — no events at all for this country (suppressed while the first-open animation
+             runs, and while a category filter is active — then the feed stays so the user can switch) */
+          ) : (events.length === 0 && !selectedInterest && !logoAnimActive && !firstOpenLoading) ? (
             <div className="flex flex-col items-center px-6 pt-16 pb-12 text-center animate-fade-in">
               <div className="text-6xl mb-5">{activeCountryData?.flag || '🌍'}</div>
               <h3 className="text-xl font-black text-gray-900 mb-2" style={{ fontFamily: 'Heebo, sans-serif' }}>
@@ -1090,7 +1103,7 @@ export function HomeScreen({
                             >
                               <div className="relative w-full h-full rounded-2xl overflow-hidden" style={{ boxShadow: '0 4px 20px rgba(0,0,0,0.15), 0 2px 6px rgba(0,0,0,0.07)' }}>
                                 {bg ? (
-                                  <img src={bg} alt={event.title} className="absolute inset-0 w-full h-full object-cover" />
+                                  <CachedImage url={bg} alt={event.title} className="absolute inset-0 w-full h-full object-cover" />
                                 ) : (
                                   <div className="absolute inset-0 bg-gradient-to-br from-brand-500 via-brand-600 to-violet-700" />
                                 )}
@@ -1251,6 +1264,27 @@ export function HomeScreen({
                 </div>
               )}
 
+              {/* ══ Category empty state — the filter bar above stays, so switching is easy ══ */}
+              {feedMode === 'events' && selectedInterest && events.length === 0 && !showFeedSkeleton && (
+                <div className="flex flex-col items-center px-6 pt-10 pb-12 text-center animate-fade-in">
+                  <div className="text-5xl mb-4">{eventCategories[selectedInterest]?.emoji || '🔍'}</div>
+                  <h3 className="text-lg font-black text-gray-900 mb-1.5" style={{ fontFamily: 'Heebo, sans-serif' }}>
+                    אין כרגע אירועי {eventCategories[selectedInterest]?.label || 'בקטגוריה הזו'}
+                  </h3>
+                  <p className="text-gray-400 text-sm leading-relaxed mb-5 max-w-xs" style={{ fontFamily: 'Rubik, sans-serif' }}>
+                    נסו קטגוריה אחרת למעלה — או תהיו הראשונים ליצור אחד! ✨
+                  </p>
+                  <button
+                    onClick={() => setCreateMode('event')}
+                    className="inline-flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-brand-600 to-brand-700 text-white text-sm font-black rounded-2xl shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 transition-all duration-200"
+                    style={{ fontFamily: 'Heebo, sans-serif' }}
+                  >
+                    <Plus className="w-4 h-4" />
+                    צור אירוע
+                  </button>
+                </div>
+              )}
+
               {/* ══ First-open / refresh skeleton rows when no events are loaded yet ══ */}
               {showFeedSkeleton && dayGroups.length === 0 && (
                 <div style={{ marginBottom: 28 }}>
@@ -1350,7 +1384,7 @@ export function HomeScreen({
                               {/* Thumbnail */}
                               <div style={{ width: 80, height: 80, flexShrink: 0, borderRadius: 16, overflow: 'hidden', background: cat ? `${cat.color}20` : '#F3F4F6' }}>
                                 {bg ? (
-                                  <img src={bg} alt={event.title} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                                  <CachedImage url={bg} alt={event.title} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                                 ) : (
                                   <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 34 }}>
                                     {event.emoji || cat?.emoji || '📍'}
@@ -1444,6 +1478,7 @@ export function HomeScreen({
           onNavigateToUserProfile={onNavigateToUserProfile}
           onOpenMapAt={onOpenMapAt}
           onMessageUser={onMessageUser}
+          onDeleted={refreshEvents}
         />
       )}
 

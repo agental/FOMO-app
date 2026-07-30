@@ -30,6 +30,7 @@ export interface Event {
   attendees: string[];
   price?: number | null;
   ticket_types?: TicketType[];
+  has_group?: boolean;
   created_at: string;
   users?: EventUser;
   distance?: number;
@@ -52,6 +53,7 @@ export interface CreateEventData {
   max_attendees: number;
   price?: number | null;
   ticket_types?: TicketType[];
+  has_group?: boolean;
 }
 
 export interface EventFilters {

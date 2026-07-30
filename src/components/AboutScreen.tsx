@@ -1,5 +1,6 @@
 import { Mail, Heart } from 'lucide-react';
 import { BackButton } from './BackButton';
+import { useSwipeBack } from '../hooks/useSwipeBack';
 
 interface AboutScreenProps {
   onBack?: () => void;
@@ -8,8 +9,9 @@ interface AboutScreenProps {
 const APP_VERSION = '1.0.0';
 
 export function AboutScreen({ onBack }: AboutScreenProps) {
+  const swipeRef = useSwipeBack<HTMLDivElement>(onBack); // swipe from an edge to slide the screen back
   return (
-    <div className="min-h-screen" style={{ background: 'linear-gradient(135deg, #f9fafb 0%, #f3f4f6 100%)' }} dir="rtl">
+    <div ref={swipeRef} className="min-h-screen" style={{ background: 'linear-gradient(135deg, #f9fafb 0%, #f3f4f6 100%)' }} dir="rtl">
       {/* Header */}
       <header
         className="fixed top-0 left-0 right-0 z-50 bg-white/90 backdrop-blur-xl border-b border-gray-100"

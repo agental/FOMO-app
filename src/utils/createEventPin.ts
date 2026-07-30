@@ -18,7 +18,7 @@ export function createEventPinSVG(
 ): HTMLDivElement {
   const color = getCategoryColor(eventType);
   return createCirclePin({
-    size: 48,
+    size: 41, // circle diameter — slightly smaller so event pins sit less heavily on the map
     color,
     label,
     variant: imageUrl ? 'photo' : 'color',

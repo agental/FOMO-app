@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { useSwipeBack } from '../hooks/useSwipeBack';
 import { Ticket, Clock, Check, MapPin, CalendarPlus, Eye, CalendarX2, Sparkles, Calendar, User } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { Event } from '../types/event';
@@ -30,7 +31,7 @@ const TABS: { key: TabKey; label: string; emoji: string }[] = [
 ];
 
 const CATEGORY_GRADIENT: Record<string, string> = {
-  parties:   'linear-gradient(135deg,#a855f7,#ec4899)',
+  parties:   'linear-gradient(135deg,#7C3AED,#ec4899)',
   treks:     'linear-gradient(135deg,#10b981,#0ea5e9)',
   food:      'linear-gradient(135deg,#f97316,#eab308)',
   sports:    'linear-gradient(135deg,#3b82f6,#06b6d4)',
@@ -82,6 +83,7 @@ const _myEventsCache: Record<string, MyEventsCache> = {};
 export function MyEventsScreen({
   currentUserId, onBack, onHomeClick, onMapClick, onCreateClick, onMessagesClick, onNavigateToUserProfile,
 }: MyEventsScreenProps) {
+  const swipeRef = useSwipeBack<HTMLDivElement>(onBack); // swipe from an edge to slide the screen back
   const _cached = _myEventsCache[currentUserId];
   const [tab, setTab] = useState<TabKey>(readTabFromUrl);
   const [loading, setLoading] = useState(!_cached);
@@ -152,7 +154,7 @@ export function MyEventsScreen({
   const counts = { pending: pending.length, confirmed: confirmed.length, past: past.length };
 
   return (
-    <div className="min-h-screen" style={{ background: '#F8F9FB' }} dir="rtl">
+    <div ref={swipeRef} className="min-h-screen" style={{ background: '#F8F9FB' }} dir="rtl">
 
       {/* ── Header ── */}
       <header
@@ -240,6 +242,7 @@ export function MyEventsScreen({
           currentUserId={currentUserId}
           onClose={() => setSelectedEvent(null)}
           onNavigateToUserProfile={onNavigateToUserProfile}
+          onDeleted={load}
         />
       )}
 

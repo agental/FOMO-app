@@ -52,7 +52,7 @@ export function JoinRequestCard({ profile, meetupLabel, onApprove, onReject, onP
             {profile.display_name}
           </p>
           <p style={{ fontSize: 12, color: '#92400E', margin: '2px 0 0', fontWeight: 500 }}>
-            רוצה להצטרף לישיבה
+            רוצה להצטרף לציוץ
           </p>
           {meetupLabel && (
             <span style={{

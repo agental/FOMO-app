@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useSwipeBack } from '../hooks/useSwipeBack';
 import { LogOut, Globe, Bell, Shield, Info, ChevronLeft } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { FloatingNavBar } from './FloatingNavBar';
@@ -41,6 +42,7 @@ export function SettingsScreen({
   onNavigateToAbout,
   onSignOut,
 }: SettingsScreenProps) {
+  const swipeRef = useSwipeBack<HTMLDivElement>(onBack); // swipe from an edge to slide the screen back
   const [signingOut, setSigningOut] = useState(false);
 
   const handleSignOut = async () => {
@@ -110,6 +112,7 @@ export function SettingsScreen({
 
   return (
     <div
+      ref={swipeRef}
       className="min-h-screen"
       style={{ background: 'linear-gradient(135deg, #f9fafb 0%, #f3f4f6 100%)' }}
       dir="rtl"

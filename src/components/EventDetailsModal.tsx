@@ -1,10 +1,14 @@
 import { useState, useEffect, useRef } from 'react';
-import { Calendar, MapPin, MessageCircle, Navigation, Pencil } from 'lucide-react';
+import { Calendar, MapPin, MessageCircle, Navigation, Pencil, Users, Trash2 } from 'lucide-react';
 import { MapCreateEventFlow } from './MapCreateEventFlow';
+import { useSwipeBack } from '../hooks/useSwipeBack';
+import { CityGroupChat } from './CityGroupChat';
 import { supabase, type Event } from '../lib/supabase';
 import type { TicketType } from '../types/event';
+import { joinEventGroup, eventCountryCode, EVENT_GROUP_FALLBACK_EMOJI } from '../utils/eventGroup';
 import { flagEmoji } from '../utils/flags';
 import { UserAvatar } from './UserAvatar';
+import { CachedImage } from './CachedImage';
 import { getCategoryEmoji } from '../utils/eventCategories';
 import { BookingFlow } from './BookingFlow';
 import { ShareEventSheet } from './ShareEventSheet';
@@ -26,12 +30,14 @@ type EventDetailsModalProps = {
   onNavigateToUserProfile?: (userId: string) => void;
   onOpenMapAt?: (lat: number, lng: number) => void;
   onMessageUser?: (userId: string) => void;
+  /** Called after the owner deletes the event (refresh lists); onClose is called as well. */
+  onDeleted?: () => void;
   /** 'modal' (default) = full-screen; 'sheet' = Chabad-style bottom sheet (opens half, drag up to full). */
   variant?: 'modal' | 'sheet';
 };
 
 const CATEGORY_CONFIG: Record<string, { gradient: string; accent: string; light: string; image: string; label: string }> = {
-  parties:   { gradient: 'from-purple-500 via-pink-500 to-rose-400',    accent: '#a855f7', light: '#faf5ff', image: 'https://images.pexels.com/photos/1105666/pexels-photo-1105666.jpeg?auto=compress&cs=tinysrgb&w=800', label: 'מסיבה 🎉' },
+  parties:   { gradient: 'from-violet-600 via-pink-500 to-rose-400',    accent: '#7C3AED', light: '#f5f3ff', image: 'https://images.pexels.com/photos/1105666/pexels-photo-1105666.jpeg?auto=compress&cs=tinysrgb&w=800', label: 'מסיבה 🎉' },
   treks:     { gradient: 'from-green-400 via-emerald-500 to-teal-600',  accent: '#10b981', light: '#f0fdf4', image: 'https://images.pexels.com/photos/2662116/pexels-photo-2662116.jpeg?auto=compress&cs=tinysrgb&w=800', label: 'טרק 🏕️' },
   food:      { gradient: 'from-orange-400 via-amber-400 to-yellow-400', accent: '#f97316', light: '#fff7ed', image: 'https://images.pexels.com/photos/1640777/pexels-photo-1640777.jpeg?auto=compress&cs=tinysrgb&w=800', label: 'אוכל 🍔' },
   sports:    { gradient: 'from-blue-500 via-cyan-400 to-sky-400',       accent: '#3b82f6', light: '#eff6ff', image: 'https://images.pexels.com/photos/2884867/pexels-photo-2884867.jpeg?auto=compress&cs=tinysrgb&w=800', label: 'אטרקציות 🎡' },
@@ -40,7 +46,7 @@ const CATEGORY_CONFIG: Record<string, { gradient: string; accent: string; light:
 };
 const DEFAULT_CONFIG = { gradient: 'from-slate-500 via-gray-500 to-zinc-600', accent: '#F97316', light: '#fff7ed', image: '', label: 'אירוע 📅' };
 
-export function EventDetailsModal({ event, onClose, currentUserId: propUserId, onNavigateToUserProfile, onOpenMapAt, onMessageUser, variant = 'modal' }: EventDetailsModalProps) {
+export function EventDetailsModal({ event, onClose, currentUserId: propUserId, onNavigateToUserProfile, onOpenMapAt, onMessageUser, onDeleted, variant = 'modal' }: EventDetailsModalProps) {
   const [attendees, setAttendees]     = useState<Attendee[]>([]);
   const [isJoined, setIsJoined]       = useState(false);
   const [requestStatus, setRequestStatus] = useState<'none' | 'pending' | 'approved' | 'rejected'>('none');
@@ -48,11 +54,14 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
   const [approvedToast, setApprovedToast] = useState(false);
   const [pendingToast, setPendingToast]   = useState(false);
   const [rejectedToast, setRejectedToast] = useState(false);
+  const [showGroup, setShowGroup]     = useState(false);
+  const [me, setMe]                   = useState<{ name: string; avatar: string | null }>({ name: 'אני', avatar: null });
   const [saved, setSaved]             = useState(false);
   const [showPayment, setShowPayment] = useState(false);
   const [showNav, setShowNav] = useState(false);
   const [showShare, setShowShare] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   /* ── bottom-sheet mode (variant='sheet'): the SAME snap machine as the place sheet — three detents
@@ -78,6 +87,10 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
   }, [variant]);
 
   const closeSheet = () => { setEntered(false); setTimeout(onClose, 320); };
+
+  // Swipe from an edge closes the card — and, being on top of the stack, intercepts the swipe so the
+  // screen underneath (e.g. a chat) doesn't navigate back while the card is still open.
+  useSwipeBack(() => { if (variant === 'sheet') closeSheet(); else onClose(); });
 
   const basePx = snap === 'full' ? 0 : snap === 'half' ? OFF_HALF : OFF_PEEK;
   const sheetTranslate = !entered ? SHEET_FULL : Math.min(SHEET_FULL, Math.max(0, basePx + dragDy));
@@ -150,6 +163,7 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
   // Entry (lowest) price — from the ticket types when present, else the legacy single price.
   const entryPrice  = hasTickets ? Math.min(...ticketTypes.map(t => t.price)) : (price || 0);
   const priced      = hasTickets || !!(price && price > 0);
+  const hasGroup    = !!(event as any).has_group;
   const isUnlimited = event.max_attendees >= 9999;
   const spotsLeft   = isUnlimited ? Infinity : event.max_attendees - event.attendees.length;
   const isFull      = !isUnlimited && spotsLeft === 0;
@@ -181,6 +195,8 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
             // organizer approved → they added us to attendees → we're in.
             fetchAttendees();
             setIsJoined(true);
+            // event has a group → auto-join it (server-side RPC) so it shows in Messages.
+            if (hasGroup && currentUserId) joinEventGroup(event).catch(() => {});
             setApprovedToast(true);
             setTimeout(() => setApprovedToast(false), 4500);
             if ('vibrate' in navigator) navigator.vibrate([30, 60, 30]);
@@ -196,6 +212,24 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
 
     return () => { supabase.removeChannel(channel); };
   }, [event.id, currentUserId]);
+
+  // Event group: load our profile for the chat, and auto-join once we're a member/owner
+  // (covers approvals that happened while this page was closed).
+  useEffect(() => {
+    if (!currentUserId || !hasGroup) return;
+    supabase.from('users').select('display_name, avatar_url').eq('id', currentUserId).maybeSingle()
+      .then(({ data }) => { if (data) setMe({ name: data.display_name || 'אני', avatar: data.avatar_url ?? null }); });
+    if (isOwner || event.attendees.includes(currentUserId)) {
+      joinEventGroup(event).catch(() => {});
+    }
+  }, [event.id, currentUserId, hasGroup, isJoined]);
+
+  // Ensure membership, then open the event's group chat.
+  const openEventGroup = async () => {
+    if (!currentUserId) return;
+    await joinEventGroup(event);
+    setShowGroup(true);
+  };
 
   const checkRequest = async () => {
     if (!currentUserId || isOwner) return;
@@ -253,14 +287,19 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
     }
   };
 
-  // Called after the (mock) payment succeeds → record the paid, pending-approval request.
-  const completePayment = async (info?: { ticketLabel: string; amount: number }) => {
+  // Called after a CONFIRMED payment. The payments-webhook already created the pending,
+  // paid join request server-side (that's the source of truth that money actually moved) —
+  // so here we only refresh our view of the request and show the pending state, never insert.
+  const completePayment = async () => {
     if (joining) return;
     setJoining(true);
     if ('vibrate' in navigator) navigator.vibrate(15);
     try {
-      await createPendingRequest(info);
+      await checkRequest();          // pull the request the webhook just created
+      setRequestStatus('pending');
       setShowPayment(false);
+      setPendingToast(true);
+      setTimeout(() => setPendingToast(false), 4500);
     } finally { setJoining(false); }
   };
 
@@ -337,8 +376,8 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
           >
             <div className={`absolute inset-0 bg-gradient-to-br ${cat.gradient}`} />
             {heroImg && (
-              <img
-                src={heroImg} alt={event.title}
+              <CachedImage
+                url={heroImg} alt={event.title}
                 className="absolute inset-0 w-full h-full object-cover"
                 onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }}
               />
@@ -449,6 +488,18 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
                 </button>
               )}
             </div>
+          )}
+
+          {/* Event group chat — members & owner only */}
+          {hasGroup && (isOwner || isJoined) && (
+            <button
+              onClick={openEventGroup}
+              className="w-full flex items-center justify-center gap-2 py-3 rounded-2xl font-bold text-[15px] active:scale-[0.98] transition-transform mt-1"
+              style={{ fontFamily: 'Heebo, sans-serif', color: '#F97316', background: '#FFF4E8', border: '1px solid #FFE0C2' }}
+            >
+              <Users size={18} strokeWidth={2.5} />
+              קבוצת הצ׳אט של האירוע
+            </button>
           )}
 
           {/* Price / spots */}
@@ -570,22 +621,58 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
 
   const soldOut = isFull && !isJoined;
 
+  // Owner deletes their own event (RLS allows it). Requests cascade in the DB.
+  const handleDeleteEvent = async () => {
+    if (deleting) return;
+    if (!confirm('למחוק את האירוע? כל המשתתפים והבקשות יוסרו — אי אפשר לבטל.')) return;
+    setDeleting(true);
+    try {
+      const { error } = await supabase.from('events').delete().eq('id', event.id);
+      if (error) throw error;
+      onDeleted?.();
+      onClose();
+    } catch (e) {
+      console.error('[EventDetailsModal] delete failed:', e);
+      alert('שגיאה במחיקת האירוע, נסה שוב.');
+      setDeleting(false);
+    }
+  };
+
   const joinButton = isOwner ? (
-    // Owner sees an "Edit event" button instead of join
-    <button
-      onClick={() => setShowEdit(true)}
-      className="w-full font-black text-[17px] text-white active:scale-[0.97] transition-transform flex items-center justify-center gap-2"
-      style={{
-        fontFamily: 'Heebo, sans-serif',
-        height: 56,
-        borderRadius: 28,
-        background: 'linear-gradient(135deg,#1f2937,#374151)',
-        boxShadow: '0 8px 24px rgba(0,0,0,0.25)',
-      }}
-    >
-      <Pencil size={18} strokeWidth={2.5} />
-      ערוך אירוע
-    </button>
+    // Owner sees Edit + Delete instead of join
+    <div className="w-full flex items-center gap-2.5">
+      <button
+        onClick={() => setShowEdit(true)}
+        className="flex-1 font-black text-[17px] text-white active:scale-[0.97] transition-transform flex items-center justify-center gap-2"
+        style={{
+          fontFamily: 'Heebo, sans-serif',
+          height: 56,
+          borderRadius: 28,
+          background: 'linear-gradient(135deg,#1f2937,#374151)',
+          boxShadow: '0 8px 24px rgba(0,0,0,0.25)',
+        }}
+      >
+        <Pencil size={18} strokeWidth={2.5} />
+        ערוך אירוע
+      </button>
+      <button
+        onClick={handleDeleteEvent}
+        disabled={deleting}
+        aria-label="מחק אירוע"
+        className="flex-shrink-0 flex items-center justify-center active:scale-[0.95] transition-transform disabled:opacity-50"
+        style={{
+          width: 56,
+          height: 56,
+          borderRadius: 28,
+          background: '#FEF2F2',
+          border: '1.5px solid #FECACA',
+        }}
+      >
+        {deleting
+          ? <span className="text-[12px] font-bold" style={{ color: '#EF4444' }}>...</span>
+          : <Trash2 size={20} strokeWidth={2.2} style={{ color: '#EF4444' }} />}
+      </button>
+    </div>
   ) : (
     <button
       onClick={handleJoin}
@@ -612,6 +699,19 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
 
   const extras = (
     <>
+      {showGroup && currentUserId && (
+        <CityGroupChat
+          countryCode={eventCountryCode(event.id)}
+          countryFlag={(event as any).emoji || EVENT_GROUP_FALLBACK_EMOJI}
+          cityName={event.title || 'אירוע'}
+          cityEmoji={(event as any).emoji || EVENT_GROUP_FALLBACK_EMOJI}
+          currentUserId={currentUserId}
+          currentUserName={me.name}
+          currentUserAvatar={me.avatar}
+          onClose={() => setShowGroup(false)}
+          onNavigateToUserProfile={onNavigateToUserProfile}
+        />
+      )}
       {showPayment && (
         <BookingFlow
           event={event}
@@ -650,9 +750,10 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
   if (variant === 'sheet') {
     return (
       <>
+        {/* Transparent backdrop — the map stays fully visible behind the half-sheet (no black tint),
+            matching the place/Chabad sheet. Still catches a tap-outside to dismiss. */}
         <div
-          className="fixed inset-0 bg-black/40 z-50"
-          style={{ opacity: entered ? 1 : 0, transition: 'opacity 0.3s ease' }}
+          className="fixed inset-0 z-50"
           onClick={closeSheet}
         />
         <div
@@ -742,7 +843,7 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
           style={{ background: 'linear-gradient(135deg,#22c55e,#16a34a)', animation: 'edm-toast 4.5s ease forwards', whiteSpace: 'nowrap' }}
         >
           <span>✅</span>
-          <span>אושרת לאירוע! נתראה שם 🎉</span>
+          <span>{hasGroup ? 'אושרת! נוספת לקבוצת הצ׳אט של האירוע 💬' : 'אושרת לאירוע! נתראה שם 🎉'}</span>
         </div>
       )}
 

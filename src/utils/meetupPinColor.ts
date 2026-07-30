@@ -58,7 +58,7 @@ export function getMeetupPinColor(emoji: string): string {
   if (FOOD.has(emoji))   return '#FF6B35'; // warm orange
   if (SPORT.has(emoji))  return '#3B82F6'; // blue
   if (NATURE.has(emoji)) return '#22C55E'; // green
-  if (MUSIC.has(emoji))  return '#A855F7'; // purple
+  if (MUSIC.has(emoji))  return '#7C3AED'; // deep violet (grape)
   if (BEACH.has(emoji))  return '#06B6D4'; // cyan
   return '#EF4444';                        // red (default)
 }

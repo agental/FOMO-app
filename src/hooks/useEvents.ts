@@ -1,11 +1,14 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { EventService } from '../services/eventService';
 import type { Event, EventFilters } from '../types/event';
+import { createPersistedRecord } from '../utils/warmCache';
 
-/* ── module-level event cache (survives navigation) ── */
-const _eventsCache: Record<string, Event[]> = {};
-const filterKey = (f?: EventFilters) =>
+/* ── module-level event cache (survives navigation AND cold start via localStorage) ── */
+const _eventsCache = createPersistedRecord<Event[]>('events', { entryCap: 100 });
+/** Exported so the boot preloader can seed the cache under the exact same key. */
+export const filterKey = (f?: EventFilters) =>
   (f?.countries?.slice().sort().join(',') || '*') + (f?.eventType || '') + (f?.searchQuery || '');
+export { _eventsCache };
 
 export function useEvents(initialFilters?: EventFilters) {
   const initKey = filterKey(initialFilters);

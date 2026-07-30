@@ -140,8 +140,17 @@ export function FloatingNavBar({
                 <MessageCircle className="w-4.5 h-4.5" strokeWidth={2} style={{ color: activeTab === 'chat' ? '#F97316' : '#9ca3af' }} />
               </div>
               {unreadCount > 0 && (
-                <div className="absolute -top-1 -left-1 w-4 h-4 bg-rose-500 rounded-full flex items-center justify-center border-2 border-white shadow-lg animate-pulse">
-                  <span className="text-[10px] font-bold text-white">
+                <div
+                  className="absolute -top-0.5 -left-1 flex items-center justify-center rounded-full border-2 border-white"
+                  style={{
+                    minWidth: 18,
+                    height: 18,
+                    padding: '0 4px',
+                    background: 'linear-gradient(135deg, #F97316, #EA580C)',
+                    boxShadow: '0 2px 8px rgba(249,115,22,0.45)',
+                  }}
+                >
+                  <span className="text-[10px] font-black text-white leading-none" style={{ fontFamily: 'Heebo, sans-serif' }}>
                     {unreadCount > 9 ? '9+' : unreadCount}
                   </span>
                 </div>

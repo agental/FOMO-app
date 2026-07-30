@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect } from 'react';
+import { useSwipeBack } from '../hooks/useSwipeBack';
 import { Search, ChevronRight, MapPin } from 'lucide-react';
 import { COUNTRIES } from '../utils/countries';
 import { CONTINENTS, getContinentForCountry } from '../utils/continents';
@@ -161,6 +162,7 @@ export function CountrySelectionScreen({
   onContinue,
   onBack,
 }: CountrySelectionScreenProps) {
+  const swipeRef = useSwipeBack<HTMLDivElement>(onBack); // swipe from an edge to slide the screen back
   const [searchQuery, setSearchQuery] = useState('');
   const [currentLocation, setCurrentLocation] = useState<string | null>(null);
 
@@ -222,6 +224,7 @@ export function CountrySelectionScreen({
 
   return (
     <div
+      ref={swipeRef}
       className="min-h-screen flex flex-col overflow-x-hidden max-w-full"
       dir="rtl"
       style={{ background: '#FFFFFF' }}

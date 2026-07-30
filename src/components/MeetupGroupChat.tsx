@@ -1,7 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
 import { X, Send } from 'lucide-react';
 import { BackButton } from './BackButton';
+import { useSwipeBack } from '../hooks/useSwipeBack';
 import { supabase, type Meetup } from '../lib/supabase';
+import { createPersistedRecord } from '../utils/warmCache';
 
 interface Message {
   id: string;
@@ -10,6 +12,8 @@ interface Message {
   content: string;
   created_at: string;
   users?: { display_name: string; avatar_url?: string | null };
+  pending?: boolean; // optimistic bubble, insert not yet confirmed
+  failed?: boolean;  // insert failed
 }
 
 interface MeetupGroupChatProps {
@@ -18,19 +22,41 @@ interface MeetupGroupChatProps {
   onClose: () => void;
 }
 
+/* ── module-level cache (survives navigation AND cold start via localStorage) ── */
+const _meetupMsgCache = createPersistedRecord<Message[]>('meetupMsgs', { entryCap: 30 });
+// userId → display name, so an incrementally-added realtime message can show a name without a full reload.
+const _meetupNameCache: Record<string, string> = {};
+
 export function MeetupGroupChat({ meetup, currentUserId, onClose }: MeetupGroupChatProps) {
-  const [messages,   setMessages]   = useState<Message[]>([]);
+  const swipeRef = useSwipeBack<HTMLDivElement>(onClose); // swipe from an edge to slide the group chat back
+  const [messages,   setMessages]   = useState<Message[]>(_meetupMsgCache[meetup.id] ?? []);
   const [newMessage, setNewMessage] = useState('');
   const [sending,    setSending]    = useState(false);
-  const [loading,    setLoading]    = useState(true);
+  const [loading,    setLoading]    = useState(!_meetupMsgCache[meetup.id]?.length);
   const bottomRef = useRef<HTMLDivElement>(null);
 
+  const cacheMessages = (msgs: Message[]) => {
+    _meetupMsgCache[meetup.id] = msgs;
+    msgs.forEach(m => { if (m.users?.display_name) _meetupNameCache[m.sender_id] = m.users.display_name; });
+  };
+
   const loadMessages = async () => {
+    // Only the latest 50 — keep opening instant even for a busy meetup chat.
     const { data, error: e } = await supabase
       .from('meetup_messages')
       .select('*, users(display_name, avatar_url)')
       .eq('meetup_id', meetup.id)
-      .order('created_at', { ascending: true });
+      .order('created_at', { ascending: false })
+      .limit(50);
+    const finish = (rows: Message[]) => {
+      setMessages(prev => {
+        const pending = prev.filter(m => m.pending || m.failed);
+        const ids = new Set(rows.map(m => m.id));
+        const merged = [...rows, ...pending.filter(p => !ids.has(p.id))];
+        cacheMessages(merged);
+        return merged;
+      });
+    };
     if (e) {
       console.error('loadMessages error:', JSON.stringify(e));
       // Fallback: without join
@@ -38,10 +64,11 @@ export function MeetupGroupChat({ meetup, currentUserId, onClose }: MeetupGroupC
         .from('meetup_messages')
         .select('*')
         .eq('meetup_id', meetup.id)
-        .order('created_at', { ascending: true });
-      if (d2) setMessages(d2 as Message[]);
+        .order('created_at', { ascending: false })
+        .limit(50);
+      if (d2) finish((d2 as Message[]).reverse());
     } else if (data) {
-      setMessages(data as Message[]);
+      finish((data as Message[]).reverse());
     }
     setLoading(false);
   };
@@ -53,12 +80,30 @@ export function MeetupGroupChat({ meetup, currentUserId, onClose }: MeetupGroupC
       .channel(`meetup-chat-${meetup.id}`)
       .on('postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'meetup_messages', filter: `meetup_id=eq.${meetup.id}` },
-        () => loadMessages(),
+        async (payload) => {
+          // Incremental: append the single new row instead of reloading the whole thread.
+          const row = payload.new as Message;
+          if (row.sender_id !== currentUserId && !_meetupNameCache[row.sender_id]) {
+            const { data } = await supabase.from('users').select('display_name').eq('id', row.sender_id).maybeSingle();
+            if (data?.display_name) _meetupNameCache[row.sender_id] = data.display_name;
+          }
+          row.users = { display_name: _meetupNameCache[row.sender_id] || 'משתמש' };
+          setMessages(prev => {
+            if (prev.some(m => m.id === row.id)) return prev;
+            // Reconcile with my own optimistic bubble, if any.
+            const base = row.sender_id === currentUserId
+              ? prev.filter(m => !(m.pending && m.content === row.content))
+              : prev;
+            const updated = [...base, row];
+            cacheMessages(updated);
+            return updated;
+          });
+        },
       )
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
-  }, [meetup.id]);
+  }, [meetup.id, currentUserId]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -69,16 +114,36 @@ export function MeetupGroupChat({ meetup, currentUserId, onClose }: MeetupGroupC
     if (!content || sending) return;
     setSending(true);
     setNewMessage('');
+
+    // Optimistic bubble — appears instantly, replaced by the server row on success.
+    const tempId = `temp-${Date.now()}`;
+    const optimistic: Message = {
+      id: tempId, meetup_id: meetup.id, sender_id: currentUserId,
+      content, created_at: new Date().toISOString(), pending: true,
+    };
+    setMessages(prev => { const u = [...prev, optimistic]; cacheMessages(u); return u; });
+
     try {
-      const { error } = await supabase.from('meetup_messages').insert({
+      const { data, error } = await supabase.from('meetup_messages').insert({
         meetup_id: meetup.id,
         sender_id: currentUserId,
         content,
-      });
+      }).select('*, users(display_name, avatar_url)').single();
       if (error) throw error;
+      if (data) {
+        setMessages(prev => {
+          const withoutTemp = prev.filter(m => m.id !== tempId);
+          const updated = withoutTemp.some(m => m.id === (data as Message).id) ? withoutTemp : [...withoutTemp, data as Message];
+          cacheMessages(updated);
+          return updated;
+        });
+      }
     } catch (err) {
-      alert('שגיאה בשליחה');
-      setNewMessage(content);
+      setMessages(prev => {
+        const u = prev.map(m => m.id === tempId ? { ...m, pending: false, failed: true } : m);
+        cacheMessages(u);
+        return u;
+      });
     } finally {
       setSending(false);
     }
@@ -89,6 +154,7 @@ export function MeetupGroupChat({ meetup, currentUserId, onClose }: MeetupGroupC
 
   return (
     <div
+      ref={swipeRef}
       className="fixed inset-0 bg-white z-[70] flex flex-col"
       dir="rtl"
       style={{ paddingTop: 'env(safe-area-inset-top)', paddingBottom: 'env(safe-area-inset-bottom)' }}
@@ -106,7 +172,7 @@ export function MeetupGroupChat({ meetup, currentUserId, onClose }: MeetupGroupC
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
+      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3 scrollbar-hide">
         {loading ? (
           <div className="flex justify-center py-10">
             <div className="w-8 h-8 border-2 border-orange-300 border-t-orange-500 rounded-full animate-spin" />
@@ -137,7 +203,9 @@ export function MeetupGroupChat({ meetup, currentUserId, onClose }: MeetupGroupC
                   >
                     {msg.content}
                   </div>
-                  <span className="text-[10px] text-gray-400 mt-1 px-1">{formatTime(msg.created_at)}</span>
+                  <span className={`text-[10px] mt-1 px-1 ${msg.failed ? 'text-red-500' : 'text-gray-400'}`}>
+                    {msg.failed ? 'לא נשלח ⚠️' : msg.pending ? 'שולח… 🕓' : formatTime(msg.created_at)}
+                  </span>
                 </div>
               </div>
             );

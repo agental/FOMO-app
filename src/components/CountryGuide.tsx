@@ -202,14 +202,6 @@ export function CountryGuide({ countryCode, onSelectCountry, onOpenMap, places =
         </section>
       )}
 
-      {/* ── Jump to other guides ── */}
-      <section style={{ marginTop: 26 }}>
-        <h3 style={{ fontSize: 16.5, fontWeight: 900, color: INK, fontFamily: HEEBO, margin: '0 0 11px', padding: '0 18px' }}>
-          מדריכים נוספים
-        </h3>
-        <CountryPickerGrid activeCode={countryCode} onSelect={onSelectCountry} />
-      </section>
-
       <GuideSectionSheet
         section={openSection}
         onClose={() => setOpenSection(null)}

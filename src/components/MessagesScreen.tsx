@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Search, MessageCircle, Plus, X, Users, ChevronDown, Trash2, Pin, BellOff, Bell } from 'lucide-react';
+import { Search, MessageCircle, Plus, X, Users, Trash2, Pin, BellOff, Bell, Ban } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { UserAvatar } from './UserAvatar';
 import { COUNTRIES } from '../utils/countries';
@@ -7,6 +7,9 @@ import { emojiColor } from '../utils/emojiColor';
 import { FloatingNavBar } from './FloatingNavBar';
 import { CityGroupChat } from './CityGroupChat';
 import { messagePreview } from '../utils/eventMessage';
+import { loadValue, saveValue } from '../utils/warmCache';
+import { fetchChatList, cleanupDuplicateGroups, chatListCache, type Conversation, type GroupChat } from '../services/chatListService';
+import { getBlockedIdsCached, refreshBlockedIds } from '../services/blockService';
 
 const COUNTRY_CITIES: Record<string, { name: string; emoji: string }[]> = {
   TH: [
@@ -128,22 +131,7 @@ const COUNTRY_CITIES: Record<string, { name: string; emoji: string }[]> = {
   ],
 };
 
-type Conversation = {
-  id: string;
-  participant_1_id: string;
-  participant_2_id: string;
-  last_message_at: string;
-  other_user: {
-    id: string;
-    display_name: string;
-    avatar_url: string | null;
-  };
-  last_message: {
-    content: string;
-    sender_id: string;
-  } | null;
-  unread_count: number;
-};
+// Conversation and GroupChat types now live in ../services/chatListService (shared with the preloader).
 
 type MessagesScreenProps = {
   currentUserId: string;
@@ -161,31 +149,28 @@ type MessagesScreenProps = {
 
 const DEMO_COUNTRIES = ['TH', 'JP', 'IT', 'FR', 'US', 'GR'];
 // Survives navigation so re-entering Messages shows the right flags instantly.
-let _cachedUserCountries: string[] | null = null;
+let _cachedUserCountries: string[] | null = loadValue<string[] | null>('msgUserCountries', null);
 
-// Module-level cache — survives component remounts
-let _cachedConversations: Conversation[] = [];
-let _cachedGroupChats: GroupChat[] = [];
+// The conversations/groups cache now lives in chatListService.chatListCache — a SHARED in-memory
+// object the boot preloader fills, so warming reaches this screen even when the Expo WebView's
+// localStorage is unreliable (that's why the phone used to still show a loading spinner).
+// In-memory only: forces one background refresh on the first mount of each app session.
 let _cachedInitialized = false;
 let _cachedOpenCity: { code: string; flag: string; name: string; emoji: string } | null = null;
 
-type GroupChat = {
-  channelId: string;
-  countryCode: string;
-  countryFlag: string;
-  cityName: string;
-  cityEmoji: string;
-  memberCount: number;
-  lastMessage: string | null;
-  lastMessageAt: string | null;
-  unreadCount: number;
-  memberStatus: 'approved' | 'pending';
-};
-
 export function MessagesScreen({ currentUserId, onBack, onConversationClick, onHomeClick, onMapClick, onCreateClick, onMyEventsClick, onNavigateToCountrySelection, onOpenMapAt, onNavigateToUserProfile, initialCountries }: MessagesScreenProps) {
-  const [conversations,   setConversations]   = useState<Conversation[]>(_cachedConversations);
-  const [groupChats,      setGroupChats]      = useState<GroupChat[]>(_cachedGroupChats);
-  const [loading,         setLoading]         = useState(!_cachedInitialized);
+  // Read from the SHARED in-memory cache the preloader filled (works on the phone regardless of
+  // localStorage). It's already hydrated from localStorage on the web for an instant cross-session paint.
+  const [conversations,   setConversations]   = useState<Conversation[]>(chatListCache.conversations);
+  const [groupChats,      setGroupChats]      = useState<GroupChat[]>(chatListCache.groups);
+  // Blocked users — hide their DMs from the list. Instant from cache, then refreshed from the DB.
+  const [blockedIds, setBlockedIds] = useState<Set<string>>(() => getBlockedIdsCached(currentUserId));
+  useEffect(() => { refreshBlockedIds(currentUserId).then(setBlockedIds); }, [currentUserId]);
+  // Show the spinner only on a truly cold, empty start. If the cache already has lists (from a
+  // previous visit or the boot preloader), paint them instantly and refresh silently in the background.
+  const [loading,         setLoading]         = useState(
+    !_cachedInitialized && chatListCache.conversations.length === 0 && chatListCache.groups.length === 0
+  );
   const [initialized,     setInitialized]     = useState(_cachedInitialized);
   const [searchQuery,     setSearchQuery]     = useState('');
   const [swipedId,        setSwipedId]        = useState<string | null>(null);
@@ -221,35 +206,131 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
   const [currentUserAvatar, setCurrentUserAvatar] = useState<string | null>(null);
   const [openCity, setOpenCity] = useState<{ code: string; flag: string; name: string; emoji: string } | null>(_cachedOpenCity);
   useEffect(() => { _cachedOpenCity = openCity; }, [openCity]);
-  const [groupsCollapsed, setGroupsCollapsed] = useState(false);
-  const [chatsCollapsed,  setChatsCollapsed]  = useState(false);
+  // Top tab filter. Default 'all' shows BOTH groups + chats together; tapping a tab filters to it
+  // (and tapping the active tab again returns to 'all'). Active tab's text is bold/orange.
+  const [activeTab, setActiveTab] = useState<'all' | 'groups' | 'chats'>('all');
+  // WhatsApp-style header: as the list scrolls down, the search bar thins out and disappears, leaving
+  // just the (glass) title. Driven imperatively off the scroll position so the long list never re-renders.
+  const listScrollRef = useRef<HTMLDivElement>(null);
+  const searchWrapRef = useRef<HTMLDivElement>(null);
+  const titleRef = useRef<HTMLHeadingElement>(null);
+  const headerRef = useRef<HTMLDivElement>(null);
+  // WhatsApp-style header: the search bar lives in the scroll content, so it glides away under the sticky
+  // glass title on its own (native scroll = buttery). We ONLY add a compositor-cheap scaleY+fade so it
+  // "thins out" as it goes — transform/opacity never trigger layout, and it's rAF-throttled, so the long
+  // list never reflows mid-scroll (that per-frame reflow was the stutter). Listen on window + container
+  // because the iOS WebView scrolls the document, not an inner element.
+  useEffect(() => {
+    let raf = 0;
+    const apply = () => {
+      raf = 0;
+      const c = listScrollRef.current;
+      const y = Math.max(window.scrollY || 0, document.documentElement.scrollTop || 0, document.body.scrollTop || 0, c ? c.scrollTop : 0);
+      const t = Math.min(1, Math.max(0, y / 56));
+      // WhatsApp large-title: the title AND the whole bar shrink as you scroll (fontSize + padding). The
+      // bar is FIXED / out of flow, so resizing it reflows only itself (one element) — never the list.
+      const title = titleRef.current;
+      if (title) title.style.fontSize = `${25 - t * 7}px`; // 25 → 18px
+      const hdr = headerRef.current;
+      if (hdr) {
+        hdr.style.paddingTop = `calc(env(safe-area-inset-top) + ${16 - t * 8}px)`;
+        hdr.style.paddingBottom = `${12 - t * 6}px`;
+      }
+      const el = searchWrapRef.current;
+      if (!el) return;
+      el.style.opacity = `${1 - t}`;
+      el.style.transform = `scaleY(${1 - t * 0.4})`;
+    };
+    const onScroll = () => { if (!raf) raf = requestAnimationFrame(apply); };
+    apply();
+    window.addEventListener('scroll', onScroll, { passive: true });
+    const c = listScrollRef.current;
+    c?.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      window.removeEventListener('scroll', onScroll);
+      c?.removeEventListener('scroll', onScroll);
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, []);
   const [pinnedIds,  setPinnedIds]  = useState<Set<string>>(() => new Set(JSON.parse(localStorage.getItem('pinned_convos') || '[]')));
   const [mutedIds,   setMutedIds]   = useState<Set<string>>(() => new Set(JSON.parse(localStorage.getItem('muted_convos') || '[]')));
+  // Group-row swipe actions (mirrors the DM ones, own storage keys)
+  const [pinnedGroupIds, setPinnedGroupIds] = useState<Set<string>>(() => new Set(JSON.parse(localStorage.getItem('pinned_groups') || '[]')));
+  const [mutedGroupIds,  setMutedGroupIds]  = useState<Set<string>>(() => new Set(JSON.parse(localStorage.getItem('muted_groups') || '[]')));
   // Live "is typing" by chat id (conversation id for DMs, channel id for groups) — WhatsApp-style list indicator
   const [typingChats, setTypingChats] = useState<Record<string, { name?: string; ts: number }>>({});
   const [reconnectTick, setReconnectTick] = useState(0); // bump to force the realtime channels to rebuild
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const touchStartX = useRef<number>(0);
 
   useEffect(() => {
     loadUserCountries();
     if (_cachedInitialized) {
-      // Already have cached data — refresh both in the background, no loading state.
-      loadConversations();
-      loadGroupChats();
+      // Already have cached data — refresh in the background, no loading state.
+      loadChatList();
     } else {
-      // First load — wait for BOTH DMs and city groups before revealing, so nothing "pops in" late.
-      Promise.all([loadConversations(), loadGroupChats()]).finally(() => {
+      // First load — wait for the whole list before revealing, so nothing "pops in" late.
+      loadChatList().finally(() => {
         _cachedInitialized = true;
         setInitialized(true);
         setLoading(false);
       });
     }
 
+    // Coalesce bursts of realtime events into one background refresh (reconciles exact unread counts,
+    // new conversations, names). The list itself updates INSTANTLY below via incremental in-place
+    // edits, so this debounce no longer affects perceived speed.
+    const scheduleRefresh = () => {
+      if (refreshTimerRef.current) return;
+      refreshTimerRef.current = setTimeout(() => { refreshTimerRef.current = null; loadChatList(); }, 1500);
+    };
+
+    // Instant, network-free row update straight from the realtime payload — so an incoming message
+    // appears in the list at the SAME moment as the push notification (no 1.5s lag).
+    const bumpConversation = (row: { conversation_id?: string; sender_id?: string; content?: string; created_at?: string }) => {
+      if (!row.conversation_id) return scheduleRefresh();
+      setConversations(prev => {
+        const idx = prev.findIndex(c => c.id === row.conversation_id);
+        if (idx === -1) { scheduleRefresh(); return prev; } // unknown conversation → full refresh adds it
+        const c = prev[idx];
+        const updated: Conversation = {
+          ...c,
+          last_message: { content: row.content ?? '', sender_id: row.sender_id ?? '' },
+          last_message_at: row.created_at ?? new Date().toISOString(),
+          unread_count: c.unread_count + 1,
+        };
+        const next = [updated, ...prev.slice(0, idx), ...prev.slice(idx + 1)];
+        chatListCache.conversations = next;
+        return next;
+      });
+    };
+    const bumpGroup = (row: { channel_id?: string; content?: string; type?: string; created_at?: string; display_name?: string }) => {
+      if (!row.channel_id) return scheduleRefresh();
+      setGroupChats(prev => {
+        const idx = prev.findIndex(g => g.channelId === row.channel_id);
+        if (idx === -1) { scheduleRefresh(); return prev; }
+        const g = prev[idx];
+        const updated: GroupChat = {
+          ...g,
+          lastMessage: `${row.display_name || 'מישהו'}: ${messagePreview(row.content, row.type)}`,
+          lastMessageAt: row.created_at ?? new Date().toISOString(),
+          unreadCount: g.unreadCount + 1,
+        };
+        const next = [updated, ...prev.slice(0, idx), ...prev.slice(idx + 1)];
+        chatListCache.groups = next;
+        return next;
+      });
+    };
+
     const messagesChannel = supabase
       .channel('messages-changes')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, () => {
-        loadConversations();
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, (payload) => {
+        // Ignore my own outgoing messages — the open chat already reflects them.
+        if ((payload.new as { sender_id?: string })?.sender_id === currentUserId) return;
+        // New message → update the row instantly; other events → background reconcile only.
+        if (payload.eventType === 'INSERT') bumpConversation(payload.new as Parameters<typeof bumpConversation>[0]);
+        else scheduleRefresh();
       })
       .subscribe((status) => {
         // Reliability: if the channel drops, schedule a rebuild (re-runs this effect → reconnect + reload catch-up)
@@ -262,8 +343,10 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
 
     const groupChannel = supabase
       .channel('group-messages-changes')
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'group_messages' }, () => {
-        loadGroupChats();
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'group_messages' }, (payload) => {
+        const row = payload.new as { user_id?: string; type?: string };
+        if (row?.user_id === currentUserId || row?.type === 'system') return;
+        bumpGroup(payload.new as Parameters<typeof bumpGroup>[0]);
       })
       .subscribe();
 
@@ -271,12 +354,13 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
     const groupMemChannel = supabase
       .channel('group-members-changes')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'group_members' }, () => {
-        loadGroupChats();
+        scheduleRefresh();
       })
       .subscribe();
 
     return () => {
       if (reconnectTimerRef.current) { clearTimeout(reconnectTimerRef.current); reconnectTimerRef.current = null; }
+      if (refreshTimerRef.current) { clearTimeout(refreshTimerRef.current); refreshTimerRef.current = null; }
       supabase.removeChannel(messagesChannel);
       supabase.removeChannel(groupChannel);
       supabase.removeChannel(groupMemChannel);
@@ -285,7 +369,7 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
 
   // Catch up on anything missed while the app was backgrounded (the realtime socket drops on lock/background).
   useEffect(() => {
-    const onResume = () => { if (document.visibilityState === 'visible') { loadConversations(); loadGroupChats(); } };
+    const onResume = () => { if (document.visibilityState === 'visible') loadChatList(); };
     document.addEventListener('visibilitychange', onResume);
     window.addEventListener('focus', onResume);
     return () => {
@@ -303,6 +387,9 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
     : null;
   useEffect(() => {
     const channels: ReturnType<typeof supabase.channel>[] = [];
+    // Read typing via broadcast (~100ms, instant). The typer sends a heartbeat every 1.2s while
+    // typing, so opening Messages mid-typing catches it within ~1s; the prune below clears a dot
+    // 4s after the last heartbeat.
     conversations.forEach(c => {
       const ch = supabase.channel(`dm-typing-${c.id}`, { config: { broadcast: { self: false } } })
         .on('broadcast', { event: 'typing' }, ({ payload }) => {
@@ -314,7 +401,7 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
         })
         .on('broadcast', { event: 'msg' }, () => {
           setTypingChats(prev => { if (!prev[c.id]) return prev; const n = { ...prev }; delete n[c.id]; return n; });
-          loadConversations(); // refresh preview/order even if DB replication is off
+          loadChatList(); // refresh preview/order even if DB replication is off
         })
         .subscribe();
       channels.push(ch);
@@ -336,17 +423,17 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
     return () => { channels.forEach(ch => supabase.removeChannel(ch)); };
   }, [convoIds, groupIds, openGroupChannelId, currentUserId]);
 
-  // Prune typing entries with no broadcast for >15s
+  // Prune typing entries with no heartbeat for >4s (safety if a "stop" was missed).
   useEffect(() => {
     if (Object.keys(typingChats).length === 0) return;
     const id = setInterval(() => {
       const now = Date.now();
       setTypingChats(prev => {
         const n: typeof prev = {}; let changed = false;
-        for (const k in prev) { if (now - prev[k].ts < 15000) n[k] = prev[k]; else changed = true; }
+        for (const k in prev) { if (now - prev[k].ts < 4000) n[k] = prev[k]; else changed = true; }
         return changed ? n : prev;
       });
-    }, 2000);
+    }, 1500);
     return () => clearInterval(id);
   }, [typingChats]);
 
@@ -360,6 +447,7 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
       if (data?.selected_countries && data.selected_countries.length > 0) {
         const cs = data.selected_countries.slice(0, 8);
         _cachedUserCountries = cs;
+        saveValue('msgUserCountries', cs);
         setUserCountries(cs);
       }
       if (data?.display_name) setCurrentUserName(data.display_name);
@@ -367,144 +455,19 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
     } catch (e) { console.error('[MessagesScreen] loadUserCountries failed:', e); }
   };
 
-  const loadGroupChats = async () => {
+  // One shared loader (RPC + fallback + dedupe) fetches both lists; here we just commit the result
+  // to state + the persisted cache, and clean up any duplicate memberships it flagged.
+  const loadChatList = async () => {
     try {
-      const { data: membershipsRaw } = await supabase
-        .from('group_members')
-        .select('channel_id, last_seen_at, status')
-        .eq('user_id', currentUserId);
-      // Hide groups the user explicitly left (localStorage), even if the DB row lingers.
-      let left: Set<string>; try { left = new Set(JSON.parse(localStorage.getItem('left_group_channels') || '[]')); } catch { left = new Set(); }
-      const memberships = (membershipsRaw ?? []).filter(m => m.status !== 'left' && !left.has(m.channel_id));
-      if (!memberships.length) { _cachedGroupChats = []; setGroupChats([]); return; }
-
-      const channelIds = memberships.map(m => m.channel_id);
-      const { data: channels } = await supabase
-        .from('group_channels').select('*').in('id', channelIds);
-      if (!channels) return;
-
-      await loadGroupChatsFromChannels(memberships, channels);
-    } catch (e) { console.error('[MessagesScreen] loadGroupChats failed:', e); }
-  };
-
-  const loadGroupChatsFromChannels = async (
-    memberships: { channel_id: string; last_seen_at: string | null; status?: string | null }[],
-    channels: Record<string, unknown>[]
-  ) => {
-    const results: GroupChat[] = await Promise.all(channels.map(async (ch: Record<string, unknown>) => {
-      const membership = memberships.find(m => m.channel_id === ch.id);
-      const lastSeen = membership?.last_seen_at ?? '1970-01-01';
-      const mStatus = (membership?.status ?? 'approved') as 'approved' | 'pending';
-      const country = COUNTRIES[ch.country_code as string];
-
-      const [lastMsgRes, unreadRes, memCountRes] = await Promise.all([
-        supabase.from('group_messages').select('content,type,created_at,display_name')
-          .eq('channel_id', ch.id).order('created_at', { ascending: false }).limit(1).maybeSingle(),
-        supabase.from('group_messages').select('id', { count: 'exact', head: true })
-          .eq('channel_id', ch.id as string).neq('user_id', currentUserId).gt('created_at', lastSeen),
-        supabase.from('group_members').select('*', { count: 'exact', head: true })
-          .eq('channel_id', ch.id).eq('status', 'approved'),
-      ]);
-
-      const lastMsg = lastMsgRes.data;
-      const preview = lastMsg ? `${lastMsg.display_name}: ${messagePreview(lastMsg.content, lastMsg.type)}` : null;
-
-      return {
-        channelId: ch.id as string,
-        countryCode: ch.country_code as string,
-        countryFlag: country?.flag ?? '🌍',
-        cityName: ch.city_name as string,
-        cityEmoji: ch.city_emoji as string,
-        memberCount: memCountRes.count ?? 0,
-        lastMessage: preview,
-        lastMessageAt: lastMsg?.created_at ?? null,
-        unreadCount: unreadRes.count ?? 0,
-        memberStatus: mStatus,
-      };
-    }));
-
-    // Deduplicate in-memory: keep the one with the most messages per country+emoji
-    const seenKeys = new Map<string, GroupChat>();
-    const dupChannelIds: string[] = [];
-    for (const gc of results) {
-      const key = `${gc.countryCode}:${gc.cityEmoji}`;
-      const existing = seenKeys.get(key);
-      if (!existing) {
-        seenKeys.set(key, gc);
-      } else {
-        // keep the one with more messages; discard the other
-        const keepNew = (gc.unreadCount + (gc.lastMessageAt ? 1 : 0)) >
-                        (existing.unreadCount + (existing.lastMessageAt ? 1 : 0));
-        if (keepNew) {
-          dupChannelIds.push(existing.channelId);
-          seenKeys.set(key, gc);
-        } else {
-          dupChannelIds.push(gc.channelId);
-        }
-      }
-    }
-    // Remove memberships from duplicates in the background
-    if (dupChannelIds.length) {
-      dupChannelIds.forEach(id =>
-        supabase.from('group_members').delete().eq('channel_id', id).eq('user_id', currentUserId)
-      );
-    }
-
-    const deduped = [...seenKeys.values()];
-    const sorted = deduped.sort((a, b) =>
-      (b.lastMessageAt ?? '').localeCompare(a.lastMessageAt ?? '')
-    );
-    _cachedGroupChats = sorted;
-    setGroupChats(sorted);
-  };
-
-  const loadConversations = async () => {
-    try {
-      const { data: convos, error } = await supabase
-        .from('conversations')
-        .select('*')
-        .or(`participant_1_id.eq.${currentUserId},participant_2_id.eq.${currentUserId}`)
-        .order('last_message_at', { ascending: false });
-
-      if (error) throw error;
-
-      if (!convos || convos.length === 0) {
-        _cachedConversations = [];
-        setConversations([]);
-        return;
-      }
-
-      const conversationsWithDetails = await Promise.all(
-        convos.map(async (convo) => {
-          const otherUserId = convo.participant_1_id === currentUserId
-            ? convo.participant_2_id
-            : convo.participant_1_id;
-
-          const [userResult, lastMessageResult, unreadResult] = await Promise.all([
-            supabase.from('users').select('id, display_name, avatar_url').eq('id', otherUserId).maybeSingle(),
-            supabase.from('messages').select('content, sender_id').eq('conversation_id', convo.id).order('created_at', { ascending: false }).limit(1).maybeSingle(),
-            supabase.from('messages').select('id', { count: 'exact', head: true }).eq('conversation_id', convo.id).eq('is_read', false).neq('sender_id', currentUserId)
-          ]);
-
-          return {
-            id: convo.id,
-            participant_1_id: convo.participant_1_id,
-            participant_2_id: convo.participant_2_id,
-            last_message_at: convo.last_message_at,
-            other_user: userResult.data || { id: otherUserId, display_name: 'משתמש', avatar_url: null },
-            last_message: lastMessageResult.data,
-            unread_count: unreadResult.count || 0
-          };
-        })
-      );
-
-      _cachedConversations = conversationsWithDetails;
-      setConversations(conversationsWithDetails);
-    } catch (error) {
-      console.error('Error loading conversations:', error);
+      // fetchChatList already commits to the shared cache + localStorage; we just reflect it in state.
+      const { conversations, groups, dupChannelIds } = await fetchChatList(currentUserId);
+      setConversations(conversations);
+      setGroupChats(groups);
+      if (dupChannelIds.length) cleanupDuplicateGroups(currentUserId, dupChannelIds);
+    } catch (e) {
+      console.error('[MessagesScreen] loadChatList failed:', e);
     }
   };
-
 
   const handleTouchStart = (e: React.TouchEvent, _id: string) => {
     touchStartX.current = e.touches[0].clientX;
@@ -520,6 +483,7 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
   };
 
   const handleDeleteConversation = async (conversationId: string) => {
+    if (!confirm('למחוק את השיחה? כל ההודעות יימחקו לצמיתות — אי אפשר לבטל.')) { setSwipedId(null); return; }
     setSwipedId(null);
     const snapshot = conversations.find(c => c.id === conversationId);
     setConversations(prev => prev.filter(c => c.id !== conversationId));
@@ -553,7 +517,61 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
     });
   };
 
+  /* ── Group-row swipe actions ── */
+  const handlePinGroup = (channelId: string) => {
+    setSwipedId(null);
+    setPinnedGroupIds(prev => {
+      const next = new Set(prev);
+      next.has(channelId) ? next.delete(channelId) : next.add(channelId);
+      localStorage.setItem('pinned_groups', JSON.stringify([...next]));
+      return next;
+    });
+  };
+
+  const handleMuteGroup = (channelId: string) => {
+    setSwipedId(null);
+    setMutedGroupIds(prev => {
+      const next = new Set(prev);
+      next.has(channelId) ? next.delete(channelId) : next.add(channelId);
+      localStorage.setItem('muted_groups', JSON.stringify([...next]));
+      return next;
+    });
+  };
+
+  // Leave the group: status='left' (delete is RLS-blocked) + a system message so the
+  // group sees "X עזב/ה את הקבוצה" — same behavior as leaving from inside the chat.
+  const handleLeaveGroup = async (gc: GroupChat) => {
+    if (!confirm(`לצאת מהקבוצה ${gc.countryFlag} ${gc.cityName}? תוכל לבקש להצטרף שוב בהמשך.`)) { setSwipedId(null); return; }
+    setSwipedId(null);
+    const snapshot = groupChats;
+    setGroupChats(prev => prev.filter(g => g.channelId !== gc.channelId));
+    try {
+      const { error } = await supabase.from('group_members')
+        .update({ status: 'left' })
+        .eq('channel_id', gc.channelId)
+        .eq('user_id', currentUserId);
+      if (error) throw error;
+      try {
+        const left: string[] = JSON.parse(localStorage.getItem('left_group_channels') || '[]');
+        if (!left.includes(gc.channelId)) localStorage.setItem('left_group_channels', JSON.stringify([...left, gc.channelId]));
+      } catch { /* ignore */ }
+      await supabase.from('group_messages').insert({
+        channel_id: gc.channelId,
+        user_id: currentUserId,
+        display_name: currentUserName || 'משתמש',
+        avatar_url: currentUserAvatar,
+        content: `${currentUserName || 'משתמש'} עזב/ה את הקבוצה`,
+        type: 'system',
+      });
+    } catch (err) {
+      console.error('[MessagesScreen] leave group failed:', err);
+      setGroupChats(snapshot);
+      alert('שגיאה ביציאה מהקבוצה, נסה שוב.');
+    }
+  };
+
   const filteredConversations = conversations
+    // blocked chats are NOT hidden (WhatsApp-style) — they stay in the list with a block icon
     .filter(convo => convo.other_user.display_name.toLowerCase().includes(searchQuery.toLowerCase()))
     .sort((a, b) => {
       const aPinned = pinnedIds.has(a.id) ? 0 : 1;
@@ -577,30 +595,152 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
     return date.toLocaleDateString('he-IL', { day: 'numeric', month: 'numeric' });
   };
 
-  return (
-    <div className="min-h-screen bg-[#F8F9FB] flex flex-col" style={{ fontFamily: 'Rubik, sans-serif' }} dir="rtl">
-      {/* Header */}
-      <div className="sticky top-0 z-20 bg-white/95 backdrop-blur-sm border-b border-gray-100/80 px-4 pt-4 pb-3 safe-area-top">
-        <h1 className="text-[22px] font-bold text-[#111] mb-4" style={{ fontFamily: 'Heebo, sans-serif' }}>
-          הודעות
-        </h1>
-
-        {/* Search */}
-        <div className="relative">
-          <Search className="absolute right-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-          <input
-            type="text"
-            placeholder="חפש שיחה..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pr-10 pl-4 py-2.5 bg-gray-100 rounded-full border-none focus:outline-none focus:ring-2 focus:ring-brand-300/60 focus:bg-white transition-all text-[14px] text-gray-800 placeholder-gray-400"
-            style={{ fontFamily: 'Rubik, sans-serif' }}
-          />
-        </div>
+  // ── One row renderer per type, so groups + chats can be MERGED into a single WhatsApp-style list ──
+  const renderGroupRow = (gc: GroupChat) => {
+    const gid       = `g:${gc.channelId}`;
+    const isSwiped  = swipedId === gid;
+    const isGPinned = pinnedGroupIds.has(gc.channelId);
+    const isGMuted  = mutedGroupIds.has(gc.channelId);
+    const rowBg     = isGPinned ? '#FFF7ED' : '#F8F9FB';
+    return (
+      <React.Fragment key={gc.channelId}>
+      <div style={{ position: 'relative', overflow: 'hidden' }}
+        onTouchStart={(e) => handleTouchStart(e, gid)} onTouchEnd={(e) => handleTouchEnd(e, gid)}>
+        {isSwiped && <div style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: 180, display: 'flex', alignItems: 'center', justifyContent: 'space-evenly', background: rowBg, zIndex: 0 }}>
+          <button onClick={() => handleLeaveGroup(gc)} style={{ width: 44, height: 44, borderRadius: '50%', background: '#EF4444', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', border: 'none', cursor: 'pointer', flexShrink: 0 }}><Trash2 size={20} /></button>
+          <button onClick={() => handlePinGroup(gc.channelId)} style={{ width: 44, height: 44, borderRadius: '50%', background: isGPinned ? '#6B7280' : '#3B82F6', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', border: 'none', cursor: 'pointer', flexShrink: 0 }}><Pin size={20} /></button>
+          <button onClick={() => handleMuteGroup(gc.channelId)} style={{ width: 44, height: 44, borderRadius: '50%', background: isGMuted ? '#6B7280' : '#F59E0B', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', border: 'none', cursor: 'pointer', flexShrink: 0 }}>{isGMuted ? <Bell size={20} /> : <BellOff size={20} />}</button>
+        </div>}
+        <button
+          onClick={() => { if (isSwiped) { setSwipedId(null); return; } setOpenCity({ code: gc.countryCode, flag: gc.countryFlag, name: gc.cityName, emoji: gc.cityEmoji }); }}
+          className="w-full flex items-center gap-3 px-4 active:scale-[0.98] transition-all duration-150"
+          style={{ height: 72, paddingTop: 6, paddingBottom: 6, background: rowBg, position: 'relative', zIndex: 1, transform: isSwiped ? 'translateX(-180px)' : 'translateX(0)', transition: 'transform 0.25s ease' }}>
+          <div style={{ position: 'relative', flexShrink: 0 }}>
+            <div style={{ width: 52, height: 52, borderRadius: '50%', background: `${emojiColor(gc.cityEmoji)}1F`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 24, boxShadow: `inset 0 0 0 2px ${emojiColor(gc.cityEmoji)}, 0 2px 8px ${emojiColor(gc.cityEmoji)}26` }}>
+              <span>{gc.cityEmoji}</span>
+            </div>
+            {isGPinned && (
+              <div style={{ position: 'absolute', bottom: -2, left: -2, width: 18, height: 18, borderRadius: '50%', background: '#3B82F6', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '2px solid #F8F9FB' }}><Pin size={9} color="#fff" /></div>
+            )}
+            <div style={{ position: 'absolute', bottom: -2, right: -2, background: '#fff', borderRadius: 10, padding: '1px 5px', fontSize: 10, fontWeight: 700, color: '#6B7280', border: '1px solid #E5E7EB', display: 'flex', alignItems: 'center', gap: 2 }}>
+              <Users size={9} />{gc.memberCount}
+            </div>
+          </div>
+          <div className="flex-1 min-w-0 text-right">
+            <div className="flex items-center justify-between mb-0.5">
+              <h3 className={`text-[15px] truncate ${gc.unreadCount > 0 ? 'font-bold text-[#111]' : 'font-semibold text-[#333]'}`} style={{ fontFamily: 'Heebo, sans-serif' }}>{gc.countryFlag} {gc.cityName}</h3>
+              <span className="text-[12px] text-gray-400 flex-shrink-0 ml-2 flex items-center gap-1">
+                {isGMuted && <BellOff size={12} color="#9CA3AF" />}
+                {gc.memberStatus === 'pending' ? '' : (gc.lastMessageAt ? formatTime(gc.lastMessageAt) : '')}
+              </span>
+            </div>
+            {gc.memberStatus === 'pending' ? (
+              <p className="text-[13px] truncate text-right font-semibold" style={{ color: '#F97316' }}>⏳ ממתין לאישור מנהל הקבוצה</p>
+            ) : typingChats[gc.channelId] ? (
+              <p className="text-[13px] truncate text-right font-semibold" style={{ color: '#F97316' }}>{typingChats[gc.channelId].name ? `${typingChats[gc.channelId].name} מקליד/ה…` : 'מקליד/ה…'}</p>
+            ) : (
+              <p className={`text-[13px] truncate text-right ${gc.unreadCount > 0 ? 'text-[#444] font-medium' : 'text-gray-400'}`}>{gc.lastMessage ?? 'טרם נשלחו הודעות'}</p>
+            )}
+          </div>
+          {gc.unreadCount > 0 && gc.memberStatus !== 'pending' && (
+            <div style={{ minWidth: 20, height: 20, borderRadius: 10, padding: '0 5px', background: isGMuted ? '#9CA3AF' : 'linear-gradient(135deg, #F97316, #EA580C)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+              <span style={{ fontSize: 11, fontWeight: 800, color: '#fff' }}>{gc.unreadCount > 99 ? '99+' : gc.unreadCount}</span>
+            </div>
+          )}
+        </button>
       </div>
+      <div className="h-px bg-gray-100 mx-4" />
+      </React.Fragment>
+    );
+  };
 
-      {/* Scrollable content */}
-      <div className="flex-1 overflow-y-auto pb-28">
+  const renderChatRow = (conversation: Conversation) => {
+    const isUnread = conversation.unread_count > 0;
+    const isSwiped = swipedId === conversation.id;
+    const isPinned = pinnedIds.has(conversation.id);
+    const isMuted  = mutedIds.has(conversation.id);
+    const isBlocked = blockedIds.has(conversation.other_user.id);
+    const rowBg    = isPinned ? '#FFF7ED' : '#F8F9FB';
+    return (
+      <React.Fragment key={conversation.id}>
+        <div style={{ position: 'relative', overflow: 'hidden' }} onTouchStart={(e) => handleTouchStart(e, conversation.id)} onTouchEnd={(e) => handleTouchEnd(e, conversation.id)}>
+          {isSwiped && <div style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: 180, display: 'flex', alignItems: 'center', justifyContent: 'space-evenly', background: rowBg, zIndex: 0 }}>
+            <button onClick={() => handleDeleteConversation(conversation.id)} style={{ width: 44, height: 44, borderRadius: '50%', background: '#EF4444', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', border: 'none', cursor: 'pointer', flexShrink: 0 }}><Trash2 size={20} /></button>
+            <button onClick={() => handlePinConversation(conversation.id)} style={{ width: 44, height: 44, borderRadius: '50%', background: isPinned ? '#6B7280' : '#3B82F6', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', border: 'none', cursor: 'pointer', flexShrink: 0 }}><Pin size={20} /></button>
+            <button onClick={() => handleMuteConversation(conversation.id)} style={{ width: 44, height: 44, borderRadius: '50%', background: isMuted ? '#6B7280' : '#F59E0B', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', border: 'none', cursor: 'pointer', flexShrink: 0 }}>{isMuted ? <Bell size={20} /> : <BellOff size={20} />}</button>
+          </div>}
+          <button
+            onClick={() => { if (isSwiped) { setSwipedId(null); } else { onConversationClick(conversation.id, conversation.other_user.id); } }}
+            className="w-full flex items-center gap-3 px-4 active:scale-[0.98] transition-all duration-150"
+            style={{ height: '72px', paddingTop: '6px', paddingBottom: '6px', background: rowBg, position: 'relative', zIndex: 1, transform: isSwiped ? 'translateX(-180px)' : 'translateX(0)', transition: 'transform 0.25s ease' }}>
+            <div className="relative flex-shrink-0">
+              {/* Avatar fills the circle exactly (no white gap). Unread = orange ring via box-shadow. */}
+              <div className="w-12 h-12 rounded-full overflow-hidden" style={{ boxShadow: isUnread ? '0 0 0 2px #F8F9FB, 0 0 0 4px #F97316, 0 2px 8px rgba(249,115,22,0.3)' : 'none' }}>
+                <UserAvatar userId={conversation.other_user.id} displayName={conversation.other_user.display_name} avatarUrl={conversation.other_user.avatar_url} size="medium" />
+              </div>
+              {isPinned && !isUnread && (
+                <div style={{ position: 'absolute', bottom: -2, left: -2, width: 18, height: 18, borderRadius: '50%', background: '#3B82F6', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '2px solid #F8F9FB' }}><Pin size={9} color="#fff" /></div>
+              )}
+              {isUnread && (
+                <div style={{ position: 'absolute', bottom: -2, left: -2, minWidth: 20, height: 20, borderRadius: 10, padding: '0 4px', background: 'linear-gradient(135deg, #F97316, #EA580C)', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '2px solid #F8F9FB' }}>
+                  <span style={{ fontSize: 10, fontWeight: 800, color: '#fff', lineHeight: 1 }}>{conversation.unread_count > 9 ? '9+' : conversation.unread_count}</span>
+                </div>
+              )}
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center justify-between mb-0.5">
+                <h3 className={`text-[15px] truncate flex items-center gap-1 ${isUnread ? 'font-bold text-[#111]' : 'font-semibold text-[#333]'}`} style={{ fontFamily: 'Heebo, sans-serif' }}>
+                  {isBlocked && <Ban size={14} style={{ color: '#9CA3AF', flexShrink: 0 }} />}
+                  <span className="truncate">{conversation.other_user.display_name}</span>
+                </h3>
+                <div className="flex items-center gap-1 flex-shrink-0 mr-2">
+                  <span className="text-[12px] text-gray-400 font-normal">{formatTime(conversation.last_message_at)}</span>
+                  {isMuted && <BellOff size={12} color="#9CA3AF" />}
+                </div>
+              </div>
+              {typingChats[conversation.id] ? (
+                <p className="text-[13px] truncate text-right font-semibold" style={{ color: '#F97316' }}>מקליד/ה…</p>
+              ) : conversation.last_message && (
+                <p className={`text-[13px] truncate text-right ${isUnread ? 'text-[#444] font-medium' : 'text-gray-400 font-normal'}`} style={{ opacity: isMuted ? 0.6 : 1 }}>
+                  {conversation.last_message.sender_id === currentUserId && (<span className="text-gray-300">אתה: </span>)}
+                  {messagePreview(conversation.last_message.content)}
+                </p>
+              )}
+            </div>
+          </button>
+        </div>
+        <div className="h-px bg-gray-100 mx-4" />
+      </React.Fragment>
+    );
+  };
+
+  return (
+    <div className="min-h-screen bg-[#F8F9FB]" style={{ fontFamily: 'Rubik, sans-serif' }} dir="rtl">
+      {/* Scrollable content — the header lives INSIDE the scroller so it can be sticky + glass with the
+          list passing under it, and the search bar can thin out and disappear as you scroll (WhatsApp). */}
+      <div ref={listScrollRef} className="pb-28" style={{ paddingTop: 'calc(env(safe-area-inset-top) + 56px)' }}>
+        {/* Title bar — FIXED glass (sticky breaks in the iOS WebView because the body has overflow-x:hidden,
+            so it wouldn't stay pinned there). The whole bar + title shrink on scroll; the list glides under. */}
+        <div ref={headerRef} className="fixed top-0 left-0 right-0 z-30 px-4" style={{ paddingTop: 'calc(env(safe-area-inset-top) + 16px)', paddingBottom: 12, background: 'rgba(255,255,255,0.72)', backdropFilter: 'blur(18px) saturate(180%)', WebkitBackdropFilter: 'blur(18px) saturate(180%)', boxShadow: '0 1px 0 rgba(0,0,0,0.05)' }}>
+          <h1 ref={titleRef} className="font-extrabold text-[#111]" style={{ fontFamily: 'Heebo, sans-serif', fontSize: 25, lineHeight: 1.1, margin: 0, willChange: 'font-size' }}>
+            הודעות
+          </h1>
+        </div>
+
+        {/* Search — in the scroll flow so it glides away under the glass title; thins + fades via transform */}
+        <div className="px-4 pt-3 pb-1">
+          <div ref={searchWrapRef} className="relative" style={{ transformOrigin: 'top center', willChange: 'transform, opacity' }}>
+            <Search className="absolute right-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+            <input
+              type="text"
+              placeholder="חפש שיחה..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pr-10 pl-4 py-2.5 bg-gray-100 rounded-full border-none focus:outline-none focus:ring-2 focus:ring-brand-300/60 focus:bg-white transition-all text-[14px] text-gray-800 placeholder-gray-400"
+              style={{ fontFamily: 'Rubik, sans-serif' }}
+            />
+          </div>
+        </div>
 
 
         {/* Groups / Countries Section */}
@@ -620,8 +760,8 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
 
           {/* Section header */}
           <div className="px-4 mb-3" dir="rtl">
-            <h2 className="text-[16px] font-extrabold text-[#1C1917] leading-tight" style={{ fontFamily: 'Heebo, sans-serif' }}>קבוצות ערים</h2>
-            <p className="text-[12px] text-[#78716C] mt-0.5">בחרו יעד והצטרפו לטיילים</p>
+            <h2 className="text-[16px] font-extrabold text-[#1C1917] leading-tight" style={{ fontFamily: 'Heebo, sans-serif' }}>קבוצות</h2>
+            <p className="text-[12px] text-[#78716C] mt-0.5">בחרו יעד והצטרפו לקבוצת הצ'אט</p>
           </div>
 
           {/* Country selector */}
@@ -725,255 +865,76 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
         {/* Divider */}
         <div className="h-px bg-gray-100 mx-4 my-2" />
 
-        {/* Group chats the user has joined */}
-        {initialized && groupChats.length > 0 && (
-          <div>
-            <button
-              onClick={() => setGroupsCollapsed(p => !p)}
-              className="w-full flex items-center gap-2 px-4 mb-1.5 mt-3"
-            >
-              <p className="text-[14px] font-extrabold text-[#1C1917] tracking-tight" style={{ fontFamily: 'Heebo, sans-serif' }}>קבוצות שלי</p>
-              <span style={{ background: '#FFF1E7', color: '#EA580C', fontSize: 11, fontWeight: 800, borderRadius: 999, padding: '1px 8px', minWidth: 20, textAlign: 'center' }}>{groupChats.length}</span>
-              <ChevronDown
-                size={16}
-                color="#9CA3AF"
-                style={{ transition: 'transform 0.2s', transform: groupsCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)' }}
-              />
-            </button>
-            {!groupsCollapsed && groupChats.map(gc => (
+        {/* ── Filter pills: All · Chats · Groups (All selected by default) ── */}
+        <div className="flex items-center gap-2 px-4 mb-1 mt-3">
+          {([['all', 'הכל', null], ['chats', 'צאטים', conversations.length], ['groups', 'קבוצות', groupChats.length]] as const).map(([key, label, count]) => {
+            const on = activeTab === key;
+            return (
               <button
-                key={gc.channelId}
-                onClick={() => setOpenCity({ code: gc.countryCode, flag: gc.countryFlag, name: gc.cityName, emoji: gc.cityEmoji })}
-                className="w-full flex items-center gap-3 px-4 bg-[#F8F9FB] active:scale-[0.98] transition-all duration-150"
-                style={{ height: 72, paddingTop: 6, paddingBottom: 6 }}
+                key={key}
+                onClick={() => setActiveTab(key)}
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 5,
+                  padding: '5px 12px', borderRadius: 999, whiteSpace: 'nowrap', cursor: 'pointer',
+                  fontFamily: 'Heebo, sans-serif', fontSize: 13, fontWeight: on ? 800 : 600,
+                  border: on ? '1px solid transparent' : '1px solid #E5E7EB',
+                  background: on ? '#FFEBDD' : '#FFFFFF',
+                  color: on ? '#EA580C' : '#6B7280',
+                  transition: 'background .15s ease, color .15s ease, border-color .15s ease',
+                }}
               >
-                {/* Group avatar */}
-                <div style={{ position: 'relative', flexShrink: 0 }}>
-                  <div style={{
-                    width: 52, height: 52, borderRadius: '50%',
-                    background: `${emojiColor(gc.cityEmoji)}1F`,
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    fontSize: 24,
-                    boxShadow: `inset 0 0 0 2px ${emojiColor(gc.cityEmoji)}, 0 2px 8px ${emojiColor(gc.cityEmoji)}26`,
-                  }}>
-                    <span>{gc.cityEmoji}</span>
-                  </div>
-                  {/* Member count badge */}
-                  <div style={{
-                    position: 'absolute', bottom: -2, right: -2,
-                    background: '#fff', borderRadius: 10, padding: '1px 5px',
-                    fontSize: 10, fontWeight: 700, color: '#6B7280',
-                    border: '1px solid #E5E7EB', display: 'flex', alignItems: 'center', gap: 2,
-                  }}>
-                    <Users size={9} />
-                    {gc.memberCount}
-                  </div>
-                </div>
-
-                {/* Content */}
-                <div className="flex-1 min-w-0 text-right">
-                  <div className="flex items-center justify-between mb-0.5">
-                    <h3 className={`text-[15px] truncate ${gc.unreadCount > 0 ? 'font-bold text-[#111]' : 'font-semibold text-[#333]'}`}
-                      style={{ fontFamily: 'Heebo, sans-serif' }}>
-                      {gc.countryFlag} {gc.cityName}
-                    </h3>
-                    <span className="text-[12px] text-gray-400 flex-shrink-0 ml-2">
-                      {gc.memberStatus === 'pending' ? '' : (gc.lastMessageAt ? formatTime(gc.lastMessageAt) : '')}
-                    </span>
-                  </div>
-                  {gc.memberStatus === 'pending' ? (
-                    <p className="text-[13px] truncate text-right font-semibold" style={{ color: '#F97316' }}>
-                      ⏳ ממתין לאישור מנהל הקבוצה
-                    </p>
-                  ) : typingChats[gc.channelId] ? (
-                    <p className="text-[13px] truncate text-right font-semibold" style={{ color: '#F97316' }}>
-                      {typingChats[gc.channelId].name ? `${typingChats[gc.channelId].name} מקליד/ה…` : 'מקליד/ה…'}
-                    </p>
-                  ) : (
-                    <p className={`text-[13px] truncate text-right ${gc.unreadCount > 0 ? 'text-[#444] font-medium' : 'text-gray-400'}`}>
-                      {gc.lastMessage ?? 'טרם נשלחו הודעות'}
-                    </p>
-                  )}
-                </div>
-
-                {/* Unread badge */}
-                {gc.unreadCount > 0 && gc.memberStatus !== 'pending' && (
-                  <div style={{
-                    minWidth: 20, height: 20, borderRadius: 10, padding: '0 5px',
-                    background: 'linear-gradient(135deg, #F97316, #EA580C)',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-                  }}>
-                    <span style={{ fontSize: 11, fontWeight: 800, color: '#fff' }}>
-                      {gc.unreadCount > 99 ? '99+' : gc.unreadCount}
-                    </span>
-                  </div>
+                <span>{label}</span>
+                {count != null && count > 0 && (
+                  <span style={{ fontSize: 11.5, fontWeight: 800, color: on ? '#EA580C' : '#9CA3AF' }}>{count}</span>
                 )}
               </button>
-            ))}
-            <div className="h-px bg-gray-100 mx-4 my-2" />
-          </div>
-        )}
+            );
+          })}
+        </div>
 
-        {/* Chat List */}
-        {!initialized ? (
-          <div className="flex items-center justify-center py-16">
-            <div className="w-8 h-8 border-3 border-gray-200 border-t-brand-500 rounded-full animate-spin" style={{ borderWidth: '3px' }}></div>
-          </div>
-        ) : filteredConversations.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-16 px-6">
-            <div className="w-20 h-20 bg-gray-100 rounded-full flex items-center justify-center mb-4">
-              <MessageCircle className="w-9 h-9 text-gray-300" strokeWidth={1.5} />
-            </div>
-            <h2 className="text-base font-bold text-gray-700 mb-1" style={{ fontFamily: 'Heebo, sans-serif' }}>
-              אין שיחות
-            </h2>
-            <p className="text-[13px] text-gray-400 text-center">
-              {searchQuery ? 'לא נמצאו שיחות' : 'התחל שיחה עם משתמש מהפרופיל שלו'}
-            </p>
-          </div>
-        ) : (
-          <div className="px-0 pt-1">
-            <button
-              onClick={() => setChatsCollapsed(p => !p)}
-              className="w-full flex items-center gap-1 px-4 mb-1 mt-2"
-            >
-              <p className="text-[13px] font-bold text-gray-400 tracking-wide">צאטים שלי</p>
-              <ChevronDown
-                size={16}
-                color="#9CA3AF"
-                style={{ transition: 'transform 0.2s', transform: chatsCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)' }}
-              />
-            </button>
-            {!chatsCollapsed && filteredConversations.map((conversation) => {
-              const isUnread  = conversation.unread_count > 0;
-              const isSwiped  = swipedId === conversation.id;
-              const isPinned  = pinnedIds.has(conversation.id);
-              const isMuted   = mutedIds.has(conversation.id);
-              const rowBg     = isPinned ? '#FFF7ED' : '#F8F9FB';
+        {/* ── Unified list: groups + chats MIXED, sorted like WhatsApp (pinned first, then most-recent) ── */}
+        {(() => {
+          const q = searchQuery.trim().toLowerCase();
+          const showGroups = activeTab !== 'chats';
+          const showChats  = activeTab !== 'groups';
+          const groupsF = showGroups ? groupChats.filter(g => !q || g.cityName.toLowerCase().includes(q)) : [];
+          const chatsF  = showChats ? filteredConversations : [];
+          type Row = { kind: 'group'; ts: number; pinned: boolean; g: GroupChat } | { kind: 'chat'; ts: number; pinned: boolean; c: Conversation };
+          const rows: Row[] = [
+            ...groupsF.map(g => ({ kind: 'group' as const, ts: g.lastMessageAt ? new Date(g.lastMessageAt).getTime() : 0, pinned: pinnedGroupIds.has(g.channelId), g })),
+            ...chatsF.map(c => ({ kind: 'chat' as const, ts: c.last_message_at ? new Date(c.last_message_at).getTime() : 0, pinned: pinnedIds.has(c.id), c })),
+          ];
+          rows.sort((a, b) => (a.pinned === b.pinned ? b.ts - a.ts : (a.pinned ? -1 : 1)));
 
-              return (
-                <React.Fragment key={conversation.id}>
-                <div
-                  style={{ position: 'relative', overflow: 'hidden' }}
-                  onTouchStart={(e) => handleTouchStart(e, conversation.id)}
-                  onTouchEnd={(e) => handleTouchEnd(e, conversation.id)}
-                >
-                  {/* Actions — only rendered when swiped */}
-                  {isSwiped && <div style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: 180, display: 'flex', alignItems: 'center', justifyContent: 'space-evenly', background: rowBg, zIndex: 0 }}>
-                    <button onClick={() => handleDeleteConversation(conversation.id)}
-                      style={{ width: 44, height: 44, borderRadius: '50%', background: '#EF4444', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', border: 'none', cursor: 'pointer', flexShrink: 0 }}>
-                      <Trash2 size={20} />
-                    </button>
-                    <button onClick={() => handlePinConversation(conversation.id)}
-                      style={{ width: 44, height: 44, borderRadius: '50%', background: isPinned ? '#6B7280' : '#3B82F6', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', border: 'none', cursor: 'pointer', flexShrink: 0 }}>
-                      <Pin size={20} />
-                    </button>
-                    <button onClick={() => handleMuteConversation(conversation.id)}
-                      style={{ width: 44, height: 44, borderRadius: '50%', background: isMuted ? '#6B7280' : '#F59E0B', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', border: 'none', cursor: 'pointer', flexShrink: 0 }}>
-                      {isMuted ? <Bell size={20} /> : <BellOff size={20} />}
-                    </button>
-                  </div>}
-
-                  {/* Row — slides left to reveal actions */}
-                  <button
-                    onClick={() => {
-                      if (isSwiped) {
-                        setSwipedId(null);
-                      } else {
-                        onConversationClick(conversation.id, conversation.other_user.id);
-                      }
-                    }}
-                    className="w-full flex items-center gap-3 px-4 active:scale-[0.98] transition-all duration-150"
-                    style={{
-                      height: '72px',
-                      paddingTop: '6px',
-                      paddingBottom: '6px',
-                      background: rowBg,
-                      position: 'relative',
-                      zIndex: 1,
-                      transform: isSwiped ? 'translateX(-180px)' : 'translateX(0)',
-                      transition: 'transform 0.25s ease',
-                    }}
-                  >
-                    {/* Avatar */}
-                    <div className="relative flex-shrink-0">
-                      <div
-                        className="w-[52px] h-[52px] rounded-full overflow-hidden flex items-center justify-center"
-                        style={{
-                          padding: isUnread ? 2 : 0,
-                          background: isUnread ? 'linear-gradient(135deg, #F97316, #EA580C)' : 'transparent',
-                          boxShadow: isUnread ? '0 2px 8px rgba(249,115,22,0.3)' : 'none',
-                        }}
-                      >
-                        <div className="w-full h-full bg-white rounded-full overflow-hidden">
-                          <UserAvatar
-                            userId={conversation.other_user.id}
-                            displayName={conversation.other_user.display_name}
-                            avatarUrl={conversation.other_user.avatar_url}
-                            size="medium"
-                          />
-                        </div>
-                      </div>
-                      {/* Pin badge */}
-                      {isPinned && !isUnread && (
-                        <div style={{ position: 'absolute', bottom: -2, left: -2, width: 18, height: 18, borderRadius: '50%', background: '#3B82F6', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '2px solid #F8F9FB' }}>
-                          <Pin size={9} color="#fff" />
-                        </div>
-                      )}
-                      {/* Unread badge */}
-                      {isUnread && (
-                        <div
-                          style={{ position: 'absolute', bottom: -2, left: -2, minWidth: 20, height: 20, borderRadius: 10, padding: '0 4px', background: 'linear-gradient(135deg, #F97316, #EA580C)', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '2px solid #F8F9FB' }}
-                        >
-                          <span style={{ fontSize: 10, fontWeight: 800, color: '#fff', lineHeight: 1 }}>
-                            {conversation.unread_count > 9 ? '9+' : conversation.unread_count}
-                          </span>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Content */}
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between mb-0.5">
-                        <h3
-                          className={`text-[15px] truncate ${isUnread ? 'font-bold text-[#111]' : 'font-semibold text-[#333]'}`}
-                          style={{ fontFamily: 'Heebo, sans-serif' }}
-                        >
-                          {conversation.other_user.display_name}
-                        </h3>
-                        <div className="flex items-center gap-1 flex-shrink-0 mr-2">
-                          <span className="text-[12px] text-gray-400 font-normal">
-                            {formatTime(conversation.last_message_at)}
-                          </span>
-                          {isMuted && <BellOff size={12} color="#9CA3AF" />}
-                        </div>
-                      </div>
-                      {typingChats[conversation.id] ? (
-                        <p className="text-[13px] truncate text-right font-semibold" style={{ color: '#F97316' }}>
-                          מקליד/ה…
-                        </p>
-                      ) : conversation.last_message && (
-                        <p
-                          className={`text-[13px] truncate text-right ${isUnread ? 'text-[#444] font-medium' : 'text-gray-400 font-normal'}`}
-                          style={{ opacity: isMuted ? 0.6 : 1 }}
-                        >
-                          {conversation.last_message.sender_id === currentUserId && (
-                            <span className="text-gray-300">אתה: </span>
-                          )}
-                          {messagePreview(conversation.last_message.content)}
-                        </p>
-                      )}
-                    </div>
-                  </button>
-
+          if (!initialized && conversations.length === 0 && groupChats.length === 0) {
+            return (
+              <div className="px-4 pt-3" aria-hidden>
+                <style>{`@keyframes msg-skel { 0%,100%{opacity:0.55} 50%{opacity:0.9} }`}</style>
+                {[0, 1, 2, 3, 4, 5].map((i) => (
+                  <div key={i} className="flex items-center gap-3 py-3" style={{ animation: `msg-skel 1.3s ease-in-out ${i * 0.12}s infinite` }}>
+                    <div className="w-12 h-12 rounded-full bg-gray-200 flex-shrink-0" />
+                    <div className="flex-1"><div className="h-3.5 bg-gray-200 rounded-full mb-2" style={{ width: `${55 - i * 5}%` }} /><div className="h-3 bg-gray-100 rounded-full" style={{ width: `${80 - i * 6}%` }} /></div>
+                  </div>
+                ))}
+              </div>
+            );
+          }
+          if (rows.length === 0) {
+            const title = activeTab === 'groups' ? 'עדיין לא הצטרפת לקבוצות' : searchQuery ? 'לא נמצאו תוצאות' : 'אין הודעות';
+            const sub = activeTab === 'groups' ? 'בחרו יעד למעלה והצטרפו לטיילים' : searchQuery ? '' : 'התחילו שיחה או הצטרפו לקבוצה';
+            return (
+              <div className="flex flex-col items-center justify-center py-16 px-6">
+                <div className="w-20 h-20 bg-gray-100 rounded-full flex items-center justify-center mb-4">
+                  {activeTab === 'groups' ? <Users className="w-9 h-9 text-gray-300" strokeWidth={1.5} /> : <MessageCircle className="w-9 h-9 text-gray-300" strokeWidth={1.5} />}
                 </div>
-                {/* Subtle separator */}
-                <div className="h-px bg-gray-100 mx-4" />
-                </React.Fragment>
-              );
-            })}
-          </div>
-        )}
+                <h2 className="text-base font-bold text-gray-700 mb-1" style={{ fontFamily: 'Heebo, sans-serif' }}>{title}</h2>
+                {sub && <p className="text-[13px] text-gray-400 text-center">{sub}</p>}
+              </div>
+            );
+          }
+          return <div className="pt-1">{rows.map(r => r.kind === 'group' ? renderGroupRow(r.g) : renderChatRow(r.c))}</div>;
+        })()}
+
       </div>
 
       {/* Floating Navigation Bar */}
@@ -997,7 +958,7 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
           currentUserId={currentUserId}
           currentUserName={currentUserName || 'אנונימי'}
           currentUserAvatar={currentUserAvatar}
-          onClose={() => { setOpenCity(null); loadGroupChats(); }}
+          onClose={() => { setOpenCity(null); loadChatList(); }}
           onOpenMapAt={onOpenMapAt}
           onNavigateToUserProfile={onNavigateToUserProfile}
         />

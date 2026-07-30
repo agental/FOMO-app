@@ -1,4 +1,4 @@
-const CACHE_NAME = 'hatiyul-hagadol-v2';
+const CACHE_NAME = 'hatiyul-hagadol-v3';
 const OFFLINE_URL = '/';
 
 const STATIC_ASSETS = [

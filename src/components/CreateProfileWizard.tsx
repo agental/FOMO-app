@@ -155,10 +155,9 @@ export function CreateProfileWizard({ userId, onComplete, onBack }: CreateProfil
     setError(null);
     setLoading(true);
     try {
-      const { data: { user: authUser } } = await supabase.auth.getUser();
-      const { error: upErr } = await supabase.from('users').upsert({
-        id: userId,
-        email: authUser?.email ?? '',
+      // The users row is auto-created at signup (email already set), so this is an UPDATE, not an
+      // upsert. upsert would fail: its INSERT path touches the API-revoked `email` column.
+      const { error: upErr } = await supabase.from('users').update({
         avatar_url: avatarUrl,
         display_name: displayName,
         bio: bio || null,
@@ -170,8 +169,9 @@ export function CreateProfileWizard({ userId, onComplete, onBack }: CreateProfil
         profile_completed: true,
         selected_countries: [], // chosen on the country-selection screen
         is_location_shared: false,
-        role: 'user',
-      }).select();
+        // NOTE: never write `role` here — the row already has one (set at signup), and overwriting it
+        // would DEMOTE an admin who re-enters this wizard. Role is managed only from the admin panel.
+      }).eq('id', userId);
       if (upErr) throw upErr;
       if (gender) { const { error: gErr } = await supabase.from('users').update({ gender }).eq('id', userId); if (gErr) console.warn('gender not saved (add a `gender` column):', gErr.message); }
       onComplete();

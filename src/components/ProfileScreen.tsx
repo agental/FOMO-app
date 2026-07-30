@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { useSwipeBack } from '../hooks/useSwipeBack';
 import { LogOut, MessageCircle, Edit2, Search, Check, Camera, MapPin, Globe, Loader2, Heart, Ticket, X, Cake, Settings, ChevronLeft, Plus } from 'lucide-react';
 import { BackButton } from './BackButton';
 import { supabase, type User } from '../lib/supabase';
@@ -131,6 +132,7 @@ const _profileCache: Record<string, ProfileCache> = {};
 export default function ProfileScreen({
   onBack, currentUserId, onNavigateToMap, onNavigateToMessages, onNavigateToMyEvents, onNavigateToSettings, onNavigateToCreate, viewUserId, onMessageUser,
 }: ProfileScreenProps) {
+  const swipeRef = useSwipeBack<HTMLDivElement>(onBack); // swipe from an edge to slide the screen back
   const targetId = (viewUserId || currentUserId) ?? '';
   const _cached  = _profileCache[targetId];
   const [profile,              setProfile]              = useState<User | null>(_cached?.profile ?? null);
@@ -187,7 +189,13 @@ export default function ProfileScreen({
   const loadProfile = async () => {
     if (!targetUserId) return;
     try {
-      const { data } = await supabase.from('users').select('*').eq('id', targetUserId).maybeSingle();
+      // Explicit columns — every profile field except `email`/`latitude`/`longitude`, which are
+      // API-revoked as PII (GPS coordinates are never actually rendered by this screen).
+      const { data } = await supabase.from('users').select(
+        'id, display_name, avatar_url, selected_countries, is_location_shared, ' +
+        'created_at, updated_at, bio, age, current_country, languages, interests, visited_countries, ' +
+        'full_name, countries, home_base, instagram, telegram, whatsapp, visibility, profile_completed, role, gender'
+      ).eq('id', targetUserId).maybeSingle();
       if (data) {
         const countries = data.selected_countries || [];
         _profileCache[targetId] = { ..._profileCache[targetId], profile: data, selectedCountries: countries };
@@ -271,7 +279,7 @@ export default function ProfileScreen({
 
   /* ═══════════════════════════════════════════════════ */
   return (
-    <div style={{ minHeight: '100dvh', background: '#EFEFEF', overflowX: 'hidden' }} dir="rtl">
+    <div ref={swipeRef} style={{ minHeight: '100dvh', background: '#EFEFEF', overflowX: 'hidden' }} dir="rtl">
       <style>{`
         @keyframes sp{to{transform:rotate(360deg)}}
         .fomo-press{transition:transform .12s ease, box-shadow .12s ease, filter .15s ease, background .15s ease; -webkit-tap-highlight-color:transparent; touch-action:manipulation;}

@@ -6,7 +6,7 @@ export interface EventCategoryConfig {
 
 export const eventCategories: Record<string, EventCategoryConfig> = {
   parties: {
-    color: '#A855F7',   // purple
+    color: '#7C3AED',   // deep violet (grape)
     label: 'מסיבות',
     emoji: '🎉',
   },

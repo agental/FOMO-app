@@ -202,13 +202,13 @@ export function CreateMeetupFlow({
         pending_requests: [],
       });
       if (error) {
-        showToast('שגיאה ביצירת הישיבה: ' + ((error as any)?.message ?? JSON.stringify(error)));
+        showToast('שגיאה ביצירת הציוץ: ' + ((error as any)?.message ?? JSON.stringify(error)));
         return;
       }
       triggerSuccess();
       setTimeout(() => { onSuccess({ latitude, longitude }); onClose(); }, 2200);
     } catch (err) {
-      showToast('שגיאה ביצירת הישיבה: ' + (err instanceof Error ? err.message : String(err)));
+      showToast('שגיאה ביצירת הציוץ: ' + (err instanceof Error ? err.message : String(err)));
     } finally {
       setSubmitting(false);
     }
@@ -277,8 +277,8 @@ export function CreateMeetupFlow({
               </svg>
             </div>
             <div style={{ flex: 1 }}>
-              <p style={{ fontSize: 14, fontWeight: 700, margin: 0, color: '#1E293B' }}>הישיבה נוצרה בהצלחה!</p>
-              <p style={{ fontSize: 12, margin: '2px 0 0', color: '#64748B' }}>הישיבה שלך נוספה למפה 🎉</p>
+              <p style={{ fontSize: 14, fontWeight: 700, margin: 0, color: '#1E293B' }}>הציוץ פורסם בהצלחה!</p>
+              <p style={{ fontSize: 12, margin: '2px 0 0', color: '#64748B' }}>הציוץ שלך נוסף למפה 🎉</p>
             </div>
             <button onClick={() => setShowSuccess(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94A3B8', fontSize: 18, padding: 4 }}>×</button>
           </div>
@@ -309,7 +309,7 @@ export function CreateMeetupFlow({
               </svg>
             </div>
             <div style={{ flex: 1 }}>
-              <p style={{ fontSize: 14, fontWeight: 700, margin: 0, color: '#1E293B' }}>שגיאה ביצירת הישיבה</p>
+              <p style={{ fontSize: 14, fontWeight: 700, margin: 0, color: '#1E293B' }}>שגיאה ביצירת הציוץ</p>
               <p style={{ fontSize: 12, margin: '2px 0 0', color: '#64748B' }}>{toast}</p>
             </div>
             <button onClick={() => setToast(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94A3B8', fontSize: 18, padding: 4 }}>×</button>
@@ -334,7 +334,7 @@ export function CreateMeetupFlow({
         {/* Header */}
         <div className="px-5 pb-3 flex items-center justify-between flex-shrink-0">
           <div>
-            <h2 className="text-xl font-bold text-gray-900">ישיבה חדשה ☕</h2>
+            <h2 className="text-xl font-bold text-gray-900">ציוץ חדש על המפה ☕</h2>
             <p className="text-xs text-gray-500 mt-0.5">{STEP_LABELS[step]}</p>
           </div>
           <div className="flex items-center gap-3">
@@ -373,7 +373,7 @@ export function CreateMeetupFlow({
                 <textarea
                   value={text}
                   onChange={e => setText(e.target.value.slice(0, 80))}
-                  placeholder='למשל: "ישיבה ספונטנית בקפה, כולם מוזמנים"'
+                  placeholder='למשל: "יושבים בקפה, כולם מוזמנים"'
                   rows={3}
                   className="w-full px-4 py-3 border border-gray-200 rounded-2xl text-sm resize-none focus:outline-none focus:ring-2 focus:ring-orange-400 bg-gray-50"
                 />
@@ -459,7 +459,7 @@ export function CreateMeetupFlow({
 
                 {/* selected date readable label */}
                 <p className="text-xs text-gray-400 mt-3 text-center">
-                  הישיבה מתוכננת ל{' '}
+                  הציוץ מתוכנן ל{' '}
                   <span className="font-semibold text-orange-500">
                     {new Date(date + 'T12:00:00').toLocaleDateString('he-IL', { weekday: 'long', day: 'numeric', month: 'long' })}
                   </span>
@@ -563,7 +563,7 @@ export function CreateMeetupFlow({
               disabled={submitting}
               className="flex-1 py-4 bg-gradient-to-r from-orange-500 to-orange-600 text-white rounded-2xl font-bold hover:from-orange-600 hover:to-orange-700 transition-all disabled:opacity-50 shadow-md shadow-orange-200"
             >
-              {submitting ? 'יוצר ישיבה...' : '🗺️ הוסף למפה'}
+              {submitting ? 'מפרסם ציוץ...' : '🗺️ הוסף למפה'}
             </button>
           )}
         </div>

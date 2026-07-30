@@ -25,6 +25,7 @@ import { buildAreasFC, polygonCentroid, type AreaShape } from '../utils/areaHigh
 import { loadMapAreas, insertMapArea, deleteMapArea, type MapArea } from '../services/mapAreaService';
 import { buildCountryFilterArray } from '../utils/countryFilters';
 import { useEvents } from '../hooks/useEvents';
+import { loadValue, saveValue } from '../utils/warmCache';
 import { getPinScale, labelVisibleAtZoom } from '../utils/pinScale';
 import type { Event } from '../types/event';
 import mapboxgl from 'mapbox-gl';
@@ -57,7 +58,7 @@ const FILTER_TABS: { id: MapFilter; label: string; emoji: string }[] = [
   { id: 'all',     label: 'הכל',    emoji: '🌐' },
   { id: 'events',  label: 'אירועים', emoji: '📅' },
   { id: 'places',  label: 'מקומות',  emoji: '📍' },
-  { id: 'meetups', label: 'ישיבות',  emoji: '☕' },
+  { id: 'meetups', label: 'ציוצים',  emoji: '☕' },
 ];
 
 /* palette an admin can pick from when marking an area (first = default) */
@@ -130,15 +131,25 @@ const DOT_MIN = 3;         // smallest the colour dot shrinks to before vanishin
 const DOT_FADE_RANGE = 5;  // zoom levels below the pin threshold over which the dot shrinks → gone
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i; // admin place id vs POI/chabad key
 
+// Area highlight fill opacity vs zoom. Peaks the moment the area appears, then fades out so the tint
+// is completely gone by z14 — the far-out view is unchanged, but as you zoom in the colour drops
+// away instead of tinting the map detail underneath.
+const AREA_FILL_OPACITY = ['interpolate', ['linear'], ['zoom'],
+  11.1, 0,
+  11.5, 0.28,
+  12.8, 0.12,
+  14,   0,
+] as unknown as mapboxgl.ExpressionSpecification;
+
 const CHABAD_PURPLE = '#972689'; // matches the Chabad pin's outer frame
 // place teardrop is 36×41; scale it up to the Chabad pin's height (54) so they match in size
 const PLACE_PIN_SCALE = 54 / 41;
 
-/* ── module-level cache (survives navigation) ── */
-let _mapChabadHouses:   ChabadHouse[]   | null = null;
-let _mapAdminLocations: AdminLocation[] | null = null;
-let _mapMeetups:        Meetup[]        | null = null;
-let _mapLocation:       { latitude: number; longitude: number } | null = null;
+/* ── module-level cache (survives navigation; some persist across cold start) ── */
+let _mapChabadHouses:   ChabadHouse[]   | null = loadValue<ChabadHouse[] | null>('mapChabad', null);
+let _mapAdminLocations: AdminLocation[] | null = loadValue<AdminLocation[] | null>('mapAdmin', null);
+let _mapMeetups:        Meetup[]        | null = null; // volatile — always refetched
+let _mapLocation:       { latitude: number; longitude: number } | null = loadValue<{ latitude: number; longitude: number } | null>('mapLocation', null);
 
 /* ──────────────────────────────── component ───────────────────────────────── */
 export function MapScreen({
@@ -191,9 +202,10 @@ export function MapScreen({
   /* search */
   const [searchQuery, setSearchQuery] = useState('');
 
-  /* data */
-  const [chabadHouses,    setChabadHouses]    = useState<ChabadHouse[]>(_mapChabadHouses ?? []);
-  const [adminLocations,  setAdminLocations]  = useState<AdminLocation[]>(_mapAdminLocations ?? []);
+  /* data — prefer the in-session module cache; otherwise read the boot-preloader's warmed
+     localStorage fresh at mount (the module vars were captured at app-eval, before preload wrote). */
+  const [chabadHouses,    setChabadHouses]    = useState<ChabadHouse[]>(() => _mapChabadHouses ?? loadValue<ChabadHouse[]>('mapChabad', []));
+  const [adminLocations,  setAdminLocations]  = useState<AdminLocation[]>(() => _mapAdminLocations ?? loadValue<AdminLocation[]>('mapAdmin', []));
   const [meetups,         setMeetups]         = useState<Meetup[]>(_mapMeetups ?? []);
 
   /* preview card (mini card above pin) */
@@ -252,7 +264,7 @@ export function MapScreen({
     try {
       const { data, error } = await supabase.from('chabad_houses').select('*').order('created_at', { ascending: false });
       if (error) { console.error('[MapScreen] loadChabadHouses:', error); return; }
-      if (data) { _mapChabadHouses = data; setChabadHouses(data); }
+      if (data) { _mapChabadHouses = data; saveValue('mapChabad', data); setChabadHouses(data); }
     } catch (e) { console.error('[MapScreen] loadChabadHouses failed:', e); }
   };
 
@@ -262,7 +274,7 @@ export function MapScreen({
       .select('*')
       .order('created_at', { ascending: false });
     if (e) { console.error('loadAdminLocations:', e); return; }
-    if (data) { _mapAdminLocations = data; setAdminLocations(data); }
+    if (data) { _mapAdminLocations = data; saveValue('mapAdmin', data); setAdminLocations(data); }
   };
 
   const loadMeetups = async () => {
@@ -352,6 +364,7 @@ export function MapScreen({
       const wasAlreadyCached = !!_mapLocation;
       const loc = { latitude: lat, longitude: lng };
       _mapLocation = loc;
+      saveValue('mapLocation', loc);
       setLocation(loc);
       loadChabadHouses();
       if (wasAlreadyCached) {
@@ -916,6 +929,23 @@ export function MapScreen({
     if (had) resetView();
   }
 
+  /* Switching the filter is a "back to browsing" action, so it has to undo the pin focus first.
+     focusPin pads the camera hard (top: chrome, bottom: 55vh) and pitches it so the tapped pin sits
+     above the half-sheet — that padding shifts the whole map up by ~(sheetPx − top)/2 px. Tapping a
+     category used to only swap the point set: the sheet went away but the padding, the pitch and the
+     orbit stayed, so every pin was left riding up against the top edge of the map. Clear the
+     selection (which resets padding/pitch/bearing and stops the orbit) and close any open sheet. */
+  function changeFilter(id: MapFilter) {
+    if (id === mapFilter) return;
+    setSheetEvent(null);
+    setSelectedEvent(null);
+    setSelectedMeetup(null); setShowMeetup(false);
+    setShowChabadHouse(false);
+    setShowAdminLocation(false); setSelectedAdminLocation(null);
+    clearSelection();
+    setMapFilter(id);
+  }
+
   /* A Chabad house opens in the SAME rich sheet as places — fed in as a synthetic place. Keyed with
      a non-uuid id so it isn't treated as an admin_locations row (no admin photo upload), while save +
      reviews still work (they're keyed by this text id). Its photo seeds the mosaic. */
@@ -977,13 +1007,21 @@ export function MapScreen({
   function renderClusters() {
     const map = mapInstanceRef.current;
     if (!map) return;
-    const b = map.getBounds();
-    if (!b) return;
-    // Cull to a PADDED viewport so pins are created a bit before they scroll into view — no
-    // pop-in during a pan, and they're already present as you drag toward them.
-    const w = b.getWest(), s = b.getSouth(), e = b.getEast(), n = b.getNorth();
-    const padX = (e - w) * 0.4, padY = (n - s) * 0.4;
-    const inView = (lng: number, lat: number) => lng >= w - padX && lng <= e + padX && lat >= s - padY && lat <= n + padY;
+    // Cull by SCREEN position, NOT geographic bounds. On a PITCHED map (this map is always pitched,
+    // and orbiting rotates it too) getBounds() returns a box far larger than the visible trapezoid, so
+    // it kept far-away pins — and points BEHIND the camera — which Mapbox then rendered piled in the
+    // top-left corner ("events escaping to the corner"). Projecting each point to pixels and keeping
+    // only those on-screen (+ a margin so pins still appear just before they scroll in) fixes it.
+    const canvas = map.getCanvas();
+    const vw = canvas.clientWidth || canvas.width;
+    const vh = canvas.clientHeight || canvas.height;
+    const padPx = Math.max(vw, vh) * 0.35;
+    const inView = (lng: number, lat: number) => {
+      const p = map.project([lng, lat]);
+      // Behind-camera points project to extreme/non-finite coords → the bounds check culls them.
+      return Number.isFinite(p.x) && Number.isFinite(p.y) &&
+             p.x >= -padPx && p.x <= vw + padPx && p.y >= -padPx && p.y <= vh + padPx;
+    };
     const z = map.getZoom();
     const scale = getPinScale('event', z);
     const showLabels = labelVisibleAtZoom(z);
@@ -1008,7 +1046,9 @@ export function MapScreen({
       // Never cull the pin whose sheet is open. While the camera flies to it (pitched + padded)
       // the viewport bounds swing around, and dropping + recreating its marker made it visibly
       // jump. The sheet owns the selection's lifecycle — culling has no business ending it.
-      if (key === selectedIdRef.current) return;
+      // The exception is a selected point that left the data set entirely (filtered out, deleted):
+      // it is no longer a point at all, so keeping its marker would strand it on the map forever.
+      if (key === selectedIdRef.current && pointByIdRef.current.has(key)) return;
       if (!next.has(key)) { entry.marker.remove(); markerMapRef.current.delete(key); }
     });
   }
@@ -1078,11 +1118,18 @@ export function MapScreen({
     // Render markers DURING the pan too (throttled to one pass per frame) so pins appear as you
     // drag toward them, instead of only popping in when the gesture ends.
     let movePending = false;
+    // While ZOOMING, the projected pixel position of every point changes fast, so per-frame culling
+    // would destroy + rebuild markers each frame — and a freshly-added DOM marker flashes at the
+    // top-left corner for a frame before Mapbox positions it. So skip the churn during a zoom and let
+    // Mapbox reposition the existing markers smoothly; the cull re-runs on moveend (below).
+    let zooming = false;
+    const onZoomStart = () => { zooming = true; };
+    const onZoomEnd   = () => { zooming = false; };
     const onMove = () => {
       // Hold still while the camera flies to a tapped pin and while it orbits: re-rendering
       // mid-flight recreated markers under a swinging, pitched viewport and made them jump.
-      // `moveend` renders once we've landed.
-      if (orbitingRef.current || focusingRef.current) return;
+      // `moveend` renders once we've landed. Same reason to skip while zooming.
+      if (orbitingRef.current || focusingRef.current || zooming) return;
       if (movePending) return;
       movePending = true;
       requestAnimationFrame(() => { movePending = false; renderRef.current(); });
@@ -1143,6 +1190,8 @@ export function MapScreen({
     map.on('moveend', onMoveEnd);
     map.on('move', onMove);
     map.on('zoom', onZoom);
+    map.on('zoomstart', onZoomStart);
+    map.on('zoomend', onZoomEnd);
     map.on('click', onClick);
     map.on('click', 'fomo-areas-fill', onAreaClick);
     // touchstart/mousedown, not dragstart: Mapbox's own handlers call map.stop() the moment you
@@ -1152,7 +1201,7 @@ export function MapScreen({
     map.on('mousedown', onUserGrab);
     map.on('wheel', onUserGrab);
     return () => {
-      map.off('moveend', onMoveEnd); map.off('move', onMove); map.off('zoom', onZoom); map.off('click', onClick);
+      map.off('moveend', onMoveEnd); map.off('move', onMove); map.off('zoom', onZoom); map.off('zoomstart', onZoomStart); map.off('zoomend', onZoomEnd); map.off('click', onClick);
       map.off('click', 'fomo-areas-fill', onAreaClick);
       map.off('touchstart', onUserGrab); map.off('mousedown', onUserGrab); map.off('wheel', onUserGrab);
       stopOrbit();
@@ -1249,7 +1298,7 @@ export function MapScreen({
             'fill-color': ['get', 'color'],
             // visible only in the working range; fades to 0 as the area collapses to just the dot
             // (zoomed out) and again at very close (border only)
-            'fill-opacity': ['interpolate', ['linear'], ['zoom'], 11.1, 0, 11.5, 0.28, 15, 0.15, 17, 0],
+            'fill-opacity': AREA_FILL_OPACITY,
           } });
         map.addLayer({ id: 'fomo-areas-line', type: 'line', source: 'fomo-areas',
           layout: { 'line-join': 'round' },
@@ -1262,7 +1311,7 @@ export function MapScreen({
       }
       // Keep the layers on top + carrying the latest paint even if they already existed (HMR /
       // re-render) — moveLayer with no beforeId re-raises them above the base map's roads.
-      if (map.getLayer('fomo-areas-fill')) { map.moveLayer('fomo-areas-fill'); map.setPaintProperty('fomo-areas-fill', 'fill-opacity', ['interpolate', ['linear'], ['zoom'], 11.1, 0, 11.5, 0.28, 15, 0.15, 17, 0]); }
+      if (map.getLayer('fomo-areas-fill')) { map.moveLayer('fomo-areas-fill'); map.setPaintProperty('fomo-areas-fill', 'fill-opacity', AREA_FILL_OPACITY); }
       if (map.getLayer('fomo-areas-line')) { map.moveLayer('fomo-areas-line'); map.setPaintProperty('fomo-areas-line', 'line-opacity', ['interpolate', ['linear'], ['zoom'], 11.1, 0, 11.5, 1]); }
       // name labels at each polygon's centroid (DOM markers → Hebrew RTL renders correctly).
       // Each holds a text node + a coloured dot; updateAreaLabels swaps between them by zoom.
@@ -1320,7 +1369,7 @@ export function MapScreen({
         map.addLayer({ id: 'fomo-draft-fill', type: 'fill', source: 'fomo-draft',
           filter: ['==', ['geometry-type'], 'Polygon'],
           // matches the saved area: visible in the working range, gone when collapsed to a dot / very close
-          paint: { 'fill-color': areaColor, 'fill-opacity': ['interpolate', ['linear'], ['zoom'], 11.1, 0, 11.5, 0.28, 15, 0.15, 17, 0] } });
+          paint: { 'fill-color': areaColor, 'fill-opacity': AREA_FILL_OPACITY } });
         map.addLayer({ id: 'fomo-draft-line', type: 'line', source: 'fomo-draft',
           filter: ['!=', ['geometry-type'], 'Point'],
           layout: { 'line-join': 'round' },
@@ -1792,7 +1841,7 @@ export function MapScreen({
                 return (
                   <button
                     key={tab.id}
-                    onClick={() => setMapFilter(tab.id)}
+                    onClick={() => changeFilter(tab.id)}
                     style={{
                       display: 'flex', alignItems: 'center', gap: 5,
                       padding: '7px 14px',
@@ -1992,6 +2041,7 @@ export function MapScreen({
           onNavigateToUserProfile={onNavigateToUserProfile}
           onMessageUser={onMessageUser}
           onOpenMapAt={(lat, lng) => { mapInstanceRef.current?.flyTo({ center: [lng, lat], zoom: 15, essential: true }); }}
+          onDeleted={refreshEvents}
         />
       )}
 
@@ -2005,6 +2055,7 @@ export function MapScreen({
           onNavigateToUserProfile={onNavigateToUserProfile}
           onMessageUser={onMessageUser}
           onOpenMapAt={(lat, lng) => { setSheetEvent(null); clearRef.current(); mapInstanceRef.current?.flyTo({ center: [lng, lat], zoom: 15, essential: true }); }}
+          onDeleted={refreshEvents}
         />
       )}
 

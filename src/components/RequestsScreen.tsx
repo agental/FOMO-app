@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useSwipeBack } from '../hooks/useSwipeBack';
 import { Check, X, Calendar, Clock, ChevronLeft, Bell } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { UserAvatar } from './UserAvatar';
@@ -56,6 +57,7 @@ type MeetupPendingRequest = {
 };
 
 export function RequestsScreen({ currentUserId, onBack, onHomeClick, onMapClick, onCreateClick, onMessagesClick, onMyEventsClick, onNavigateToUserProfile }: RequestsScreenProps) {
+  const swipeRef = useSwipeBack<HTMLDivElement>(onBack); // swipe from an edge to slide the screen back
   const [joinRequests, setJoinRequests] = useState<JoinRequest[]>([]);
   const [meetupRequests, setMeetupRequests] = useState<MeetupPendingRequest[]>([]);
   const [decisions, setDecisions] = useState<RequestDecision[]>([]);
@@ -267,6 +269,16 @@ export function RequestsScreen({ currentUserId, onBack, onHomeClick, onMapClick,
 
   const handleRejectRequest = async (request: JoinRequest) => {
     try {
+      // Paid ticket → refund at the provider first (best-effort). The Edge Function no-ops for
+      // free events and is safe to call regardless; a provider hiccup shouldn't block the reject.
+      if (request.paid_amount != null && request.paid_amount > 0) {
+        try {
+          await supabase.functions.invoke('payments-refund', { body: { joinRequestId: request.id } });
+        } catch (refundErr) {
+          console.error('Refund failed (rejecting anyway):', refundErr);
+        }
+      }
+
       await supabase
         .from('event_join_requests')
         .update({ status: 'rejected', updated_at: new Date().toISOString() })
@@ -296,7 +308,7 @@ export function RequestsScreen({ currentUserId, onBack, onHomeClick, onMapClick,
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-brand-50/50 via-white to-white" dir="rtl">
+    <div ref={swipeRef} className="min-h-screen bg-gradient-to-br from-brand-50/50 via-white to-white" dir="rtl">
       <header
         className="fixed top-0 left-0 right-0 z-50 bg-white/80 backdrop-blur-xl border-b border-gray-100/50"
         style={{ paddingTop: 'env(safe-area-inset-top)' }}
@@ -347,7 +359,7 @@ export function RequestsScreen({ currentUserId, onBack, onHomeClick, onMapClick,
             {meetupRequests.length > 0 && (
               <div>
                 <p className="text-sm font-semibold text-gray-600 mb-3 px-1" style={{ fontFamily: 'Rubik, sans-serif' }}>
-                  {meetupRequests.length} {meetupRequests.length === 1 ? 'בקשה ממתינה' : 'בקשות ממתינות'} לישיבות
+                  {meetupRequests.length} {meetupRequests.length === 1 ? 'בקשה ממתינה' : 'בקשות ממתינות'} לציוצים
                 </p>
                 <div className="space-y-3">
                   {meetupRequests.map(req => (

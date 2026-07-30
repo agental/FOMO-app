@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { SplashScreen } from './components/SplashScreen';
 import { HomeScreen } from './components/HomeScreen';
 import ProfileScreen from './components/ProfileScreen';
@@ -7,8 +7,13 @@ import { OnboardingScreen } from './components/OnboardingScreen';
 import { CreateProfileWizard } from './components/CreateProfileWizard';
 import { CountrySelectionScreen } from './components/CountrySelectionScreen';
 import { MapScreen } from './components/MapScreen';
+import { useRealtimeNotifications } from './hooks/useRealtimeNotifications';
+import { preloadAppData } from './boot/preload';
+import { fetchChatList } from './services/chatListService';
 import type { PlacePayload } from './utils/placeMessage';
 import { AdminDashboard } from './components/AdminDashboard';
+import { BanScreen } from './components/BanScreen';
+import { isBanned, type BanInfo } from './services/banService';
 import { MessagesScreen } from './components/MessagesScreen';
 import { RequestsScreen } from './components/RequestsScreen';
 import { ChatScreen } from './components/ChatScreen';
@@ -26,6 +31,7 @@ function App() {
   const [authChecked, setAuthChecked] = useState(false);
   const [previousScreen, setPreviousScreen] = useState<Screen | null>(null);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [banInfo, setBanInfo] = useState<BanInfo | null>(null); // set when the signed-in user is banned
   const [selectedCountries, setSelectedCountries] = useState<Set<string>>(new Set());
   const [viewingUserId, setViewingUserId] = useState<string | null>(null);
   const [profileBackScreen, setProfileBackScreen] = useState<Screen>('home');
@@ -88,14 +94,15 @@ function App() {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === 'INITIAL_SESSION') {
         if (session?.user) {
-          handleAuthSuccess(session.user.id);
+          handleAuthSuccess(session.user.id, session.user);
         } else {
           setAuthChecked(true); // no session → show auth screen
         }
       } else if (event === 'SIGNED_IN' && session?.user) {
-        handleAuthSuccess(session.user.id);
+        handleAuthSuccess(session.user.id, session.user);
       } else if (event === 'SIGNED_OUT') {
         setCurrentUserId(null);
+        setBanInfo(null); // clear the ban gate so the ban screen doesn't linger after logout
         setCurrentScreen('auth');
         setAuthChecked(true);
       }
@@ -106,12 +113,34 @@ function App() {
     };
   }, []);
 
-  const handleAuthSuccess = async (userId: string) => {
+  // Global realtime notifications — approval/rejection/new-request + new chat messages
+  // reach the user immediately on any screen; tapping opens the relevant screen.
+  useRealtimeNotifications(
+    currentUserId,
+    () => setCurrentScreen('requests'),
+    () => setCurrentScreen('messages'),
+  );
+
+  // Warm the chat list once, as soon as we have a logged-in user. The boot preloader can fire too
+  // early on the phone (before Supabase applies the auth token → empty results), so this guaranteed
+  // post-auth warm fills the shared in-memory chatListCache that MessagesScreen paints from, making
+  // the FIRST tap on "הודעות" instant instead of showing a loading skeleton.
+  const chatWarmedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (currentUserId && chatWarmedRef.current !== currentUserId) {
+      chatWarmedRef.current = currentUserId;
+      fetchChatList(currentUserId).catch(() => {});
+    }
+  }, [currentUserId]);
+
+  const handleAuthSuccess = async (userId: string, sessionUser?: { is_anonymous?: boolean; user_metadata?: Record<string, unknown>; email?: string } | null) => {
     setAuthChecked(true);
     try {
       setCurrentUserId(userId);
 
-      const { data: { user } } = await supabase.auth.getUser();
+      // Prefer the user object already delivered by onAuthStateChange — avoids a blocking
+      // getUser() round-trip on every startup. Only AuthScreen (no session object) falls back.
+      const user = sessionUser ?? (await supabase.auth.getUser()).data.user;
       const isAnonymous = user?.is_anonymous || false;
 
       if (isAnonymous) {
@@ -119,11 +148,22 @@ function App() {
         return;
       }
 
+      // Warm the important data into memory/localStorage while the rest of auth resolves.
+      preloadAppData(userId).catch(() => {});
+
       // For Google/OAuth users — ensure profile exists using their metadata
       const meta = user?.user_metadata || {};
       const googleName    = meta.full_name || meta.name || meta.display_name || '';
       const googleAvatar  = meta.avatar_url || meta.picture || '';
       const googleEmail   = user?.email || '';
+
+      // Admin ban → block access entirely, show the ban screen instead of the app. Kept in its OWN
+      // query so the critical profile routing below never breaks if the ban columns aren't migrated yet.
+      const { data: banRow } = await supabase
+        .from('users').select('banned_until, banned_reason').eq('id', userId).maybeSingle();
+      const ban: BanInfo = { until: (banRow as { banned_until?: string | null } | null)?.banned_until ?? null, reason: (banRow as { banned_reason?: string | null } | null)?.banned_reason ?? null };
+      if (isBanned(ban)) { setBanInfo(ban); return; }
+      setBanInfo(null);
 
       const { data } = await supabase
         .from('users')
@@ -132,8 +172,9 @@ function App() {
         .maybeSingle();
 
       if (!data) {
-        // New user — upsert their Google profile data then go to onboarding
-        await supabase.from('users').upsert({
+        // New user with no row yet — insert their Google profile data, then go to onboarding.
+        // (upsert would fail: its ON CONFLICT path touches the API-revoked `email` column.)
+        await supabase.from('users').insert({
           id: userId,
           email: googleEmail,
           display_name: googleName || googleEmail.split('@')[0],
@@ -259,6 +300,10 @@ function App() {
 
   if (!splashDone) {
     return <SplashScreen onComplete={() => setSplashDone(true)} />;
+  }
+
+  if (banInfo && isBanned(banInfo)) {
+    return <BanScreen until={banInfo.until} reason={banInfo.reason} />;
   }
 
   if (!authChecked) {
@@ -391,28 +436,6 @@ function App() {
     );
   }
 
-  if (currentScreen === 'messages') {
-    return (
-      <MessagesScreen
-        currentUserId={currentUserId!}
-        onBack={() => setCurrentScreen('home')}
-        onConversationClick={(conversationId, otherUserId) => {
-          setCurrentConversationId(conversationId);
-          setChatOtherUserId(otherUserId);
-          setCurrentScreen('chat');
-        }}
-        onHomeClick={() => setCurrentScreen('home')}
-        onMapClick={() => setCurrentScreen('map')}
-        onCreateClick={goCreate}
-        onMyEventsClick={() => setCurrentScreen('myEvents')}
-        onNavigateToCountrySelection={navigateToCountrySelection}
-        onOpenMapAt={(lat: number, lng: number, placeId?: string, place?: PlacePayload) => { setMapFocus({ latitude: lat, longitude: lng, placeId, place }); setCurrentScreen('map'); }}
-        onNavigateToUserProfile={(userId: string) => { setViewingUserId(userId); setCurrentScreen('userProfile'); }}
-        initialCountries={Array.from(selectedCountries)}
-      />
-    );
-  }
-
   if (currentScreen === 'requests') {
     return (
       <RequestsScreen
@@ -472,26 +495,30 @@ function App() {
     return <AboutScreen onBack={() => setCurrentScreen('settings')} />;
   }
 
-  if (currentScreen === 'chat' && currentConversationId && chatOtherUserId) {
-    return (
-      <ChatScreen
-        conversationId={currentConversationId}
-        currentUserId={currentUserId!}
-        otherUserId={chatOtherUserId}
-        onBack={() => setCurrentScreen('messages')}
-        onOpenMapAt={(lat: number, lng: number, placeId?: string, place?: PlacePayload) => { setMapFocus({ latitude: lat, longitude: lng, placeId, place }); setCurrentScreen('map'); }}
-        onNavigateToUserProfile={(userId: string) => {
-          setViewingUserId(userId);
-          setCurrentScreen('userProfile');
-        }}
-      />
-    );
-  }
-
-  // Home + Map rendered together — Map stays mounted after first visit
-  // so Mapbox doesn't re-initialise on every navigation (expensive).
+  // Home + Messages + Map rendered together — the Map stays mounted after its first visit so
+  // Mapbox doesn't re-initialise (flicker + reload) each time you switch to it from another tab.
+  // (Messages used to early-return, which unmounted the map → that was the flicker on Messages→Map.)
   return (
     <>
+      {(currentScreen === 'messages' || currentScreen === 'chat') && (
+        <MessagesScreen
+          currentUserId={currentUserId!}
+          onBack={() => setCurrentScreen('home')}
+          onConversationClick={(conversationId, otherUserId) => {
+            setCurrentConversationId(conversationId);
+            setChatOtherUserId(otherUserId);
+            setCurrentScreen('chat');
+          }}
+          onHomeClick={() => setCurrentScreen('home')}
+          onMapClick={() => setCurrentScreen('map')}
+          onCreateClick={goCreate}
+          onMyEventsClick={() => setCurrentScreen('myEvents')}
+          onNavigateToCountrySelection={navigateToCountrySelection}
+          onOpenMapAt={(lat: number, lng: number, placeId?: string, place?: PlacePayload) => { setMapFocus({ latitude: lat, longitude: lng, placeId, place }); setCurrentScreen('map'); }}
+          onNavigateToUserProfile={(userId: string) => { setViewingUserId(userId); setCurrentScreen('userProfile'); }}
+          initialCountries={Array.from(selectedCountries)}
+        />
+      )}
       {currentScreen === 'home' && (
         <HomeScreen
           onNavigateToProfile={() => setCurrentScreen('profile')}
@@ -536,6 +563,21 @@ function App() {
             onFocusHandled={() => setMapFocus(null)}
           />
         </div>
+      )}
+      {/* Personal chat is an OVERLAY (not an early-return) so Messages stays mounted behind it — you see
+          the chat list through the gap as you swipe the chat away, exactly like the city group chat. */}
+      {currentScreen === 'chat' && currentConversationId && chatOtherUserId && (
+        <ChatScreen
+          conversationId={currentConversationId}
+          currentUserId={currentUserId!}
+          otherUserId={chatOtherUserId}
+          onBack={() => setCurrentScreen('messages')}
+          onOpenMapAt={(lat: number, lng: number, placeId?: string, place?: PlacePayload) => { setMapFocus({ latitude: lat, longitude: lng, placeId, place }); setCurrentScreen('map'); }}
+          onNavigateToUserProfile={(userId: string) => {
+            setViewingUserId(userId);
+            setCurrentScreen('userProfile');
+          }}
+        />
       )}
     </>
   );

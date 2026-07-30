@@ -195,7 +195,7 @@ export function MeetupBottomSheet({
   };
 
   const handleDelete = async () => {
-    if (!meetup || !confirm('למחוק את הישיבה?')) return;
+    if (!meetup || !confirm('למחוק את הציוץ?')) return;
     setLoading(true);
     try {
       await supabase.from('meetups').delete().eq('id', meetup.id);
@@ -420,7 +420,7 @@ export function MeetupBottomSheet({
                       }}
                     >
                       {loading ? 'מצטרף...' :
-                        meetup.privacy === 'open' ? '✅ הצטרף לישיבה' : '📩 שלח בקשת הצטרפות'
+                        meetup.privacy === 'open' ? '✅ הצטרף לציוץ' : '📩 שלח בקשת הצטרפות'
                       }
                     </motion.button>
                   )}
@@ -441,7 +441,7 @@ export function MeetupBottomSheet({
                       disabled={loading}
                       className="w-full py-3.5 rounded-full font-semibold text-sm text-red-500 border-2 border-red-100 hover:bg-red-50 transition-colors disabled:opacity-50"
                     >
-                      🗑 מחק ישיבה
+                      🗑 מחק ציוץ
                     </motion.button>
                   )}
                 </div>

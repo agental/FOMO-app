@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useSwipeBack } from '../hooks/useSwipeBack';
 import { MapPin, Eye, UserCheck, Cake, Instagram, MessageCircle, Search } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { BackButton } from './BackButton';
@@ -23,6 +24,7 @@ const DEFAULTS: Prefs = {
 };
 
 export function PrivacyScreen({ currentUserId, onBack }: PrivacyScreenProps) {
+  const swipeRef = useSwipeBack<HTMLDivElement>(onBack); // swipe from an edge to slide the screen back
   const [prefs, setPrefs] = useState<Prefs>(() => loadLocalPrefs(COLUMN, currentUserId, DEFAULTS));
 
   // Load the cloud copy, then let the dedicated is_location_shared column win
@@ -82,7 +84,7 @@ export function PrivacyScreen({ currentUserId, onBack }: PrivacyScreenProps) {
   ];
 
   return (
-    <div className="min-h-screen" style={{ background: 'linear-gradient(135deg, #f9fafb 0%, #f3f4f6 100%)' }} dir="rtl">
+    <div ref={swipeRef} className="min-h-screen" style={{ background: 'linear-gradient(135deg, #f9fafb 0%, #f3f4f6 100%)' }} dir="rtl">
       {/* Header */}
       <header
         className="fixed top-0 left-0 right-0 z-50 bg-white/90 backdrop-blur-xl border-b border-gray-100"

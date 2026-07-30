@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react';
-import { MoreVertical, Send, Mic, MapPin, Image as ImageIcon, ChevronDown, Camera, Smile, Paperclip, X, Crown, Pencil, Check, Map, Phone, DollarSign, Clock, Wifi, AlertTriangle, CornerUpLeft, Copy, Flag, Trash2, LogOut } from 'lucide-react';
+import { MoreVertical, Send, Mic, MapPin, Image as ImageIcon, ChevronDown, Camera, Smile, Paperclip, X, Crown, Pencil, Check, Map, Phone, DollarSign, Clock, Wifi, AlertTriangle, CornerUpLeft, Copy, Flag, Trash2, LogOut, Ban } from 'lucide-react';
 import { BackButton } from './BackButton';
+import { useSwipeBack } from '../hooks/useSwipeBack';
 import { MessageBubble } from './MessageBubble';
 import { ImageBubble } from './ImageBubble';
 import { EventChatCard } from './EventChatCard';
@@ -13,6 +14,8 @@ import { LocationName } from './LocationName';
 import { OpenLocationSheet } from './OpenLocationSheet';
 import { supabase } from '../lib/supabase';
 import { UserAvatar } from './UserAvatar';
+import { setActiveChat } from '../utils/activeChat';
+import { createPersistedRecord, loadValue, saveValue } from '../utils/warmCache';
 
 /* ─── types ─── */
 interface GMessage {
@@ -22,6 +25,7 @@ interface GMessage {
   image_url: string | null;
   location_lat: number | null; location_lng: number | null; location_name: string | null;
   created_at: string; reactions: GReaction[];
+  deleted_at?: string | null; // WhatsApp-style soft delete: non-admins see a "message deleted" placeholder
 }
 interface GReaction { emoji: string; count: number; mine: boolean; }
 interface GMember {
@@ -167,14 +171,43 @@ const TailRight = () => (
   </svg>
 );
 
-/* ── module-level caches (survive navigation) ── */
-const _msgCache:     Record<string, GMessage[]> = {};
-const _channelCache: Record<string, string>     = {}; // `${countryCode}:${cityEmoji}` → channelId
-const _countCache:   Record<string, number>     = {}; // channelId → approved member count
+/* ── module-level caches (survive navigation AND cold start via localStorage) ── */
+const _msgCache     = createPersistedRecord<GMessage[]>('cityMsgs', { entryCap: 30 });
+const _channelCache = createPersistedRecord<string>('cityChannel'); // `${countryCode}:${cityEmoji}` → channelId
+const _countCache   = createPersistedRecord<number>('cityCount');   // channelId → approved member count
 // channelId → last-confirmed membership status. Used so we only OPTIMISTICALLY treat the user as an
 // approved member when a prior DB check actually confirmed it — never merely because the channel is
 // cached (that would let a *pending* request be silently upgraded to approved by markSeen()).
-const _memberStatusCache: Record<string, 'none' | 'pending' | 'approved' | 'left'> = {};
+const _memberStatusCache = createPersistedRecord<'none' | 'pending' | 'approved' | 'left'>('cityMemberStatus');
+// channelId → the last_seen_at we last wrote (markSeen). Lets the "unread messages" divider position
+// INSTANTLY on entry from cache, instead of waiting ~1s for the DB round-trip.
+const _lastSeenCache = createPersistedRecord<string>('cityLastSeen');
+// In-memory (resets each launch): which cities we've re-resolved to their canonical channel THIS
+// session. The persisted _channelCache gives an instant first paint, but it can be STALE across
+// launches (point at a deleted/duplicate channel), which caused "I got a notification but the chat
+// shows no new message" — the message was in the real channel, the view was on the stale one. So on
+// the first open per session we always re-resolve the canonical channel and correct it.
+const _channelResolved = new Set<string>();
+
+/** Cache keys are scoped PER VIEWER (`<viewerId>:<channelId>`). Without this, a different account
+ *  signing in on the same device inherits the previous user's cached messages + "approved" status —
+ *  which briefly rendered a group's messages to someone who has no access. */
+export const cacheKey = (viewerId: string, id: string | null | undefined) => (id ? `${viewerId}:${id}` : '');
+
+/** Append an incoming group message to the persisted cache from OUTSIDE the chat (the global
+ *  realtime listener calls this even when the chat is closed), so opening the chat later shows the
+ *  new messages INSTANTLY from cache instead of only after the network fetch. */
+export function cacheIncomingGroupMessage(row: {
+  id: string; channel_id: string; user_id: string; display_name: string; avatar_url: string | null;
+  content: string | null; type: 'text' | 'image' | 'location'; image_url: string | null;
+  location_lat: number | null; location_lng: number | null; location_name: string | null; created_at: string;
+}, viewerId: string): void {
+  if (!row || !row.channel_id || !row.id || !viewerId) return;
+  const k = cacheKey(viewerId, row.channel_id);
+  const existing = _msgCache[k] || [];
+  if (existing.some(m => m.id === row.id)) return;
+  _msgCache[k] = [...existing, { ...row, reactions: [] }];
+}
 
 // Channels the user explicitly left — persisted so opening the city again shows a rejoin screen
 // instead of silently auto-joining.
@@ -195,21 +228,28 @@ export function CityGroupChat({
   onOpenMapAt,
   onNavigateToUserProfile,
 }: CityGroupChatProps) {
+  const swipeRef = useSwipeBack<HTMLDivElement>(onClose); // swipe from an edge to slide the group chat back
 
   const cityKey = `${countryCode}:${cityEmoji}`;
+  // Per-viewer cache key — cached messages / membership must NEVER leak to a different account
+  // signed in on the same device (that briefly showed a non-member the group's messages).
+  const uk = (id: string | null | undefined) => cacheKey(currentUserId, id);
   const _initChannelId = _channelCache[cityKey] ?? null;
-  const _initMsgs      = _initChannelId ? (_msgCache[_initChannelId] ?? []) : [];
+  const _initMsgs      = _initChannelId ? (_msgCache[uk(_initChannelId)] ?? []) : [];
 
   const [locSheet, setLocSheet] = useState<{ lat: number; lng: number; name: string | null } | null>(null);
   const [lastRead, setLastRead] = useState<string | null>(null); // last_seen_at captured BEFORE this open
   const [unreadReady, setUnreadReady] = useState(false);
   const [channelId,    setChannelId]    = useState<string | null>(_initChannelId);
+
+  // Mark this group as the active chat so global notifications don't buzz for it.
+  useEffect(() => { if (channelId) setActiveChat(channelId); return () => setActiveChat(null); }, [channelId]);
   const [memberStatus, setMemberStatus] = useState<'loading' | 'none' | 'pending' | 'approved' | 'just_approved' | 'left'>(
     // Only skip straight to 'approved' when a previous DB check CONFIRMED approval (cached below).
     // A cached channelId alone must NOT imply membership — otherwise a pending user re-opening the
     // group would trigger markSeen() and be auto-approved without the admin.
     _initChannelId
-      ? (_leftChannels.has(_initChannelId) ? 'left' : (_memberStatusCache[_initChannelId] ?? 'loading'))
+      ? (_leftChannels.has(_initChannelId) ? 'left' : (_memberStatusCache[uk(_initChannelId)] ?? 'loading'))
       : 'loading'
   );
   const [messages,     setMessages]     = useState<GMessage[]>(_initMsgs);
@@ -234,6 +274,17 @@ export function CityGroupChat({
   const [showInfo,     setShowInfo]     = useState(false);
   const [members,      setMembers]      = useState<GMember[]>([]);
   const [pendingReqs,  setPendingReqs]  = useState<GMember[]>([]);
+  // Am I an admin? Admin = app-level (users.role === 'admin'). Hydrated SYNCHRONOUSLY from cache so
+  // the admin view of deleted messages shows instantly on entry (no "flash" from regular→admin view),
+  // then refreshed from the server in the background.
+  const [iAmAdmin, setIAmAdmin] = useState<boolean>(() => loadValue<boolean>('iAmAdmin', false));
+  const amAdmin = iAmAdmin || members.some(x => x.user_id === currentUserId && x.is_admin);
+  useEffect(() => {
+    let cancelled = false;
+    supabase.from('users').select('role').eq('id', currentUserId).maybeSingle()
+      .then(({ data }) => { if (cancelled) return; const a = data?.role === 'admin'; setIAmAdmin(a); saveValue('iAmAdmin', a); });
+    return () => { cancelled = true; };
+  }, [currentUserId]);
   const [approvingId,  setApprovingId]  = useState<string | null>(null);
   const [groupDesc,    setGroupDesc]    = useState<string | null>(null);
   const [editingDesc,  setEditingDesc]  = useState(false);
@@ -256,7 +307,8 @@ export function CityGroupChat({
   const seenIdsRef = useRef<Set<string>>(new Set()); // ids already on screen — only NEW messages get the pop-in
   const seenInitRef = useRef(false);
   const typingChanRef = useRef<ReturnType<typeof supabase.channel> | null>(null); // broadcast channel for "is typing"
-  const lastTypingSentRef = useRef(0); // throttle outgoing typing broadcasts
+  const typingHbRef = useRef<ReturnType<typeof setInterval> | null>(null);   // MY typing heartbeat
+  const typingStopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null); // auto-stop after inactivity
   const fileRef   = useRef<HTMLInputElement>(null);
   const textRef   = useRef<HTMLTextAreaElement>(null);
   // Floating glass header / input → measure their heights so messages can
@@ -277,9 +329,9 @@ export function CityGroupChat({
     return () => ro.disconnect();
   }, [memberStatus]); // re-run once the chat (and its refs) actually renders (first open starts as 'loading')
 
-  /* ── channel init (skip if already cached) ── */
+  /* ── channel init — re-resolve the canonical channel once per session (corrects a stale cache) ── */
   useEffect(() => {
-    if (_channelCache[cityKey]) return; // already know the channelId
+    if (_channelResolved.has(cityKey)) return; // already re-resolved this session
     (async () => {
       const { data: all } = await supabase.from('group_channels')
         .select('id, city_slug, created_at')
@@ -287,8 +339,9 @@ export function CityGroupChat({
         .order('created_at', { ascending: true });
 
       const save = (id: string) => {
+        _channelResolved.add(cityKey);
         _channelCache[cityKey] = id;
-        setChannelId(id);
+        setChannelId(id); // no-op if unchanged; if the cache was stale, this switches to the real channel
       };
 
       if (all && all.length > 1) {
@@ -326,13 +379,13 @@ export function CityGroupChat({
   /* ── check membership status after channel resolves ── */
   useEffect(() => {
     if (!channelId) return;
-    if (_leftChannels.has(channelId)) { _memberStatusCache[channelId] = 'left'; setMemberStatus('left'); return; } // user left → require an explicit rejoin
+    if (_leftChannels.has(channelId)) { _memberStatusCache[uk(channelId)] = 'left'; setMemberStatus('left'); return; } // user left → require an explicit rejoin
     (async () => {
       const { data } = await supabase.from('group_members')
         .select('status').eq('channel_id', channelId).eq('user_id', currentUserId).maybeSingle();
-      if (!data) { _memberStatusCache[channelId] = 'none'; setMemberStatus('none'); return; }
+      if (!data) { _memberStatusCache[uk(channelId)] = 'none'; setMemberStatus('none'); return; }
       const st = (data.status ?? 'approved') as 'pending' | 'approved' | 'left';
-      _memberStatusCache[channelId] = st;
+      _memberStatusCache[uk(channelId)] = st;
       setMemberStatus(st);
     })();
   }, [channelId]);
@@ -340,9 +393,18 @@ export function CityGroupChat({
   /* ── join + realtime (only for approved members) ── */
   useEffect(() => {
     if (!channelId || memberStatus !== 'approved') return;
-    const markSeen = () => supabase.from('group_members').upsert(
-      { channel_id: channelId, user_id: currentUserId, display_name: currentUserName, avatar_url: currentUserAvatar, last_seen_at: new Date().toISOString(), status: 'approved' },
-      { onConflict: 'channel_id,user_id' });
+    // Instant divider: use the cached last_seen_at (from a previous visit) so "unread messages"
+    // positions immediately, before the DB confirms below.
+    const cachedSeen = _lastSeenCache[uk(channelId)];
+    if (cachedSeen) { setLastRead(cachedSeen); setUnreadReady(true); }
+    const markSeen = () => {
+      const ts = new Date().toISOString();
+      const p = supabase.from('group_members').upsert(
+        { channel_id: channelId, user_id: currentUserId, display_name: currentUserName, avatar_url: currentUserAvatar, last_seen_at: ts, status: 'approved' },
+        { onConflict: 'channel_id,user_id' });
+      _lastSeenCache[uk(channelId)] = ts; // next open's divider reads this instantly
+      return p;
+    };
     // Capture the PREVIOUS last_seen_at first, so we can open at the first unread
     // message — only THEN mark the chat as seen (overwriting last_seen_at to now).
     (async () => {
@@ -352,7 +414,7 @@ export function CityGroupChat({
       // A row that exists but isn't approved means the admin hasn't approved yet — bail out and
       // correct the UI to the pending/left screen instead of running markSeen (which sets approved).
       if (me && me.status && me.status !== 'approved') {
-        _memberStatusCache[channelId] = me.status as 'pending' | 'left';
+        _memberStatusCache[uk(channelId)] = me.status as 'pending' | 'left';
         setMemberStatus(me.status as 'pending' | 'left');
         return;
       }
@@ -360,7 +422,7 @@ export function CityGroupChat({
       setUnreadReady(true);
       const isNewJoin = !me; // no prior membership row → this open is a fresh join
       await markSeen();
-      _memberStatusCache[channelId] = 'approved';
+      _memberStatusCache[uk(channelId)] = 'approved';
       if (isNewJoin) {
         // WhatsApp-style "X joined the group" notice
         await supabase.from('group_messages').insert({ channel_id: channelId, user_id: currentUserId, display_name: currentUserName, avatar_url: currentUserAvatar, content: `${SYS_MARK}${currentUserName} הצטרף/ה לקבוצה`, type: 'text' });
@@ -373,7 +435,12 @@ export function CityGroupChat({
         (payload) => {
           if (leftRef.current) return; // we've left — don't process (and never markSeen ourselves back in)
           const msg = payload.new as Omit<GMessage, 'reactions'>;
-          setMessages(prev => prev.find(m => m.id === msg.id) ? prev : [...prev, { ...msg, reactions: [] }]);
+          setMessages(prev => {
+            if (prev.find(m => m.id === msg.id)) return prev;
+            const next = [...prev, { ...msg, reactions: [] }];
+            _msgCache[uk(channelId)] = next; // keep the persisted cache in sync so re-entry shows it instantly
+            return next;
+          });
           // they just sent → they're no longer typing
           setTypingUsers(prev => { if (!prev[msg.user_id]) return prev; const n = { ...prev }; delete n[msg.user_id]; return n; });
           if (msg.type === 'system' || (msg.content ?? '').startsWith(SYS_MARK)) loadMemberCount(); // someone left → refresh the participant count live
@@ -381,7 +448,19 @@ export function CityGroupChat({
           if (stickRef.current || msg.user_id === currentUserId) scrollToBottom(true);
           else setUnreadNew(n => n + 1); // arrived while reading history → count it for the badge
           markSeen();
-        }).subscribe((status) => {
+        })
+      // Soft-delete propagation: when a message is marked deleted, flip it live for everyone.
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'group_messages', filter: `channel_id=eq.${channelId}` },
+        (payload) => {
+          const row = payload.new as GMessage;
+          setMessages(prev => {
+            if (!prev.some(m => m.id === row.id)) return prev;
+            const next = prev.map(m => m.id === row.id ? { ...m, deleted_at: row.deleted_at ?? null } : m);
+            _msgCache[uk(channelId)] = next;
+            return next;
+          });
+        })
+      .subscribe((status) => {
           // Reliability: if the channel drops, schedule a rebuild (which re-runs this effect → reconnect + loadMessages catch-up)
           if (status === 'SUBSCRIBED') {
             if (reconnectTimerRef.current) { clearTimeout(reconnectTimerRef.current); reconnectTimerRef.current = null; }
@@ -402,22 +481,31 @@ export function CityGroupChat({
         if (showInfoRef.current) loadGroupInfo(); // refresh the open members list live too
       }).subscribe();
     // ── live typing indicator over ephemeral broadcast (no DB writes) ──
+    // Typing via broadcast (~100ms, instant). The typer sends a "typing" heartbeat every 1.2s while
+    // typing, so anyone who opens the group mid-typing catches it within ~1s; a per-user prune (below)
+    // clears the dot 4s after the last heartbeat.
     const typingSub = supabase.channel(`group-typing-${channelId}`, { config: { broadcast: { self: false } } })
       .on('broadcast', { event: 'typing' }, ({ payload }) => {
-        const p = payload as { userId: string; name: string };
+        const p = payload as { userId?: string; name?: string };
         if (!p?.userId || p.userId === currentUserId) return;
-        setTypingUsers(prev => ({ ...prev, [p.userId]: { name: p.name, ts: Date.now() } }));
+        setTypingUsers(prev => ({ ...prev, [p.userId!]: { name: p.name || 'מישהו', ts: Date.now() } }));
       })
       .on('broadcast', { event: 'stop' }, ({ payload }) => {
-        const p = payload as { userId: string };
+        const p = payload as { userId?: string };
         if (!p?.userId) return;
-        setTypingUsers(prev => { if (!prev[p.userId]) return prev; const n = { ...prev }; delete n[p.userId]; return n; });
+        setTypingUsers(prev => { if (!prev[p.userId!]) return prev; const n = { ...prev }; delete n[p.userId!]; return n; });
       })
       .subscribe();
     typingChanRef.current = typingSub;
     return () => {
-      if (!leftRef.current) supabase.from('group_members').update({ last_seen_at: new Date().toISOString() }).eq('channel_id', channelId).eq('user_id', currentUserId);
+      if (!leftRef.current) {
+        const ts = new Date().toISOString();
+        _lastSeenCache[uk(channelId)] = ts; // keep the cached divider position in sync with this "seen"
+        supabase.from('group_members').update({ last_seen_at: ts }).eq('channel_id', channelId).eq('user_id', currentUserId);
+      }
       if (reconnectTimerRef.current) { clearTimeout(reconnectTimerRef.current); reconnectTimerRef.current = null; }
+      if (typingStopTimerRef.current) { clearTimeout(typingStopTimerRef.current); typingStopTimerRef.current = null; }
+      if (typingHbRef.current) { clearInterval(typingHbRef.current); typingHbRef.current = null; }
       typingChanRef.current = null;
       supabase.removeChannel(msgSub); supabase.removeChannel(rxSub); supabase.removeChannel(memSub); supabase.removeChannel(typingSub);
     };
@@ -430,19 +518,39 @@ export function CityGroupChat({
   /* ── mark rendered messages as "seen" (post-commit) so the pop-in plays once per new message ── */
   useEffect(() => { messages.forEach(m => seenIdsRef.current.add(m.id)); }, [messages]);
 
-  /* ── prune stale typing entries (no broadcast for >4s ⇒ stopped) ── */
+  /* ── prune stale typing entries (no heartbeat for >4s ⇒ stopped) ── */
   useEffect(() => {
     if (Object.keys(typingUsers).length === 0) return;
     const id = setInterval(() => {
       const now = Date.now();
       setTypingUsers(prev => {
         const n: typeof prev = {}; let changed = false;
-        for (const k in prev) { if (now - prev[k].ts < 15000) n[k] = prev[k]; else changed = true; }
+        for (const k in prev) { if (now - prev[k].ts < 4000) n[k] = prev[k]; else changed = true; }
         return changed ? n : prev;
       });
     }, 1500);
     return () => clearInterval(id);
   }, [typingUsers]);
+
+  // Broadcast a "typing" heartbeat while typing; tell others to stop on pause/send.
+  const emitTyping = () => {
+    const ch = typingChanRef.current;
+    if (!ch) return;
+    if (!typingHbRef.current) {
+      const beat = () => ch.send({ type: 'broadcast', event: 'typing', payload: { userId: currentUserId, name: currentUserName } });
+      beat();
+      typingHbRef.current = setInterval(beat, 1200);
+    }
+    if (typingStopTimerRef.current) clearTimeout(typingStopTimerRef.current);
+    typingStopTimerRef.current = setTimeout(stopTyping, 3000);
+  };
+  const stopTyping = () => {
+    if (typingStopTimerRef.current) { clearTimeout(typingStopTimerRef.current); typingStopTimerRef.current = null; }
+    if (typingHbRef.current) {
+      clearInterval(typingHbRef.current); typingHbRef.current = null;
+      typingChanRef.current?.send({ type: 'broadcast', event: 'stop', payload: { userId: currentUserId } });
+    }
+  };
 
   /* ── real-time approval listener for pending users ── */
   useEffect(() => {
@@ -501,7 +609,7 @@ export function CityGroupChat({
     // user from the approved count + members list, and the group-mem subscription pushes it live.
     const { error: updErr } = await supabase.from('group_members').update({ status: 'left' }).eq('channel_id', channelId).eq('user_id', currentUserId);
     if (updErr) console.error('leave: status update failed', updErr);
-    _memberStatusCache[channelId] = 'left';
+    _memberStatusCache[uk(channelId)] = 'left';
     _leftChannels.add(channelId); saveLeftChannels(); // remember: don't auto-rejoin on next open
     setLeaving(false);
     onClose(); // exit back to the messages list
@@ -578,27 +686,37 @@ export function CityGroupChat({
   const loadMessages = useCallback(async () => {
     if (!channelId) return;
     // Show cached messages instantly — no skeleton if we have them
-    if (_msgCache[channelId]?.length) {
-      _msgCache[channelId].forEach(m => seenIdsRef.current.add(m.id)); // fetched, not "new" → no pop-in
-      setMessages(_msgCache[channelId]);
+    if (_msgCache[uk(channelId)]?.length) {
+      _msgCache[uk(channelId)].forEach(m => seenIdsRef.current.add(m.id)); // fetched, not "new" → no pop-in
+      setMessages(_msgCache[uk(channelId)]);
       setMsgsLoading(false);
     }
-    // Always fetch fresh in background
-    const { data: msgs } = await supabase.from('group_messages').select('*').eq('channel_id', channelId).order('created_at', { ascending: true }).limit(80);
-    if (!msgs) { setMsgsLoading(false); return; }
+    // Always fetch fresh in background — the LATEST 80 (desc + reverse), not the oldest 80, so new
+    // messages always load on entry even once the channel has more than 80 messages.
+    const { data: msgsDesc } = await supabase.from('group_messages').select('*').eq('channel_id', channelId).order('created_at', { ascending: false }).limit(80);
+    if (!msgsDesc) { setMsgsLoading(false); return; }
+    const msgs = msgsDesc.slice().reverse(); // back to chronological order (oldest → newest)
+    // Render the messages + the "unread" divider IMMEDIATELY after this first query — don't wait for
+    // the reactions round-trip (that's a second ~0.5s hop). Reactions merge in a moment later.
+    const prelim = msgs.map(m => ({ ...m, reactions: (_msgCache[uk(channelId)]?.find(o => o.id === m.id)?.reactions) ?? [] }));
+    _msgCache[uk(channelId)] = prelim;
+    prelim.forEach(m => seenIdsRef.current.add(m.id));
+    setMessages(prelim);
+    setMsgsLoading(false);
+    // Reactions in a second pass — secondary, doesn't gate the messages/divider.
     const ids = msgs.map(m => m.id);
-    const { data: rxs } = ids.length ? await supabase.from('group_reactions').select('*').in('message_id', ids) : { data: [] };
+    if (!ids.length) return;
+    const { data: rxs } = await supabase.from('group_reactions').select('*').in('message_id', ids);
+    if (!rxs) return;
     const rxMap: Record<string, { emoji: string; users: string[] }[]> = {};
-    for (const rx of rxs || []) {
+    for (const rx of rxs) {
       if (!rxMap[rx.message_id]) rxMap[rx.message_id] = [];
       const ex = rxMap[rx.message_id].find(r => r.emoji === rx.emoji);
       if (ex) ex.users.push(rx.user_id); else rxMap[rx.message_id].push({ emoji: rx.emoji, users: [rx.user_id] });
     }
     const result = msgs.map(m => ({ ...m, reactions: (rxMap[m.id] || []).map(r => ({ emoji: r.emoji, count: r.users.length, mine: r.users.includes(currentUserId) })) }));
-    _msgCache[channelId] = result;
-    result.forEach(m => seenIdsRef.current.add(m.id)); // fetched batch, not "new" → no pop-in on first open / reaction reload
+    _msgCache[uk(channelId)] = result;
     setMessages(result);
-    setMsgsLoading(false);
   }, [channelId, currentUserId]);
 
   // Catch up on messages missed while the app was backgrounded (the realtime socket drops on lock/background).
@@ -621,18 +739,12 @@ export function CityGroupChat({
     }
   };
 
-  // WhatsApp-style sender colors: assign a distinct color per user by order of appearance
-  // (the current user is skipped — their bubbles are orange). Colors repeat only once the palette runs out.
-  const nameColorMap = useMemo(() => {
-    const map: Record<string, string> = {};
-    let i = 0;
-    for (const m of messages) {
-      const n = m.display_name;
-      if (n && n !== currentUserName && !(n in map)) { map[n] = NAME_COLORS[i % NAME_COLORS.length]; i++; }
-    }
-    return map;
-  }, [messages, currentUserName]);
-  const colorFor = (n: string) => nameColorMap[n] ?? senderColor(n);
+  // WhatsApp-style sender colors: a STABLE color per USER, derived by hashing the user_id. Because it
+  // depends only on the user_id (not message order or which participants are currently loaded), a
+  // user's color NEVER changes — this was the bug: the old map assigned by order-of-appearance, so it
+  // shifted every time messages loaded in a different order. Pass user_id for senders/avatars; a
+  // display-name still hashes fine for replies where only the name is known.
+  const colorFor = (key: string) => senderColor(key);
 
   // First message (from someone else) newer than our previous last_seen_at.
   const firstUnreadId = (() => {
@@ -657,6 +769,9 @@ export function CityGroupChat({
     stickRef.current = true;
     const pin = () => {
       if (!scrollRef.current) return;
+      // Never fight an active user gesture — if they just touched/scrolled, stop pinning immediately
+      // (this was the "scroll freezes on entry until I scroll up" bug).
+      if (Date.now() - lastGestureRef.current < 500) return;
       if (stickRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
       else if (keepUnreadRef.current) scrollToUnread();
     };
@@ -683,6 +798,7 @@ export function CityGroupChat({
   // Re-anchor whenever those heights settle.
   useLayoutEffect(() => {
     if (!scrollRef.current) return;
+    if (Date.now() - lastGestureRef.current < 500) return; // don't re-anchor mid-gesture
     if (stickRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     else if (keepUnreadRef.current) scrollToUnread();
   }, [headerH, inputH]);
@@ -694,6 +810,7 @@ export function CityGroupChat({
     // Programmatic scrolls and content-growth-induced scroll events must NOT
     // flip the stick flag, otherwise an image loading would strand us mid-chat.
     const markGesture = () => { lastGestureRef.current = Date.now(); };
+    el.addEventListener('touchstart', markGesture, { passive: true });
     const onScroll = () => {
       const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
       setShowScroll(dist > 100);
@@ -708,6 +825,7 @@ export function CityGroupChat({
     el.addEventListener('touchmove', markGesture, { passive: true });
     el.addEventListener('keydown', markGesture);
     return () => {
+      el.removeEventListener('touchstart', markGesture);
       el.removeEventListener('scroll', onScroll);
       el.removeEventListener('wheel', markGesture);
       el.removeEventListener('touchmove', markGesture);
@@ -722,6 +840,7 @@ export function CityGroupChat({
     const el = scrollRef.current;
     if (!content || !el) return;
     const ro = new ResizeObserver(() => {
+      if (Date.now() - lastGestureRef.current < 500) return; // don't snap while the user is scrolling
       if (stickRef.current) el.scrollTop = el.scrollHeight;
       else if (keepUnreadRef.current) scrollToUnread();
     });
@@ -732,8 +851,7 @@ export function CityGroupChat({
   const sendText = async () => {
     if (!text.trim() || !channelId || sending) return;
     setSending(true);
-    lastTypingSentRef.current = 0;
-    typingChanRef.current?.send({ type: 'broadcast', event: 'stop', payload: { userId: currentUserId } });
+    stopTyping();
     let body = text.trim(); setText('');
     if (replyTo) {
       body = encodeReply(replyTo.display_name, msgSnippet(replyTo), body);
@@ -822,10 +940,21 @@ export function CityGroupChat({
   };
   const menuDelete = async () => {
     const m = menuMsg; setMenuMsg(null);
-    if (!m) return;
-    setMessages(prev => prev.filter(x => x.id !== m.id)); // optimistic
-    const { error } = await supabase.from('group_messages').delete().eq('id', m.id);
-    if (error) { showToast('לא ניתן למחוק'); loadMessages(); } else { showToast('ההודעה נמחקה'); }
+    if (!m || !channelId) return;
+    const ts = new Date().toISOString();
+    // Optimistic soft-delete — instantly flips to "message deleted", no wait for the server.
+    setMessages(prev => { const u = prev.map(x => x.id === m.id ? { ...x, deleted_at: ts } : x); _msgCache[uk(channelId)] = u; return u; });
+    // Persist via a SECURITY DEFINER RPC — group_messages has no UPDATE RLS policy, so a direct
+    // update is silently blocked (0 rows) and never reaches other members. The RPC checks
+    // author-or-admin and its update is what replicates to everyone in realtime.
+    const { data, error } = await supabase.rpc('soft_delete_group_message', { p_message_id: m.id, p_actor: currentUserId });
+    if (error || data === false) {
+      // Failed / not allowed — revert the optimistic delete.
+      setMessages(prev => { const u = prev.map(x => x.id === m.id ? { ...x, deleted_at: null } : x); _msgCache[uk(channelId)] = u; return u; });
+      showToast('לא ניתן למחוק');
+    } else {
+      showToast('ההודעה נמחקה');
+    }
   };
   const openEventById = async (id: string) => {
     const { data } = await supabase.from('events').select('*').eq('id', id).maybeSingle();
@@ -868,6 +997,31 @@ export function CityGroupChat({
         </div>
       );
     }
+    // Soft-deleted (WhatsApp-style): everyone sees "message deleted"; admins ALSO see the original below.
+    if (msg.deleted_at) {
+      const mineD = msg.user_id === currentUserId;
+      const original = amAdmin
+        ? (msg.type === 'text' ? parseReply(msg.content ?? '').body
+          : msg.type === 'image' ? '📷 תמונה'
+          : msg.type === 'location' ? '📍 מיקום'
+          : (msg.content ?? ''))
+        : null;
+      return (
+        <div key={msg.id} style={{ display: 'flex', justifyContent: mineD ? 'flex-end' : 'flex-start', padding: '2px 12px', marginBottom: 6 }}>
+          <div style={{ maxWidth: '80%', background: mineD ? '#FFE9D6' : '#FFFFFF', borderRadius: 14, padding: '7px 12px', boxShadow: '0 1px 1px rgba(0,0,0,0.05)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <Ban size={14} style={{ color: '#9AA0A6', flexShrink: 0 }} strokeWidth={2} />
+              <span dir="rtl" style={{ fontSize: 13.5, fontStyle: 'italic', color: '#9AA0A6' }}>הודעה זו נמחקה</span>
+            </div>
+            {original && (
+              <div dir="rtl" style={{ marginTop: 4, paddingTop: 4, borderTop: '1px dashed #E2DED7', fontSize: 12.5, color: '#8A8F96' }}>
+                <span style={{ color: '#C0392B', fontWeight: 700 }}>גלוי למנהל: </span>{original}
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
     const mine    = msg.user_id === currentUserId;
     const prev    = messages[idx - 1];
     const next    = messages[idx + 1];
@@ -882,7 +1036,7 @@ export function CityGroupChat({
 
     const bubbleBg  = mine ? '#FFD4A8' : '#FFFFFF';
     const textClr   = mine ? '#7C3400' : '#111111';
-    const nameClr   = colorFor(msg.display_name);
+    const nameClr   = colorFor(msg.user_id);
     const showName  = !mine; // group sender label, inside every incoming bubble
     const noPad     = msg.type === 'image' || msg.type === 'location';
     const timeStr   = fmtTime(msg.created_at);
@@ -921,7 +1075,7 @@ export function CityGroupChat({
               showAvatar ? (
                 <div
                   onClick={() => onNavigateToUserProfile?.(msg.user_id)}
-                  style={{ width: 26, height: 26, flexShrink: 0, borderRadius: '50%', overflow: 'hidden', background: colorFor(msg.display_name), display: 'flex', alignItems: 'center', justifyContent: 'center', boxSizing: 'border-box', border: `2px solid ${colorFor(msg.display_name)}`, marginBottom: -1, cursor: onNavigateToUserProfile ? 'pointer' : 'default' }}
+                  style={{ width: 30, height: 30, flexShrink: 0, borderRadius: '50%', overflow: 'hidden', background: colorFor(msg.user_id), display: 'flex', alignItems: 'center', justifyContent: 'center', boxSizing: 'border-box', marginBottom: -1, cursor: onNavigateToUserProfile ? 'pointer' : 'default' }}
                 >
                   {msg.avatar_url
                     ? <UserAvatar userId={msg.user_id} displayName={msg.display_name} avatarUrl={msg.avatar_url} size="small" />
@@ -1078,7 +1232,7 @@ export function CityGroupChat({
       { channel_id: channelId, user_id: currentUserId, display_name: currentUserName, avatar_url: currentUserAvatar, last_seen_at: new Date().toISOString(), status: 'pending' },
       { onConflict: 'channel_id,user_id' }
     );
-    _memberStatusCache[channelId] = 'pending';
+    _memberStatusCache[uk(channelId)] = 'pending';
     setMemberStatus('pending');
   };
 
@@ -1102,7 +1256,7 @@ export function CityGroupChat({
     );
 
     return (
-      <div className="fomo-join" style={{
+      <div ref={swipeRef} className="fomo-join" style={{
         position: 'fixed', inset: 0, zIndex: 120,
         display: 'flex', flexDirection: 'column',
         fontFamily: "'Rubik','Heebo',sans-serif",
@@ -1156,7 +1310,7 @@ export function CityGroupChat({
                 המנהל אישר את בקשתך להצטרף לקבוצת <strong style={{ color: '#1C1C1E' }}>{cityName}</strong> 🎊
               </p>
               <button className="fomo-btn"
-                onClick={() => { if (channelId) _memberStatusCache[channelId] = 'approved'; setMemberStatus('approved'); }}
+                onClick={() => { if (channelId) _memberStatusCache[uk(channelId)] = 'approved'; setMemberStatus('approved'); }}
                 style={{ width: '100%', maxWidth: 300, padding: '15px 24px', borderRadius: 16, border: 'none', background: 'linear-gradient(135deg,#34D399,#059669)', color: '#fff', fontSize: 16.5, fontWeight: 700, cursor: 'pointer', boxShadow: '0 8px 22px rgba(16,185,129,0.35)', animation: 'fomo-rise .5s both .2s' }}>
                 כניסה לקבוצה
               </button>
@@ -1222,7 +1376,7 @@ export function CityGroupChat({
 
   /* ════════════ RENDER ════════════ */
   return (
-    <div style={{
+    <div ref={swipeRef} style={{
       position: 'fixed', inset: 0, zIndex: 120,
       display: 'flex', flexDirection: 'column',
       fontFamily: "'Rubik','Heebo',sans-serif",
@@ -1301,7 +1455,7 @@ export function CityGroupChat({
 
       {/* ── Messages area with WA-style bg (fills container; scrolls behind glass bars) ── */}
       <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: '#F3EFE9', backgroundImage: 'url(/chat-bg.png)', backgroundSize: '50%', backgroundRepeat: 'repeat' }}>
-        <div ref={scrollRef} style={{ position: 'absolute', inset: 0, overflowY: 'auto', paddingTop: headerH + 10, paddingBottom: inputH + 8 }}>
+        <div ref={scrollRef} className="scrollbar-hide" style={{ position: 'absolute', inset: 0, overflowY: 'auto', WebkitOverflowScrolling: 'touch', overscrollBehavior: 'contain', paddingTop: headerH + 10, paddingBottom: inputH + 8 }}>
          <div ref={contentRef}>
 
           {/* Skeleton while loading */}
@@ -1793,7 +1947,7 @@ export function CityGroupChat({
 
         {/* Reply preview (WhatsApp-style) */}
         {replyTo && (() => {
-          const previewClr = replyTo.display_name === currentUserName ? '#EA580C' : colorFor(replyTo.display_name);
+          const previewClr = replyTo.user_id === currentUserId ? '#EA580C' : colorFor(replyTo.user_id);
           return (
           <div dir="rtl" style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#fff', borderRadius: 14, padding: '6px 10px', boxShadow: '0 2px 10px rgba(0,0,0,0.12)' }}>
             <div style={{ width: 3, alignSelf: 'stretch', borderRadius: 3, background: previewClr }} />
@@ -1857,16 +2011,7 @@ export function CityGroupChat({
             onChange={e => {
               const v = e.target.value;
               setText(v);
-              const now = Date.now();
-              if (!v) {
-                // input cleared → stop showing immediately
-                lastTypingSentRef.current = 0;
-                typingChanRef.current?.send({ type: 'broadcast', event: 'stop', payload: { userId: currentUserId } });
-              } else if (now - lastTypingSentRef.current > 1500) {
-                // keep the indicator alive while there's text being changed (expires 15s after last change)
-                lastTypingSentRef.current = now;
-                typingChanRef.current?.send({ type: 'broadcast', event: 'typing', payload: { userId: currentUserId, name: currentUserName } });
-              }
+              if (!v) stopTyping(); else emitTyping();
             }}
             onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendText(); } }}
             onInput={onInput}
@@ -1906,7 +2051,6 @@ export function CityGroupChat({
       {/* ── Long-press message menu (WhatsApp-style): reactions + actions ── */}
       {menuMsg && (() => {
         const isMine = menuMsg.user_id === currentUserId;
-        const amAdmin = members.some(x => x.user_id === currentUserId && x.is_admin);
         const canDelete = isMine || amAdmin;
         return (
           <div

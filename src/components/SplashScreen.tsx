@@ -41,16 +41,25 @@ export function SplashScreen({ onComplete }: { onComplete: () => void }) {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
+    // Render at the device's true pixel density so the dot / rings / particles are CRISP on high-DPI
+    // phones (the backing store was 1× before → stretched + blurry). DPR capped at 3 for perf, and the
+    // context is pre-scaled so all drawing math below stays in CSS pixels (cssW × cssH).
+    let cssW = window.innerWidth, cssH = window.innerHeight;
     const resize = () => {
-      canvas.width  = window.innerWidth;
-      canvas.height = window.innerHeight;
+      const dpr = Math.min(window.devicePixelRatio || 1, 3);
+      cssW = window.innerWidth; cssH = window.innerHeight;
+      canvas.style.width  = cssW + 'px';
+      canvas.style.height = cssH + 'px';
+      canvas.width  = Math.round(cssW * dpr);
+      canvas.height = Math.round(cssH * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     };
     resize();
     window.addEventListener('resize', resize, { passive: true });
 
     /* Particles: start spread around edges, drift toward center */
     const makeParts = () => {
-      const W = canvas.width, H = canvas.height;
+      const W = cssW, H = cssH;
       const cx = W / 2, cy = H / 2;
       return Array.from({ length: 55 }, () => {
         const angle = Math.random() * Math.PI * 2;
@@ -72,7 +81,7 @@ export function SplashScreen({ onComplete }: { onComplete: () => void }) {
     const draw = (ms: number) => {
       if (!startMs) startMs = ms;
       const t  = (ms - startMs) / 1000;
-      const W  = canvas.width, H = canvas.height;
+      const W  = cssW, H = cssH;
       const cx = W / 2, cy = H / 2;
       const ph = phaseRef.current;
 
@@ -154,7 +163,7 @@ export function SplashScreen({ onComplete }: { onComplete: () => void }) {
     <div
       style={{
         position: 'fixed', inset: 0, zIndex: 9999,
-        background: '#060D1B',
+        background: '#FFFFFF',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         opacity:    phase === 'exit' ? 0 : 1,
         transition: phase === 'exit' ? 'opacity 0.9s cubic-bezier(0.4,0,0.2,1)' : 'none',
@@ -183,7 +192,7 @@ export function SplashScreen({ onComplete }: { onComplete: () => void }) {
           position: 'absolute',
           left: `${g.x}%`, top: `${g.y}%`,
           transform: 'translate(-50%, -50%)',
-          fontSize: 22, opacity: 0,
+          fontSize: 30, opacity: 0,
           animation: `ghostPop 1.4s ${g.delay}s ease-out forwards`,
           pointerEvents: 'none',
         }}>{g.emoji}</div>
@@ -196,7 +205,7 @@ export function SplashScreen({ onComplete }: { onComplete: () => void }) {
           style={{
             fontSize: 'clamp(76px, 22vw, 112px)',
             fontWeight: 900, lineHeight: 1, margin: 0,
-            color: '#FFFFFF', letterSpacing: '-4px',
+            color: '#0B1220', letterSpacing: '-4px',
             fontFamily: "'Heebo', sans-serif",
             whiteSpace: 'nowrap',
           }}
@@ -236,7 +245,7 @@ export function SplashScreen({ onComplete }: { onComplete: () => void }) {
         <p style={{
           margin: '16px 0 0',
           fontSize: 16, fontWeight: 500,
-          color: 'rgba(255,255,255,0.45)',
+          color: 'rgba(17,24,39,0.5)',
           letterSpacing: '0.12em', textTransform: 'uppercase',
           fontFamily: "'Heebo', sans-serif",
           opacity:    phase === 'hold' || phase === 'exit' ? 1 : 0,
@@ -252,8 +261,8 @@ export function SplashScreen({ onComplete }: { onComplete: () => void }) {
 
         @keyframes ghostPop {
           0%   { opacity: 0;    transform: translate(-50%,-50%) scale(0.45); }
-          55%  { opacity: 0.26; transform: translate(-50%,-50%) scale(1.12); }
-          100% { opacity: 0.15; transform: translate(-50%,-50%) scale(1.00); }
+          55%  { opacity: 0.85; transform: translate(-50%,-50%) scale(1.12); }
+          100% { opacity: 0.65; transform: translate(-50%,-50%) scale(1.00); }
         }
 
         @keyframes dotBorn {

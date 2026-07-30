@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useSwipeBack } from '../hooks/useSwipeBack';
 import { Bell, Calendar, Clock, Users, MessageCircle, UserPlus, Star, Megaphone } from 'lucide-react';
 import { SettingsToggle } from './SettingsToggle';
 import { BackButton } from './BackButton';
@@ -24,6 +25,7 @@ const DEFAULTS: Prefs = {
 };
 
 export function NotificationsScreen({ currentUserId, onBack }: NotificationsScreenProps) {
+  const swipeRef = useSwipeBack<HTMLDivElement>(onBack); // swipe from an edge to slide the screen back
   const [prefs, setPrefs] = useState<Prefs>(() => loadLocalPrefs(COLUMN, currentUserId, DEFAULTS));
 
   // Pull the cloud copy once available (overrides the local seed).
@@ -78,7 +80,7 @@ export function NotificationsScreen({ currentUserId, onBack }: NotificationsScre
   ];
 
   return (
-    <div className="min-h-screen" style={{ background: 'linear-gradient(135deg, #f9fafb 0%, #f3f4f6 100%)' }} dir="rtl">
+    <div ref={swipeRef} className="min-h-screen" style={{ background: 'linear-gradient(135deg, #f9fafb 0%, #f3f4f6 100%)' }} dir="rtl">
       {/* Header */}
       <header
         className="fixed top-0 left-0 right-0 z-50 bg-white/90 backdrop-blur-xl border-b border-gray-100"

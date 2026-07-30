@@ -1,11 +1,14 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { X, MapPin, Lock, Users, Upload, ChevronLeft, Check, Tag, Plus, Trash2 } from 'lucide-react';
+import { X, MapPin, Lock, Users, Upload, ChevronLeft, Check, Tag, Plus, Trash2, Landmark } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import mapboxgl from 'mapbox-gl';
 import confetti from 'canvas-confetti';
 import { EventService } from '../services/eventService';
 import { reverseGeocode } from '../utils/geocoding';
+import { joinEventGroup } from '../utils/eventGroup';
 import type { TicketType } from '../types/event';
+import { SellerOnboardingSheet } from './SellerOnboardingSheet';
+import { getMySellerAccount, isSellerReady, type SellerAccount } from '../services/paymentService';
 
 interface MapCreateEventFlowProps {
   isOpen: boolean;
@@ -25,7 +28,7 @@ const newTicketId = () => Math.random().toString(36).slice(2, 9);
 const freshTicket = (name = ''): TicketDraft => ({ id: newTicketId(), name, price: '' });
 
 const EVENT_TYPES = [
-  { id: 'parties',   label: 'מסיבות',   emoji: '🎉', color: '#A855F7' },
+  { id: 'parties',   label: 'מסיבות',   emoji: '🎉', color: '#7C3AED' },
   { id: 'sports',    label: 'אטרקציות', emoji: '🎡', color: '#0EA5E9' },
   { id: 'treks',     label: 'טיולים',   emoji: '🏕️', color: '#22C55E' },
   { id: 'workshops', label: 'סדנאות',   emoji: '🧘', color: '#FACC15' },
@@ -97,6 +100,9 @@ export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initial
   const [noLimit,       setNoLimit]       = useState(false);
   const [isPaid,        setIsPaid]        = useState(false);
   const [ticketTypes,   setTicketTypes]   = useState<TicketDraft[]>([freshTicket('כרטיס רגיל')]);
+  const [sellerAccount, setSellerAccount] = useState<SellerAccount | null>(null);
+  const [showSellerSheet, setShowSellerSheet] = useState(false);
+  const [createGroup,   setCreateGroup]   = useState(false);
   const [imageUrl,      setImageUrl]      = useState('');
   const [imageFile,     setImageFile]     = useState<File|null>(null);
   const [imagePreview,  setImagePreview]  = useState('');
@@ -120,6 +126,15 @@ export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initial
     mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN || '';
     return () => { mapRef.current?.remove(); mapRef.current = null; };
   }, []);
+
+  // Load the organizer's payout account the first time they enable paid tickets, so the status
+  // card + the publish gate know whether they can already receive money.
+  useEffect(() => {
+    if (!isPaid || !userId || sellerAccount) return;
+    getMySellerAccount(userId).then(setSellerAccount);
+  }, [isPaid, userId, sellerAccount]);
+
+  const sellerReady = isSellerReady(sellerAccount);
 
   // Pre-fill fields when opening in edit mode
   useEffect(() => {
@@ -146,6 +161,7 @@ export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initial
       setIsPaid(false);
       setTicketTypes([freshTicket('כרטיס רגיל')]);
     }
+    setCreateGroup(!!existingEvent.has_group);
     setImageUrl(existingEvent.image_url || '');
     setImagePreview(existingEvent.image_url || '');
     // Parse event_date to day + time
@@ -268,6 +284,13 @@ export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initial
       alert('מועד האירוע כבר עבר — בחר תאריך ושעה עתידיים.');
       return;
     }
+    // Paid event → the organizer must have a connected payout account before publishing,
+    // otherwise the ticket money would have nowhere to land. Open the connect sheet instead.
+    const hasPaidTickets = isPaid && ticketTypes.some(t => Number(t.price) > 0);
+    if (hasPaidTickets && !sellerReady) {
+      setShowSellerSheet(true);
+      return;
+    }
     setSubmitting(true);
     try {
       let finalImage: string | null = null;
@@ -306,6 +329,7 @@ export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initial
         image_url: finalImage || imageUrl || existingEvent?.image_url || undefined,
         price: entryPrice,
         ticket_types: validTickets,
+        has_group: createGroup,
       };
 
       let result: Record<string, any>;
@@ -315,6 +339,11 @@ export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initial
         const created = await EventService.createEvent({ user_id: userId, ...payload });
         if (!created) throw new Error('שגיאה בשמירת האירוע בשרת');
         result = created;
+      }
+      // If the organizer turned on a group, create its channel + add themselves as a member.
+      if (createGroup && result?.id) {
+        try { await joinEventGroup(result as { id: string }); }
+        catch (e) { console.error('[MapCreateEventFlow] create event group failed:', e); }
       }
       setCreatedEvent(result);
       setShowSuccess(true);
@@ -344,7 +373,7 @@ export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initial
     mapRef.current?.remove(); mapRef.current = null;
     setStep(1); setTitle(''); setDescription(''); setSelectedEmoji('🎉'); setEventType('parties');
     setSelectedDay(''); setSelectedTime('20:00'); setMaxAttendees(20);
-    setIsPaid(false); setTicketTypes([freshTicket('כרטיס רגיל')]);
+    setIsPaid(false); setTicketTypes([freshTicket('כרטיס רגיל')]); setCreateGroup(false);
     setImageUrl(''); setImageFile(null); setImagePreview(''); setLocationName('');
     setDetectedCountry(null); setLatitude(initialLocation?.latitude||null); setLongitude(initialLocation?.longitude||null);
     onClose();
@@ -813,9 +842,55 @@ export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initial
                         </button>
 
                         <p className="text-[11px] text-[#8E8E93] mt-2 text-center">הקונה יבחר איזה כרטיס לקנות בדף האירוע</p>
+
+                        {/* payout account — where the ticket money lands after the event */}
+                        <button type="button" onClick={() => setShowSellerSheet(true)}
+                          className="mt-3 w-full flex items-center gap-2.5 rounded-[14px] px-3 py-2.5 active:scale-[0.98] transition-transform"
+                          style={{ background: sellerReady ? '#F0FDF4' : '#FFF7ED', border: `1px solid ${sellerReady ? '#BBF7D0' : `${accent}44`}` }}>
+                          <div className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0"
+                            style={{ background: sellerReady ? '#DCFCE7' : `${accent}18` }}>
+                            {sellerReady
+                              ? <Check className="w-4 h-4" style={{ color: '#16A34A' }} strokeWidth={3} />
+                              : <Landmark className="w-4 h-4" style={{ color: accent }} />}
+                          </div>
+                          <div className="flex-1 min-w-0 text-right">
+                            <p className="text-[13px] font-bold" style={{ color: sellerReady ? '#166534' : '#1C1C1E' }}>
+                              {sellerReady ? 'חשבון התשלומים מחובר' : 'חבר חשבון לקבלת התשלום'}
+                            </p>
+                            <p className="text-[11px]" style={{ color: sellerReady ? '#22C55E' : '#8E8E93' }}>
+                              {sellerReady ? 'הכסף יגיע אליך אחרי האירוע' : 'חובה לפני פרסום אירוע בתשלום'}
+                            </p>
+                          </div>
+                          {!sellerReady && <ChevronLeft className="w-4 h-4 -scale-x-100 flex-shrink-0" style={{ color: '#C7C7CC' }} />}
+                        </button>
                       </motion.div>
                     )}
                   </AnimatePresence>
+                </div>
+
+                {/* event group chat */}
+                <div className="bg-white rounded-[20px] p-4 shadow-sm border border-black/[0.05]">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0" style={{ background: `${accent}18` }}>
+                        <Users className="w-4 h-4" style={{ color: accent }} />
+                      </div>
+                      <div>
+                        <p className="text-[15px] font-semibold text-[#1C1C1E]">קבוצת צ׳אט לאירוע</p>
+                        <p className="text-[11px] text-[#8E8E93]">{createGroup ? 'כל מי שאושר יצורף אוטומטית לקבוצה' : 'ללא קבוצת צ׳אט'}</p>
+                      </div>
+                    </div>
+                    <div dir="ltr" className="relative w-[50px] h-[30px] rounded-full flex-shrink-0 overflow-hidden transition-colors duration-200 cursor-pointer"
+                      style={{ background: createGroup ? accent : '#D1D1D6' }}
+                      onClick={() => setCreateGroup(v => !v)}>
+                      <motion.div
+                        animate={{ x: createGroup ? 22 : 2 }}
+                        transition={{ type: 'spring', damping: 22, stiffness: 320 }}
+                        className="absolute top-[3px] left-0 w-[24px] h-[24px] bg-white rounded-full"
+                        style={{ boxShadow: '0 1px 4px rgba(0,0,0,0.25)' }}
+                      />
+                    </div>
+                  </div>
                 </div>
 
                 {/* image */}
@@ -927,6 +1002,15 @@ export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initial
         </div>
       </motion.div>
 
+      {/* Bank-connect sheet — opened from the payout card or when publishing a paid event
+          without a connected account. On success the status card + publish gate unlock. */}
+      {showSellerSheet && (
+        <SellerOnboardingSheet
+          userId={userId}
+          onClose={() => setShowSellerSheet(false)}
+          onReady={(acc) => setSellerAccount(acc)}
+        />
+      )}
     </>
   );
 }

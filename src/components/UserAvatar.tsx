@@ -1,4 +1,5 @@
 import { User } from 'lucide-react';
+import { CachedImage } from './CachedImage';
 
 interface UserAvatarProps {
   userId?: string;
@@ -48,8 +49,9 @@ export function UserAvatar({
 
   if (avatarUrl) {
     return (
-      <img
-        src={avatarUrl}
+      <CachedImage
+        url={avatarUrl}
+        maxDim={96}
         alt={displayName}
         onClick={onClick}
         className={`${sizeClasses[size]} rounded-full object-cover ${className} ${clickableClasses}`}

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Clock, Tag, MoveVertical as MoreVertical, Zap, Calendar, Flame } from 'lucide-react';
 import type { Event } from '../lib/supabase';
 import { getCategoryColor, getCategoryEmoji } from '../utils/eventCategories';
+import { CachedImage } from './CachedImage';
 
 type EventCardProps = {
   event: Event;
@@ -118,8 +119,8 @@ export function EventCard({
         <div className="relative flex-shrink-0 w-[88px] h-[88px] rounded-[16px] overflow-hidden">
           {displayImage ? (
             <>
-              <img
-                src={displayImage} alt={event.title}
+              <CachedImage
+                url={displayImage} alt={event.title}
                 className="absolute inset-0 w-full h-full object-cover"
                 onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }}
               />
@@ -160,8 +161,9 @@ export function EventCard({
               }}
             >
               {event.users.avatar_url ? (
-                <img
-                  src={event.users.avatar_url}
+                <CachedImage
+                  url={event.users.avatar_url}
+                  maxDim={96}
                   alt={event.users.display_name || ''}
                   style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                 />

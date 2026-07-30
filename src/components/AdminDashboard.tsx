@@ -1,7 +1,9 @@
 import { useState, useEffect } from 'react';
+import { useSwipeBack } from '../hooks/useSwipeBack';
 import { supabase, type Event, type User, type AdminAction, type ChabadHouse } from '../lib/supabase';
 import { type MapArea } from '../services/mapAreaService';
-import { Shield, TrendingUp, Users, Calendar, TriangleAlert as AlertTriangle, Trash2, Eye, Hop as Home, Flag, Search, ShieldCheck, ShieldOff, MapPin } from 'lucide-react';
+import { Shield, TrendingUp, Users, Calendar, TriangleAlert as AlertTriangle, Trash2, Eye, Hop as Home, Flag, Search, ShieldCheck, ShieldOff, MapPin, Ban } from 'lucide-react';
+import { banUser, unbanUser, isPermanent } from '../services/banService';
 import { BackButton } from './BackButton';
 import { UserAvatar } from './UserAvatar';
 import { UserProfileModal } from './UserProfileModal';
@@ -11,7 +13,9 @@ interface AdminDashboardProps {
   onBack: () => void;
 }
 
-type TabType = 'overview' | 'events' | 'users' | 'locations' | 'areas' | 'logs' | 'reports';
+type TabType = 'overview' | 'events' | 'users' | 'locations' | 'areas' | 'logs' | 'reports' | 'banned';
+
+type BannedRow = { id: string; display_name: string | null; avatar_url: string | null; banned_until: string | null; banned_reason: string | null };
 
 type ReportRow = {
   id: string;
@@ -21,6 +25,7 @@ type ReportRow = {
   reported_user_id: string | null;
   message_content: string | null;
   message_type: string | null;
+  reason: string | null;
   status: 'open' | 'reviewed' | 'dismissed';
   created_at: string;
   reporter?: { display_name: string | null } | null;
@@ -28,6 +33,7 @@ type ReportRow = {
 };
 
 export function AdminDashboard({ currentUserId, onBack }: AdminDashboardProps) {
+  const swipeRef = useSwipeBack<HTMLDivElement>(onBack); // swipe from an edge to slide the screen back
   const [activeTab, setActiveTab] = useState<TabType>('overview');
   const [stats, setStats] = useState({
     totalEvents: 0,
@@ -43,6 +49,8 @@ export function AdminDashboard({ currentUserId, onBack }: AdminDashboardProps) {
   const [areas, setAreas] = useState<MapArea[]>([]);
   const [adminActions, setAdminActions] = useState<AdminAction[]>([]);
   const [reports, setReports] = useState<ReportRow[]>([]);
+  const [banningId, setBanningId] = useState<string | null>(null); // report id showing the ban-duration picker
+  const [banned, setBanned] = useState<BannedRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [userSearch, setUserSearch] = useState('');
@@ -61,6 +69,7 @@ export function AdminDashboard({ currentUserId, onBack }: AdminDashboardProps) {
       if (activeTab === 'areas') loadAreas();
       if (activeTab === 'logs') loadAdminActions();
       if (activeTab === 'reports') loadReports();
+      if (activeTab === 'banned') loadBanned();
     }
   }, [activeTab, currentUser]);
 
@@ -68,7 +77,7 @@ export function AdminDashboard({ currentUserId, onBack }: AdminDashboardProps) {
     try {
       const { data } = await supabase
         .from('users')
-        .select('*')
+        .select('id, role, display_name, avatar_url')
         .eq('id', currentUserId)
         .maybeSingle();
 
@@ -83,7 +92,7 @@ export function AdminDashboard({ currentUserId, onBack }: AdminDashboardProps) {
     try {
       const [eventsCount, usersCount, locationsCount, areasCount, actionsCount, reportsCount] = await Promise.all([
         supabase.from('events').select('*', { count: 'exact', head: true }),
-        supabase.from('users').select('*', { count: 'exact', head: true }),
+        supabase.from('users').select('id', { count: 'exact', head: true }),
         supabase.from('admin_locations').select('*', { count: 'exact', head: true }),
         supabase.from('map_areas').select('*', { count: 'exact', head: true }),
         supabase.from('admin_actions').select('*', { count: 'exact', head: true }),
@@ -110,7 +119,7 @@ export function AdminDashboard({ currentUserId, onBack }: AdminDashboardProps) {
     try {
       const { data } = await supabase
         .from('events')
-        .select('*, users(*)')
+        .select('*, users(id, display_name, avatar_url)')
         .order('created_at', { ascending: false })
         .limit(50);
 
@@ -125,10 +134,9 @@ export function AdminDashboard({ currentUserId, onBack }: AdminDashboardProps) {
   const loadUsers = async () => {
     setLoading(true);
     try {
-      const { data } = await supabase
-        .from('users')
-        .select('*')
-        .order('created_at', { ascending: false });
+      // email is column-revoked from the API; admins read the full roster (incl. email) through
+      // this SECURITY DEFINER function, which returns rows only to admins.
+      const { data } = await supabase.rpc('admin_list_users');
 
       setUsers(data || []);
     } catch (error) {
@@ -187,6 +195,40 @@ export function AdminDashboard({ currentUserId, onBack }: AdminDashboardProps) {
     } finally {
       setLoading(false);
     }
+  };
+
+  const loadBanned = async () => {
+    setLoading(true);
+    try {
+      const { data } = await supabase
+        .from('users')
+        .select('id, display_name, avatar_url, banned_until, banned_reason')
+        .gt('banned_until', new Date().toISOString())
+        .order('banned_until', { ascending: false });
+      setBanned((data as BannedRow[]) || []);
+    } catch (error) {
+      console.error('Error loading banned users:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleUnban = async (u: BannedRow) => {
+    if (!confirm(`להסיר את החסימה מ-${u.display_name || 'המשתמש'}?`)) return;
+    const ok = await unbanUser(currentUserId, u.id);
+    if (!ok) { alert('שגיאה בהסרת החסימה'); return; }
+    loadBanned();
+  };
+
+  // Ban the reported user for `days` (null = permanent), then mark the report handled.
+  const handleBanReported = async (report: ReportRow, days: number | null) => {
+    if (!report.reported_user_id) return;
+    const ok = await banUser(currentUserId, report.reported_user_id, days, report.reason || 'הפרת כללי הקהילה');
+    if (!ok) { alert('שגיאה בחסימת המשתמש'); return; }
+    await supabase.from('message_reports').update({ status: 'reviewed' }).eq('id', report.id);
+    setBanningId(null);
+    loadReports();
+    loadStats();
   };
 
   const handleDismissReport = async (reportId: string) => {
@@ -349,6 +391,7 @@ export function AdminDashboard({ currentUserId, onBack }: AdminDashboardProps) {
     { id: 'overview' as const, label: 'סקירה כללית', icon: TrendingUp },
     { id: 'events' as const, label: 'אירועים', icon: Calendar },
     { id: 'reports' as const, label: 'דיווחים', icon: Flag },
+    { id: 'banned' as const, label: 'חסומים', icon: Ban },
     { id: 'locations' as const, label: 'מקומות', icon: Home },
     { id: 'areas' as const, label: 'אזורים', icon: MapPin },
     { id: 'users' as const, label: 'משתמשים', icon: Users },
@@ -356,7 +399,7 @@ export function AdminDashboard({ currentUserId, onBack }: AdminDashboardProps) {
   ];
 
   return (
-    <div className="min-h-screen" style={{ background: '#F4F5F7' }} dir="rtl">
+    <div ref={swipeRef} className="min-h-screen" style={{ background: '#F4F5F7' }} dir="rtl">
       <div
         className="text-white px-4 shadow-lg"
         style={{
@@ -526,36 +569,109 @@ export function AdminDashboard({ currentUserId, onBack }: AdminDashboardProps) {
                       </span>
                     </div>
 
-                    {/* Reported message snapshot */}
+                    {/* Reported message snapshot (group reports) OR the report reason (DM reports) */}
                     <div className="rounded-xl px-3 py-2 mb-2" style={{ background: '#F9FAFB', borderInlineStart: '3px solid #EF4444' }}>
                       <p className="text-sm text-gray-800" style={{ fontFamily: 'Rubik, sans-serif', wordBreak: 'break-word' }}>
-                        {r.message_type === 'image' ? '📷 תמונה' : r.message_type === 'location' ? '📍 מיקום' : (r.message_content || '(הודעה ריקה)')}
+                        {r.message_type === 'image' ? '📷 תמונה' : r.message_type === 'location' ? '📍 מיקום' : (r.message_content || r.reason || '(אין תוכן)')}
                       </p>
                     </div>
+
+                    {/* the reporter's stated reason, when present alongside a message snapshot */}
+                    {r.reason && r.message_content && (
+                      <p className="text-xs mb-2" style={{ fontFamily: 'Rubik, sans-serif', color: '#B45309' }}>
+                        <span className="font-bold">סיבת הדיווח:</span> {r.reason}
+                      </p>
+                    )}
 
                     <p className="text-xs text-gray-500 mb-3" style={{ fontFamily: 'Rubik, sans-serif' }}>
                       דווח על <span className="font-bold text-gray-700">{r.reported?.display_name || 'משתמש'}</span>
                       {' · '}ע״י <span className="font-bold text-gray-700">{r.reporter?.display_name || 'משתמש'}</span>
                     </p>
 
-                    {r.status === 'open' && (
-                      <div className="flex gap-2">
+                    {r.status === 'open' && (banningId === r.id ? (
+                      <div>
+                        <p className="text-xs font-bold text-gray-600 mb-2" style={{ fontFamily: 'Heebo, sans-serif' }}>לכמה זמן לחסום את {r.reported?.display_name || 'המשתמש'}?</p>
+                        <div className="grid grid-cols-2 gap-2">
+                          {[{ label: 'יום', days: 1 }, { label: 'שבוע', days: 7 }, { label: 'חודש', days: 30 }, { label: 'לצמיתות', days: null }].map(({ label, days }) => (
+                            <button key={label} onClick={() => handleBanReported(r, days)}
+                              className="py-2 rounded-xl text-sm font-bold text-white"
+                              style={{ background: days == null ? 'linear-gradient(135deg,#991B1B,#7F1D1D)' : 'linear-gradient(135deg,#EF4444,#DC2626)', fontFamily: 'Heebo, sans-serif' }}>
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+                        <button onClick={() => setBanningId(null)} className="w-full mt-2 py-1.5 text-sm font-semibold text-gray-500" style={{ fontFamily: 'Heebo, sans-serif' }}>ביטול</button>
+                      </div>
+                    ) : (
+                      <div className="flex gap-2 flex-wrap">
                         <button
-                          onClick={() => handleDeleteReportedMessage(r)}
-                          className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-sm font-bold text-white"
-                          style={{ background: 'linear-gradient(135deg,#EF4444,#DC2626)', fontFamily: 'Heebo, sans-serif' }}
+                          onClick={() => setBanningId(r.id)}
+                          className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-sm font-bold text-white min-w-[120px]"
+                          style={{ background: 'linear-gradient(135deg,#991B1B,#DC2626)', fontFamily: 'Heebo, sans-serif' }}
                         >
-                          <Trash2 className="w-4 h-4" /> מחק הודעה
+                          <Ban className="w-4 h-4" /> חסום משתמש
                         </button>
+                        {r.message_id && (
+                          <button
+                            onClick={() => handleDeleteReportedMessage(r)}
+                            className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-sm font-bold text-white min-w-[110px]"
+                            style={{ background: 'linear-gradient(135deg,#EF4444,#DC2626)', fontFamily: 'Heebo, sans-serif' }}
+                          >
+                            <Trash2 className="w-4 h-4" /> מחק הודעה
+                          </button>
+                        )}
                         <button
                           onClick={() => handleDismissReport(r.id)}
-                          className="flex-1 py-2 rounded-xl text-sm font-bold bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors"
+                          className="flex-1 py-2 rounded-xl text-sm font-bold bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors min-w-[90px]"
                           style={{ fontFamily: 'Heebo, sans-serif' }}
                         >
                           דחה דיווח
                         </button>
                       </div>
-                    )}
+                    ))}
+                  </div>
+                );
+              })
+            )}
+          </div>
+        )}
+
+        {activeTab === 'banned' && (
+          <div className="space-y-3">
+            {loading ? (
+              <p className="text-center text-gray-400 py-8" style={{ fontFamily: 'Rubik, sans-serif' }}>טוען…</p>
+            ) : banned.length === 0 ? (
+              <div className="text-center py-14">
+                <Ban className="w-10 h-10 text-gray-300 mx-auto mb-3" />
+                <p className="text-gray-400" style={{ fontFamily: 'Rubik, sans-serif' }}>אין משתמשים חסומים כרגע</p>
+              </div>
+            ) : (
+              banned.map((u) => {
+                const permanent = isPermanent(u.banned_until);
+                const untilText = permanent
+                  ? 'לצמיתות'
+                  : u.banned_until
+                    ? `עד ${new Date(u.banned_until).toLocaleDateString('he-IL', { day: 'numeric', month: 'long', year: 'numeric' })}`
+                    : '';
+                return (
+                  <div key={u.id} className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 flex items-center gap-3" dir="rtl">
+                    <UserAvatar userId={u.id} displayName={u.display_name || '?'} avatarUrl={u.avatar_url} size="medium" />
+                    <div className="flex-1 min-w-0">
+                      <p className="font-bold text-gray-800 truncate" style={{ fontFamily: 'Heebo, sans-serif' }}>{u.display_name || 'משתמש'}</p>
+                      <p className="text-xs font-semibold" style={{ color: permanent ? '#DC2626' : '#B45309', fontFamily: 'Rubik, sans-serif' }}>
+                        חסום {untilText}
+                      </p>
+                      {u.banned_reason && (
+                        <p className="text-xs text-gray-500 truncate mt-0.5" style={{ fontFamily: 'Rubik, sans-serif' }}>{u.banned_reason}</p>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => handleUnban(u)}
+                      className="px-3 py-2 rounded-xl text-sm font-bold text-white flex-shrink-0"
+                      style={{ background: 'linear-gradient(135deg,#16A34A,#15803D)', fontFamily: 'Heebo, sans-serif' }}
+                    >
+                      בטל חסימה
+                    </button>
                   </div>
                 );
               })
