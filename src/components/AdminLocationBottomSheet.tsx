@@ -250,6 +250,7 @@ export function AdminLocationBottomSheet({ isOpen, onClose, location, currentUse
   const [lightbox, setLightbox] = useState<number | null>(null); // index being viewed, or null
   const [showShare, setShowShare] = useState(false);
   const [savers, setSavers]   = useState<PlaceSaver[]>([]);
+  const [heartBurst, setHeartBurst] = useState(0); // bumps on each "like" to replay the floating-hearts animation
   const [photos, setPhotos]   = useState<string[]>([]);
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -473,6 +474,13 @@ export function AdminLocationBottomSheet({ isOpen, onClose, location, currentUse
     const { error } = await toggleSavedPlace(currentUserId, location.id, was);
     if (error) { console.error('toggleSavedPlace:', error.message); }
     loadPlaceSavers(location.id).then(setSavers); // resync with the real row (name/avatar)
+  };
+
+  // Tapping the ❤️ near the count toggles the like; on a NEW like it also fires the floating-hearts burst.
+  const handleHeartClick = () => {
+    if (!currentUserId) return;
+    if (!isSaved) setHeartBurst((k) => k + 1); // about to like → play the animation
+    toggleSave();
   };
 
   // Outside the app it's plain text. Inside, the payload rides along invisibly and the chat renders
@@ -756,7 +764,31 @@ export function AdminLocationBottomSheet({ isOpen, onClose, location, currentUse
             return (
               <div className="px-5 mt-6">
                 <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-                  <Heart size={17} strokeWidth={0} fill={n ? '#EF4444' : '#CBD0DA'} />
+                  <style>{`@keyframes fomo-heart-burst {
+                    0%   { opacity: 0; transform: translate(-50%, 0) scale(0.4); }
+                    18%  { opacity: 1; }
+                    100% { opacity: 0; transform: translate(-50%, -46px) scale(1.15); }
+                  }`}</style>
+                  <button
+                    onClick={handleHeartClick}
+                    aria-label={isSaved ? 'ביטול לייק' : 'שים לייק'}
+                    style={{ position: 'relative', background: 'none', border: 'none', padding: 4, margin: -4, cursor: 'pointer', display: 'inline-flex', WebkitTapHighlightColor: 'transparent' }}
+                  >
+                    <Heart
+                      size={19}
+                      strokeWidth={isSaved ? 0 : 2}
+                      fill={isSaved ? '#EF4444' : 'none'}
+                      color={isSaved ? '#EF4444' : '#CBD0DA'}
+                      style={{ transition: 'transform .18s cubic-bezier(0.34,1.56,0.64,1)', transform: isSaved ? 'scale(1.1)' : 'scale(1)' }}
+                    />
+                    {heartBurst > 0 && (
+                      <span key={heartBurst} aria-hidden style={{ position: 'absolute', left: '50%', top: '50%', width: 0, height: 0, pointerEvents: 'none' }}>
+                        {[-20, -12, -4, 5, 13, 21].map((dx, i) => (
+                          <span key={i} style={{ position: 'absolute', left: dx, top: 0, fontSize: 12 + (i % 3), animation: 'fomo-heart-burst 0.9s ease-out forwards', animationDelay: `${i * 0.045}s` }}>❤️</span>
+                        ))}
+                      </span>
+                    )}
+                  </button>
                   <span style={{ fontSize: 14, fontWeight: 800, color: n ? INK : MUTED, fontFamily: HEEBO }}>
                     {n > 0
                       ? <><b style={{ fontWeight: 900 }}>{n}</b> אהבו את המקום</>

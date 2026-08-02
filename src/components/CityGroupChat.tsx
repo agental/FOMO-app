@@ -2,6 +2,8 @@ import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMe
 import { MoreVertical, Send, Mic, MapPin, Image as ImageIcon, ChevronDown, Camera, Smile, Paperclip, X, Crown, Pencil, Check, Map, Phone, DollarSign, Clock, Wifi, AlertTriangle, CornerUpLeft, Copy, Flag, Trash2, LogOut, Ban } from 'lucide-react';
 import { BackButton } from './BackButton';
 import { useSwipeBack } from '../hooks/useSwipeBack';
+import { useKeyboardViewport } from '../hooks/useKeyboardViewport';
+import { CHAT_BG } from '../utils/chatBg';
 import { MessageBubble } from './MessageBubble';
 import { ImageBubble } from './ImageBubble';
 import { EventChatCard } from './EventChatCard';
@@ -315,6 +317,8 @@ export function CityGroupChat({
   // scroll *behind* them with matching top/bottom padding.
   const headerRef = useRef<HTMLDivElement>(null);
   const inputBarRef = useRef<HTMLDivElement>(null);
+  // Keyboard: GPU-transform the messages + input bar up in sync with the keyboard (header stays fixed).
+  useKeyboardViewport(swipeRef, scrollRef, inputBarRef);
   const [headerH, setHeaderH] = useState(64);
   const [inputH, setInputH] = useState(56);
   useLayoutEffect(() => {
@@ -424,8 +428,16 @@ export function CityGroupChat({
       await markSeen();
       _memberStatusCache[uk(channelId)] = 'approved';
       if (isNewJoin) {
+        // Resolve the REAL name first — currentUserName can still be the '' → 'אנונימי' fallback if the
+        // profile name hadn't finished loading when the group opened (that's how "אנונימי הצטרף/ה"
+        // got recorded). Fetch it from the DB so the permanent join notice is always correct.
+        let joinName = currentUserName;
+        if (!joinName || joinName === 'אנונימי') {
+          const { data: u } = await supabase.from('users').select('display_name').eq('id', currentUserId).maybeSingle();
+          if (u?.display_name) joinName = u.display_name;
+        }
         // WhatsApp-style "X joined the group" notice
-        await supabase.from('group_messages').insert({ channel_id: channelId, user_id: currentUserId, display_name: currentUserName, avatar_url: currentUserAvatar, content: `${SYS_MARK}${currentUserName} הצטרף/ה לקבוצה`, type: 'text' });
+        await supabase.from('group_messages').insert({ channel_id: channelId, user_id: currentUserId, display_name: joinName, avatar_url: currentUserAvatar, content: `${SYS_MARK}${joinName} הצטרף/ה לקבוצה`, type: 'text' });
       }
       loadMemberCount();
     })();
@@ -1238,6 +1250,27 @@ export function CityGroupChat({
 
   const hasText = text.trim().length > 0;
 
+  // Memoize the whole message list so it re-renders ONLY when the messages/admin/unread-divider change —
+  // NOT on the frequent "…is typing", scroll-to-bottom button, or 3-dots menu state changes (those keep
+  // the identical row elements, so React skips re-rendering/re-measuring every bubble → WhatsApp-smooth).
+  const messageRows = useMemo(
+    () => messages.map((m, i) => (
+      <React.Fragment key={m.id}>
+        {m.id === firstUnreadId && (
+          <div ref={firstUnreadRef} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 16px 10px' }}>
+            <div style={{ flex: 1, height: 1, background: 'rgba(0,0,0,0.10)' }} />
+            <span style={{ fontSize: 11, fontWeight: 700, color: '#F97316', whiteSpace: 'nowrap' }}>הודעות שלא נקראו</span>
+            <div style={{ flex: 1, height: 1, background: 'rgba(0,0,0,0.10)' }} />
+          </div>
+        )}
+        {renderMsg(m, i)}
+      </React.Fragment>
+    )),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- callbacks used inside are functional/stable;
+    // typing/scroll/menu are intentionally excluded so they don't re-render the list.
+    [messages, firstUnreadId, amAdmin, currentUserName],
+  );
+
   /* ── Loading / Pending / Join screens — the main chat renders ONLY for approved members ── */
   if (memberStatus !== 'approved') {
     const isPending      = memberStatus === 'pending';
@@ -1377,7 +1410,8 @@ export function CityGroupChat({
   /* ════════════ RENDER ════════════ */
   return (
     <div ref={swipeRef} style={{
-      position: 'fixed', inset: 0, zIndex: 120,
+      position: 'fixed', top: 0, left: 0, right: 0, height: '100dvh',
+      zIndex: 120,
       display: 'flex', flexDirection: 'column',
       fontFamily: "'Rubik','Heebo',sans-serif",
       animation: 'gchat-slide 0.28s cubic-bezier(0.25,1,0.5,1)',
@@ -1454,8 +1488,8 @@ export function CityGroupChat({
       </div>
 
       {/* ── Messages area with WA-style bg (fills container; scrolls behind glass bars) ── */}
-      <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: '#F3EFE9', backgroundImage: 'url(/chat-bg.png)', backgroundSize: '50%', backgroundRepeat: 'repeat' }}>
-        <div ref={scrollRef} className="scrollbar-hide" style={{ position: 'absolute', inset: 0, overflowY: 'auto', WebkitOverflowScrolling: 'touch', overscrollBehavior: 'contain', paddingTop: headerH + 10, paddingBottom: inputH + 8 }}>
+      <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: '#F3EFE9', backgroundImage: `url(${CHAT_BG})`, backgroundSize: '50%', backgroundRepeat: 'repeat' }}>
+        <div ref={scrollRef} className="scrollbar-hide" style={{ position: 'absolute', inset: 0, overflowY: 'auto', WebkitOverflowScrolling: 'touch', overscrollBehavior: 'contain', paddingTop: headerH + 10, paddingBottom: `calc(${inputH + 8}px + var(--kb-pad, 0px))` }}>
          <div ref={contentRef}>
 
           {/* Skeleton while loading */}
@@ -1492,18 +1526,7 @@ export function CityGroupChat({
             </div>
           )}
 
-          {messages.map((m, i) => (
-            <React.Fragment key={m.id}>
-              {m.id === firstUnreadId && (
-                <div ref={firstUnreadRef} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 16px 10px' }}>
-                  <div style={{ flex: 1, height: 1, background: 'rgba(0,0,0,0.10)' }} />
-                  <span style={{ fontSize: 11, fontWeight: 700, color: '#F97316', whiteSpace: 'nowrap' }}>הודעות שלא נקראו</span>
-                  <div style={{ flex: 1, height: 1, background: 'rgba(0,0,0,0.10)' }} />
-                </div>
-              )}
-              {renderMsg(m, i)}
-            </React.Fragment>
-          ))}
+          {messageRows}
 
           {/* Live typing indicator (ephemeral broadcast) */}
           {(() => {

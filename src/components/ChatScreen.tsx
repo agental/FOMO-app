@@ -1,4 +1,4 @@
-import { useState, useEffect, useLayoutEffect, useRef } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react';
 import { Send, ChevronDown, MoreVertical, User as UserIcon, Flag, Ban } from 'lucide-react';
 import { supabase, type Event } from '../lib/supabase';
 import { UserAvatar } from './UserAvatar';
@@ -13,6 +13,8 @@ import { setActiveChat } from '../utils/activeChat';
 import { createPersistedRecord } from '../utils/warmCache';
 import { blockUser, unblockUser, reportUser, getBlockedIdsCached, refreshBlockedIds } from '../services/blockService';
 import { useSwipeBack } from '../hooks/useSwipeBack';
+import { useKeyboardViewport } from '../hooks/useKeyboardViewport';
+import { CHAT_BG } from '../utils/chatBg';
 import { showToast } from '../utils/toast';
 
 type Message = {
@@ -102,6 +104,8 @@ export function ChatScreen({ conversationId, currentUserId, otherUserId, onBack,
   const inputBarRef = useRef<HTMLDivElement>(null);
   const [headerH, setHeaderH] = useState(60);
   const [inputH, setInputH] = useState(64);
+  // Keyboard: GPU-transform the messages + input bar up in sync with the keyboard (header stays fixed).
+  useKeyboardViewport(swipeRef, scrollContainerRef, inputBarRef);
 
   // Measure the floating glass bars so messages scroll behind them (matches group chat).
   useLayoutEffect(() => {
@@ -124,10 +128,12 @@ export function ChatScreen({ conversationId, currentUserId, otherUserId, onBack,
     }
   }, [loading]);
 
-  // Re-pin to bottom once the floating glass bars are measured (avoids opening mid-chat).
+  // Re-pin to bottom ONLY when the user is already at the bottom (e.g. first open). Guarded by
+  // atBottomRef so a header/input height change (like the input bar shrinking when the keyboard opens
+  // and the home-indicator inset disappears) does NOT yank a user who's reading history to the bottom.
   useLayoutEffect(() => {
     const el = scrollContainerRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (el && atBottomRef.current) el.scrollTop = el.scrollHeight;
   }, [headerH, inputH]);
 
   // Mark this DM as the active chat so global notifications don't buzz for it.
@@ -442,14 +448,6 @@ export function ChatScreen({ conversationId, currentUserId, otherUserId, onBack,
     return currentDate !== previousDate;
   };
 
-  if (loading || !otherUser) {
-    return (
-      <div className="min-h-screen flex items-center justify-center" style={{ background: '#F3EFE9' }}>
-        <div className="w-12 h-12 border-4 border-orange-200 border-t-orange-500 rounded-full animate-spin"></div>
-      </div>
-    );
-  }
-
   const renderMsg = (message: Message, index: number) => {
     const mine = message.sender_id === currentUserId;
     const prev = messages[index - 1];
@@ -492,6 +490,20 @@ export function ChatScreen({ conversationId, currentUserId, otherUserId, onBack,
     );
   };
 
+  // Memoize the message list so it re-renders ONLY when messages change — not on the frequent
+  // "typing…", scroll-to-bottom button, or 3-dots menu state changes (those reuse the identical row
+  // elements, so React skips re-rendering/re-measuring every bubble → WhatsApp-smooth scrolling).
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- callbacks inside are functional/stable.
+  const messageRows = useMemo(() => messages.map((m, i) => renderMsg(m, i)), [messages]);
+
+  if (loading || !otherUser) {
+    return (
+      <div className="min-h-screen flex items-center justify-center" style={{ background: '#F3EFE9' }}>
+        <div className="w-12 h-12 border-4 border-orange-200 border-t-orange-500 rounded-full animate-spin"></div>
+      </div>
+    );
+  }
+
   const submitReport = async () => {
     if (!otherUser) return;
     const ok = await reportUser(currentUserId, otherUser.id, reportReason.trim() || undefined);
@@ -518,7 +530,7 @@ export function ChatScreen({ conversationId, currentUserId, otherUserId, onBack,
   };
 
   return (
-    <div ref={swipeRef} style={{ position: 'fixed', inset: 0, zIndex: 120, fontFamily: "'Rubik','Heebo',sans-serif", animation: 'gchat-slide 0.28s cubic-bezier(0.25,1,0.5,1)' }}>
+    <div ref={swipeRef} style={{ position: 'fixed', top: 0, left: 0, right: 0, height: '100dvh', zIndex: 120, fontFamily: "'Rubik','Heebo',sans-serif", animation: 'gchat-slide 0.28s cubic-bezier(0.25,1,0.5,1)' }}>
       <style>{`
         @keyframes gchat-slide { from { transform: translateY(100%); } to { transform: translateY(0); } }
         @keyframes gchat-pop {
@@ -537,12 +549,12 @@ export function ChatScreen({ conversationId, currentUserId, otherUserId, onBack,
       `}</style>
 
       {/* Messages area (WhatsApp bg) — scrolls behind the glass bars */}
-      <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: '#F3EFE9', backgroundImage: 'url(/chat-bg.png)', backgroundSize: '50%', backgroundRepeat: 'repeat' }}>
+      <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: '#F3EFE9', backgroundImage: `url(${CHAT_BG})`, backgroundSize: '50%', backgroundRepeat: 'repeat' }}>
         <div ref={scrollContainerRef}
           className="scrollbar-hide"
           onScroll={e => { const el = e.currentTarget; const dist = el.scrollHeight - el.scrollTop - el.clientHeight; atBottomRef.current = dist < 80; setShowScroll(dist > 100); if (dist < 80) setUnreadNew(0); }}
-          style={{ position: 'absolute', inset: 0, overflowY: 'auto', paddingTop: headerH + 10, paddingBottom: inputH + 8 }}>
-          {messages.map((message, index) => renderMsg(message, index))}
+          style={{ position: 'absolute', inset: 0, overflowY: 'auto', paddingTop: headerH + 10, paddingBottom: `calc(${inputH + 8}px + var(--kb-pad, 0px))` }}>
+          {messageRows}
 
           {/* Live typing indicator (ephemeral broadcast) */}
           {otherTyping && otherUser && (

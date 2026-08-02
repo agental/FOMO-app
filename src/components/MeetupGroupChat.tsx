@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { X, Send } from 'lucide-react';
 import { BackButton } from './BackButton';
 import { useSwipeBack } from '../hooks/useSwipeBack';
+import { useKeyboardViewport } from '../hooks/useKeyboardViewport';
 import { supabase, type Meetup } from '../lib/supabase';
 import { createPersistedRecord } from '../utils/warmCache';
 
@@ -34,6 +35,10 @@ export function MeetupGroupChat({ meetup, currentUserId, onClose }: MeetupGroupC
   const [sending,    setSending]    = useState(false);
   const [loading,    setLoading]    = useState(!_meetupMsgCache[meetup.id]?.length);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const msgScrollRef = useRef<HTMLDivElement>(null);
+  const composerRef = useRef<HTMLDivElement>(null);
+  // Keyboard: GPU-transform the messages + input bar up in sync with the keyboard (header stays fixed).
+  useKeyboardViewport(swipeRef, msgScrollRef, composerRef);
 
   const cacheMessages = (msgs: Message[]) => {
     _meetupMsgCache[meetup.id] = msgs;
@@ -155,9 +160,9 @@ export function MeetupGroupChat({ meetup, currentUserId, onClose }: MeetupGroupC
   return (
     <div
       ref={swipeRef}
-      className="fixed inset-0 bg-white z-[70] flex flex-col"
+      className="fixed top-0 left-0 right-0 bg-white z-[70] flex flex-col"
       dir="rtl"
-      style={{ paddingTop: 'env(safe-area-inset-top)', paddingBottom: 'env(safe-area-inset-bottom)' }}
+      style={{ height: '100dvh', paddingTop: 'env(safe-area-inset-top)', paddingBottom: 'env(safe-area-inset-bottom)' }}
     >
       {/* Header */}
       <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-100 bg-white flex-shrink-0">
@@ -172,7 +177,7 @@ export function MeetupGroupChat({ meetup, currentUserId, onClose }: MeetupGroupC
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3 scrollbar-hide">
+      <div ref={msgScrollRef} className="flex-1 overflow-y-auto px-4 pt-4 space-y-3 scrollbar-hide" style={{ paddingBottom: 'calc(1rem + var(--kb-pad, 0px))' }}>
         {loading ? (
           <div className="flex justify-center py-10">
             <div className="w-8 h-8 border-2 border-orange-300 border-t-orange-500 rounded-full animate-spin" />
@@ -215,7 +220,7 @@ export function MeetupGroupChat({ meetup, currentUserId, onClose }: MeetupGroupC
       </div>
 
       {/* Input */}
-      <div className="flex-shrink-0 px-4 py-3 border-t border-gray-100 bg-white flex items-end gap-3">
+      <div ref={composerRef} className="flex-shrink-0 px-4 py-3 border-t border-gray-100 bg-white flex items-end gap-3">
         <textarea
           value={newMessage}
           onChange={e => setNewMessage(e.target.value)}

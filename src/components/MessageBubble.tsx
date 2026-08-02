@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState, type ReactNode, type CSSProperties } from 'react';
+import { memo, useLayoutEffect, useRef, useState, type ReactNode, type CSSProperties } from 'react';
 
 /**
  * Pixel-perfect Apple iMessage bubble, reproduced from the source SVG as a
@@ -58,7 +58,7 @@ type Props = {
   contentStyle?: CSSProperties;
 };
 
-export function MessageBubble({ mine, color, children, tail = true, contentStyle }: Props) {
+export const MessageBubble = memo(function MessageBubble({ mine, color, children, tail = true, contentStyle }: Props) {
   const contentRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
 
@@ -104,4 +104,4 @@ export function MessageBubble({ mine, color, children, tail = true, contentStyle
       </div>
     </div>
   );
-}
+});

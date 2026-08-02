@@ -245,7 +245,7 @@ export function MapScreen({
   const orbitingRef     = useRef(false);
   const focusingRef     = useRef(false);               // camera is flying to a tapped pin
   const orbitGenRef     = useRef(0);                   // bumped on every stop — stale loops see it and die
-  const renderRef       = useRef<() => void>(() => {});
+  const renderRef       = useRef<(addOnly?: boolean) => void>(() => {});
   const zoomRef         = useRef<() => void>(() => {});
   const clearRef        = useRef<() => void>(() => {});
 
@@ -1004,7 +1004,7 @@ export function MapScreen({
 
   // No clustering: render every in-view point as its own pin (which itself collapses to a colour
   // dot when zoomed out). Culled to the current viewport for performance.
-  function renderClusters() {
+  function renderClusters(addOnly = false) {
     const map = mapInstanceRef.current;
     if (!map) return;
     // Cull by SCREEN position, NOT geographic bounds. On a PITCHED map (this map is always pitched,
@@ -1042,7 +1042,10 @@ export function MapScreen({
       }
     });
 
-    markerMapRef.current.forEach((entry, key) => {
+    // Cull out-of-view markers — but ONLY on a full pass. During a zoom (addOnly) we never remove, so a
+    // fast zoom-out doesn't leave newly-visible pins missing until the finger lifts. The cull re-runs
+    // on zoomend/moveend.
+    if (!addOnly) markerMapRef.current.forEach((entry, key) => {
       // Never cull the pin whose sheet is open. While the camera flies to it (pitched + padded)
       // the viewport bounds swing around, and dropping + recreating its marker made it visibly
       // jump. The sheet owns the selection's lifecycle — culling has no business ending it.
@@ -1115,26 +1118,23 @@ export function MapScreen({
     // pitched, rotating viewport makes getBounds() swing, pins kept falling out of the cull and
     // getting destroyed and rebuilt each frame. That was the fast up/down flicker.
     const onMoveEnd = () => { if (orbitingRef.current || focusingRef.current) return; renderRef.current(); };
-    // Render markers DURING the pan too (throttled to one pass per frame) so pins appear as you
-    // drag toward them, instead of only popping in when the gesture ends.
-    let movePending = false;
-    // While ZOOMING, the projected pixel position of every point changes fast, so per-frame culling
-    // would destroy + rebuild markers each frame — and a freshly-added DOM marker flashes at the
-    // top-left corner for a frame before Mapbox positions it. So skip the churn during a zoom and let
-    // Mapbox reposition the existing markers smoothly; the cull re-runs on moveend (below).
+    let renderPending = false;
     let zooming = false;
     const onZoomStart = () => { zooming = true; };
-    const onZoomEnd   = () => { zooming = false; };
-    const onMove = () => {
-      // Hold still while the camera flies to a tapped pin and while it orbits: re-rendering
-      // mid-flight recreated markers under a swinging, pitched viewport and made them jump.
-      // `moveend` renders once we've landed. Same reason to skip while zooming.
-      if (orbitingRef.current || focusingRef.current || zooming) return;
-      if (movePending) return;
-      movePending = true;
-      requestAnimationFrame(() => { movePending = false; renderRef.current(); });
+    const onZoomEnd   = () => { zooming = false; }; // moveend runs the full cull once the gesture settles
+    // One render pass per frame during a gesture. While ZOOMING we render ADD-ONLY: points that scroll
+    // into view (notably on a fast zoom-OUT, which reveals lots of new admin/place pins) get their pins
+    // immediately, but we never CULL mid-zoom — culling under fast-changing pixel positions is what
+    // destroyed + rebuilt markers each frame and caused the flicker. The full cull re-runs on
+    // zoomend/moveend. Held still during the orbit/focus flight (those re-render on their own moveend).
+    const scheduleRender = (addOnly: boolean) => {
+      if (orbitingRef.current || focusingRef.current) return;
+      if (renderPending) return;
+      renderPending = true;
+      requestAnimationFrame(() => { renderPending = false; renderRef.current(addOnly); });
     };
-    const onZoom    = () => { zoomRef.current(); updateAreaLabelsRef.current(); };
+    const onMove = () => scheduleRender(zooming);
+    const onZoom = () => { zoomRef.current(); updateAreaLabelsRef.current(); scheduleRender(true); };
     // the moment the user grabs the map, the orbit yields to them
     const onUserGrab = () => stopOrbit();
     const onClick   = (e: mapboxgl.MapMouseEvent) => {
