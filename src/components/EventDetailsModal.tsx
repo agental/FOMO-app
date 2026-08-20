@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, type ChangeEvent } from 'react';
 import { Calendar, MapPin, MessageCircle, Navigation, Pencil, Users, Trash2 } from 'lucide-react';
 import { MapCreateEventFlow } from './MapCreateEventFlow';
 import { useSwipeBack } from '../hooks/useSwipeBack';
@@ -13,6 +13,8 @@ import { getCategoryEmoji } from '../utils/eventCategories';
 import { BookingFlow } from './BookingFlow';
 import { ShareEventSheet } from './ShareEventSheet';
 import { OpenLocationSheet } from './OpenLocationSheet';
+import { EventService } from '../services/eventService';
+import { showToast } from '../utils/toast';
 
 export type Attendee = {
   id: string;
@@ -151,10 +153,57 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
     return () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); };
   }, [dragging, dragDy, snap]);
 
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [coverUrl, setCoverUrl] = useState<string | null>(event.image_url ?? null);
+  const [uploadingCover, setUploadingCover] = useState(false);
+  const coverInputRef = useRef<HTMLInputElement>(null);
+
   const currentUserId = propUserId || null;
   const isOwner  = event.user_id === currentUserId;
   const cat      = event.event_type ? (CATEGORY_CONFIG[event.event_type] ?? DEFAULT_CONFIG) : DEFAULT_CONFIG;
-  const heroImg  = event.image_url || cat.image;
+  const heroImg  = coverUrl || cat.image;
+
+  // Keep the local cover in sync if the event prop changes, and learn whether the viewer is an admin.
+  useEffect(() => { setCoverUrl(event.image_url ?? null); }, [event.id, event.image_url]);
+  useEffect(() => {
+    if (!currentUserId) { setIsAdmin(false); return; }
+    let alive = true;
+    supabase.from('users').select('role').eq('id', currentUserId).single()
+      .then(({ data }) => { if (alive) setIsAdmin(data?.role === 'admin'); });
+    return () => { alive = false; };
+  }, [currentUserId]);
+
+  // Admin: replace an event's cover image. For a generated seed event, remember the choice per
+  // template (seed_key) in seed_image_overrides so future generations reuse it — the system "learns".
+  const handlePickCover = () => coverInputRef.current?.click();
+  const handleCoverFile = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file || !currentUserId) return;
+    setUploadingCover(true);
+    try {
+      const url = await EventService.uploadEventImage(currentUserId, file, { skipModeration: true });
+      const { error } = await supabase.from('events').update({ image_url: url }).eq('id', event.id);
+      if (error) throw error;
+      if (event.is_seed && event.seed_key) {
+        await supabase.from('seed_image_overrides').upsert(
+          { seed_key: event.seed_key, image_url: url, updated_at: new Date().toISOString() },
+          { onConflict: 'seed_key' },
+        );
+      }
+      setCoverUrl(url);
+      showToast({
+        title: 'התמונה עודכנה',
+        text: event.is_seed && event.seed_key ? 'נשמר גם לאירועים הבאים מהסוג הזה ✨' : 'הכיסוי עודכן',
+        emoji: '🖼️', background: 'linear-gradient(135deg,#22c55e,#16a34a)',
+      });
+    } catch (err) {
+      console.error('[cover] update failed:', err);
+      showToast({ title: 'שגיאה', text: 'העלאת התמונה נכשלה, נסה/י שוב.', emoji: '⚠️', background: 'linear-gradient(135deg,#EF4444,#DC2626)' });
+    } finally {
+      setUploadingCover(false);
+    }
+  };
   const emoji    = (event as any).emoji || '';
   const price    = (event as any).price as number | null | undefined;
   const ticketTypes = (((event as any).ticket_types as TicketType[] | undefined) || []).filter(t => t && t.price > 0);
@@ -381,6 +430,22 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
                 className="absolute inset-0 w-full h-full object-cover"
                 onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }}
               />
+            )}
+            {isAdmin && (
+              <>
+                <input ref={coverInputRef} type="file" accept="image/*" onChange={handleCoverFile} style={{ display: 'none' }} />
+                <button
+                  onClick={handlePickCover}
+                  disabled={uploadingCover}
+                  className="absolute bottom-3 left-3 z-10 flex items-center gap-1.5 rounded-full bg-black/55 px-3 py-2 text-white backdrop-blur-sm active:scale-95 transition disabled:opacity-70"
+                  style={{ fontFamily: 'Heebo, sans-serif' }}
+                >
+                  {uploadingCover
+                    ? <div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                    : <Pencil size={15} />}
+                  <span className="text-[12.5px] font-semibold">{uploadingCover ? 'מעלה…' : 'החלף תמונה'}</span>
+                </button>
+              </>
             )}
           </div>
         </div>

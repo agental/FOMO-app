@@ -154,6 +154,13 @@ Deno.serve(async (req) => {
   const seedIds: string[] = (seeds || []).map((u: { id: string }) => u.id);
   if (seedIds.length < 5) return json({ error: "no seed users — run 20260802000000_seed_events_infra.sql first" }, 400);
 
+  // Admin-curated image overrides per template (seed_key). When an admin replaces a seed event's
+  // cover in the app, it's saved here — so we REUSE that image for this template from now on ("learn").
+  const { data: ovRows } = await admin.from("seed_image_overrides").select("seed_key,image_url");
+  const overrides = new Map<string, string>(
+    (ovRows || []).map((r: { seed_key: string; image_url: string }) => [r.seed_key, r.image_url]),
+  );
+
   const nowISO = new Date().toISOString();
   const rows: Record<string, unknown>[] = [];
   const perHub: Record<string, number> = {};
@@ -195,7 +202,7 @@ Deno.serve(async (req) => {
         user_id: host,
         title: tpl.titles[vi],
         description: tpl.descs[vi],
-        image_url: (IMAGE_IDS[tpl.id]?.length ? px(pick(IMAGE_IDS[tpl.id])) : null),
+        image_url: overrides.get(key) ?? (IMAGE_IDS[tpl.id]?.length ? px(pick(IMAGE_IDS[tpl.id])) : null),
         country: hub.country,
         city: hub.city,
         address: `${spot.name}, ${hub.city}`,

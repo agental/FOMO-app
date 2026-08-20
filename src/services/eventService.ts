@@ -288,12 +288,14 @@ export class EventService {
     }
   }
 
-  static async uploadEventImage(userId: string, file: File): Promise<string> {
+  static async uploadEventImage(userId: string, file: File, opts?: { skipModeration?: boolean }): Promise<string> {
     // 1. Compress via canvas (validates dimensions, converts HEIC→JPEG)
     const { blob, base64 } = await compressImage(file);
 
-    // 2. AI content moderation — rejects screenshots, memes, NSFW, irrelevant images
-    await moderateImage(base64);
+    // 2. AI content moderation — rejects screenshots, memes, NSFW, irrelevant images.
+    //    Admin cover-image edits pass skipModeration (a trusted admin uploading a poster, which can
+    //    otherwise trip the "screenshot/text" heuristic).
+    if (!opts?.skipModeration) await moderateImage(base64);
 
     // 3. Upload the compressed JPEG
     const path = `events/${userId}-${Date.now()}.jpg`;

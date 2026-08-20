@@ -145,10 +145,25 @@ export default function ProfileScreen({
   const [editField,            setEditField]            = useState<'interests' | null>(null);
   const [editValues,           setEditValues]           = useState<string[]>([]);
   const [editCustom,           setEditCustom]           = useState('');
+  const [editIg,               setEditIg]               = useState(false);   // editing the Instagram handle
+  const [igInput,              setIgInput]              = useState('');
   const avatarInputRef = useRef<HTMLInputElement>(null);
 
   const targetUserId = viewUserId || currentUserId;
   const isOwnProfile = !viewUserId || viewUserId === currentUserId;
+
+  // Own profile: edit the Instagram handle inline. Normalizes a pasted @handle or full instagram.com URL.
+  const handleSaveIg = async () => {
+    if (!currentUserId) return;
+    const val = igInput.trim()
+      .replace(/^https?:\/\/(www\.)?instagram\.com\//i, '')
+      .replace(/[/?].*$/, '')
+      .replace(/^@+/, '');
+    const { error } = await supabase.from('users').update({ instagram: val || null }).eq('id', currentUserId);
+    if (error) { console.error('[ig] save failed:', error.message); return; }
+    setProfile((p) => (p ? { ...p, instagram: val || null } : p));
+    setEditIg(false);
+  };
 
   const handleAvatarSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -485,18 +500,46 @@ export default function ProfileScreen({
                 &nbsp;{COUNTRIES[profile.current_country]?.name || profile.current_country}
               </Chip>
             )}
-            {profile.instagram && (
-              <a
-                href={profile.instagram.startsWith('http') ? profile.instagram : `https://instagram.com/${profile.instagram.replace('@', '')}`}
-                target="_blank" rel="noopener noreferrer"
-                style={{ textDecoration: 'none' }}
-              >
-                <Chip style={{ cursor: 'pointer' }}>
-                  <InstagramIcon size={11} />
-                  &nbsp;{profile.instagram.replace('@', '')}
-                </Chip>
-              </a>
-            )}
+            {editIg ? (
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: 5, background: '#fff', border: '1px solid #E5E7EB', borderRadius: 999, padding: '4px 10px' }}>
+                  <InstagramIcon size={12} />
+                  <input
+                    value={igInput}
+                    onChange={(e) => setIgInput(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') handleSaveIg(); }}
+                    placeholder="שם משתמש" autoFocus dir="ltr"
+                    style={{ border: 'none', outline: 'none', background: 'transparent', fontSize: 12.5, width: 108, fontFamily: 'inherit', color: '#111' }}
+                  />
+                </div>
+                <button onClick={handleSaveIg} aria-label="שמור" className="fomo-press" style={{ width: 28, height: 28, borderRadius: '50%', border: 'none', background: '#22C55E', color: '#fff', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}><Check size={15} /></button>
+                <button onClick={() => setEditIg(false)} aria-label="ביטול" className="fomo-press" style={{ width: 28, height: 28, borderRadius: '50%', border: '1px solid #E5E7EB', background: '#fff', color: '#9AA0A6', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}><X size={15} /></button>
+              </div>
+            ) : profile.instagram ? (
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <a
+                  href={profile.instagram.startsWith('http') ? profile.instagram : `https://instagram.com/${profile.instagram.replace('@', '')}`}
+                  target="_blank" rel="noopener noreferrer"
+                  style={{ textDecoration: 'none' }}
+                >
+                  <Chip style={{ cursor: 'pointer' }}>
+                    <InstagramIcon size={11} />
+                    &nbsp;{profile.instagram.replace('@', '')}
+                  </Chip>
+                </a>
+                {isOwnProfile && (
+                  <button onClick={() => { setIgInput(profile.instagram || ''); setEditIg(true); }} aria-label="ערוך אינסטגרם" className="fomo-press"
+                    style={{ width: 26, height: 26, borderRadius: '50%', border: 'none', background: 'rgba(0,0,0,0.06)', color: '#6B7280', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}>
+                    <Edit2 size={12} />
+                  </button>
+                )}
+              </div>
+            ) : isOwnProfile ? (
+              <button onClick={() => { setIgInput(''); setEditIg(true); }} className="fomo-press"
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: 'rgba(0,0,0,0.04)', border: '1px dashed #CBD0DA', borderRadius: 999, padding: '5px 12px', color: '#6B7280', fontSize: 12.5, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer' }}>
+                <InstagramIcon size={12} />&nbsp;הוסף אינסטגרם
+              </button>
+            ) : null}
           </div>
         </div>
       </div>

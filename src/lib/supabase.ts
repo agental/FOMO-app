@@ -133,6 +133,8 @@ export type Event = {
   attendees: string[];
   max_attendees: number;
   is_private?: boolean;
+  is_seed?: boolean;      // generated "seed" event (see seed-events fn)
+  seed_key?: string | null; // template key, e.g. 'beach:2' — the learning key for admin image overrides
   created_at: string;
   users?: { id: string; display_name: string; avatar_url?: string | null };
   distance?: number;
@@ -184,6 +186,8 @@ export type AdminLocation = {
   place_open_now?: boolean;
   google_maps_url?: string;
   opening_hours?: Record<string, { open: string; close: string; closed: boolean }> | null;
+  is_featured?: boolean;
+  extra_likes?: number;  // admin-set likes added on top of real saves (manual boost / edit)
   created_by?: string;
   created_at: string;
   updated_at: string;

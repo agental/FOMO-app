@@ -10,6 +10,7 @@ import { calculateDistance } from '../utils/distance';
 import { placeCategory } from '../utils/placeCategory';
 import { placePinColor } from '../utils/placePinColor';
 import { loadPlaceSavers, toggleSavedPlace, type PlaceSaver } from '../services/savedPlacesService';
+import { showToast } from '../utils/toast';
 
 /**
  * The place sheet. Opens at HALF and drags to FULL (same snap machine as EventDetailsModal).
@@ -251,6 +252,9 @@ export function AdminLocationBottomSheet({ isOpen, onClose, location, currentUse
   const [showShare, setShowShare] = useState(false);
   const [savers, setSavers]   = useState<PlaceSaver[]>([]);
   const [heartBurst, setHeartBurst] = useState(0); // bumps on each "like" to replay the floating-hearts animation
+  const [extraLikes, setExtraLikes] = useState(0); // admin-set likes shown ON TOP of real saves (manual boost)
+  const [editLikes, setEditLikes]   = useState(false);
+  const [likesInput, setLikesInput] = useState('');
   const [photos, setPhotos]   = useState<string[]>([]);
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -271,6 +275,33 @@ export function AdminLocationBottomSheet({ isOpen, onClose, location, currentUse
         .then(({ data }) => setIsAdmin(data?.role === 'admin'));
     }
   }, [currentUserId]);
+
+  // Reflect the admin manual-likes value on open. Read it straight from the DB (source of truth) so a
+  // prior admin edit shows even if the map's cached copy is stale (realtime may not have refreshed it).
+  useEffect(() => {
+    setEditLikes(false);
+    setExtraLikes(location?.extra_likes ?? 0);
+    if (location && isRealPlace) {
+      supabase.from('admin_locations').select('extra_likes').eq('id', location.id).maybeSingle()
+        .then(({ data }) => {
+          const v = (data as { extra_likes?: number } | null)?.extra_likes;
+          if (typeof v === 'number') setExtraLikes(v);
+        });
+    }
+  }, [location?.id, location?.extra_likes, isRealPlace]);
+
+  // Admin: set the TOTAL likes a pin should show. Stored as extra_likes = total − real saves, so real
+  // saves keep counting on top. Also drives the "50 likes → featured" alert (RPC counts saves+extra_likes).
+  const saveLikes = async () => {
+    if (!location || !isRealPlace) return; // only real admin_locations have extra_likes (chabad/POI don't)
+    const total = Math.max(0, Math.floor(Number(likesInput) || 0));
+    const extra = Math.max(0, total - savers.length);
+    const { data, error } = await supabase.from('admin_locations').update({ extra_likes: extra }).eq('id', location.id).select('id');
+    if (error) { showToast({ title: 'שגיאה', text: `העדכון נכשל: ${error.message}`, emoji: '⚠️', background: 'linear-gradient(135deg,#EF4444,#DC2626)' }); return; }
+    if (!data || data.length === 0) { showToast({ title: 'לא נשמר', text: 'אין הרשאת מנהל או שהמקום לא נמצא', emoji: '🔒', background: 'linear-gradient(135deg,#EF4444,#DC2626)' }); return; }
+    setExtraLikes(extra); setEditLikes(false);
+    showToast({ title: 'הלייקים עודכנו', text: `הפין מציג ${savers.length + extra} לייקים ❤️`, emoji: '⭐', background: 'linear-gradient(135deg,#22c55e,#16a34a)' });
+  };
 
   useEffect(() => {
     if (!isOpen || !location) return;
@@ -757,7 +788,7 @@ export function AdminLocationBottomSheet({ isOpen, onClose, location, currentUse
           {/* ── Popularity: ❤️ count + progress toward the "featured spot" threshold ── */}
           {(() => {
             const GOAL = 50;                                   // saves needed to become a featured spot
-            const n = savers.length;
+            const n = savers.length + extraLikes;              // real saves + admin manual likes
             const remaining = Math.max(0, GOAL - n);
             const pct = Math.min(100, Math.round((n / GOAL) * 100));
             const reached = n >= GOAL;
@@ -794,6 +825,23 @@ export function AdminLocationBottomSheet({ isOpen, onClose, location, currentUse
                       ? <><b style={{ fontWeight: 900 }}>{n}</b> אהבו את המקום</>
                       : 'היה הראשון שאוהב — הקש על הלב'}
                   </span>
+                  {/* Admin: edit how many likes the pin shows (real admin places only — not chabad/POI) */}
+                  {isAdmin && isRealPlace && !editLikes && (
+                    <button onClick={() => { setLikesInput(String(n)); setEditLikes(true); }}
+                      style={{ marginRight: 'auto', background: 'none', border: 'none', padding: '2px 6px', cursor: 'pointer', color: '#9AA0A6', fontSize: 12, fontWeight: 800, fontFamily: HEEBO, whiteSpace: 'nowrap' }}>
+                      ✎ ערוך לייקים
+                    </button>
+                  )}
+                  {isAdmin && isRealPlace && editLikes && (
+                    <div style={{ marginRight: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <input type="number" inputMode="numeric" value={likesInput} onChange={e => setLikesInput(e.target.value)} autoFocus
+                        style={{ width: 64, padding: '4px 8px', border: '1px solid #E5E7EB', borderRadius: 8, fontSize: 13, fontFamily: HEEBO, textAlign: 'center', outline: 'none' }} />
+                      <button onClick={saveLikes}
+                        style={{ background: '#16A34A', color: '#fff', border: 'none', borderRadius: 8, padding: '5px 11px', fontSize: 12.5, fontWeight: 800, fontFamily: HEEBO, cursor: 'pointer' }}>שמור</button>
+                      <button onClick={() => setEditLikes(false)}
+                        style={{ background: 'none', border: 'none', color: '#9AA0A6', fontSize: 12.5, fontWeight: 700, fontFamily: HEEBO, cursor: 'pointer' }}>ביטול</button>
+                    </div>
+                  )}
                 </div>
 
                 {/* progress bar toward becoming a featured spot ⭐ */}
