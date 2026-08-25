@@ -1,5 +1,5 @@
 import { useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react';
-import { Send, ChevronDown, MoreVertical, User as UserIcon, Flag, Ban } from 'lucide-react';
+import { Send, ChevronDown, MoreVertical, User as UserIcon, Flag, Ban, X, Reply } from 'lucide-react';
 import { supabase, type Event } from '../lib/supabase';
 import { UserAvatar } from './UserAvatar';
 import { BackButton } from './BackButton';
@@ -14,6 +14,8 @@ import { createPersistedRecord } from '../utils/warmCache';
 import { blockUser, unblockUser, reportUser, getBlockedIdsCached, refreshBlockedIds } from '../services/blockService';
 import { useSwipeBack } from '../hooks/useSwipeBack';
 import { useKeyboardViewport } from '../hooks/useKeyboardViewport';
+import { SwipeToReplyRow } from './SwipeToReplyRow';
+import { encodeReply, parseReply } from '../utils/replyMessage';
 import { CHAT_BG } from '../utils/chatBg';
 import { showToast } from '../utils/toast';
 
@@ -70,6 +72,8 @@ export function ChatScreen({ conversationId, currentUserId, otherUserId, onBack,
   const [messages, setMessages] = useState<Message[]>(_chatMsgCache[ck(conversationId)] ?? []);
   const [otherUser, setOtherUser] = useState<OtherUser | null>(_chatUserCache[otherUserId] ?? null);
   const [newMessage, setNewMessage] = useState('');
+  const [replyTo, setReplyTo] = useState<Message | null>(null); // message being replied to (swipe-to-reply)
+  const [myName, setMyName] = useState('');                     // my display name (to localize "אתה" in reply quotes)
   const [loading, setLoading] = useState(!_chatMsgCache[ck(conversationId)]?.length);
   const [sending, setSending] = useState(false);
   const [openEvent, setOpenEvent] = useState<Event | null>(null);
@@ -86,6 +90,12 @@ export function ChatScreen({ conversationId, currentUserId, otherUserId, onBack,
   useEffect(() => {
     refreshBlockedIds(currentUserId).then(ids => setIsBlocked(ids.has(otherUserId)));
   }, [currentUserId, otherUserId]);
+
+  // My display name — used so a reply quoting my own message shows "אתה" to me.
+  useEffect(() => {
+    supabase.from('users').select('display_name').eq('id', currentUserId).maybeSingle()
+      .then(({ data }) => { if (data?.display_name) setMyName(data.display_name); });
+  }, [currentUserId]);
   const [reconnectTick, setReconnectTick] = useState(0); // bump to force the realtime channels to rebuild
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const seenIdsRef = useRef<Set<string>>(new Set()); // only NEW messages get the pop-in
@@ -356,13 +366,32 @@ export function ChatScreen({ conversationId, currentUserId, otherUserId, onBack,
     }
   };
 
+  // Short preview of a DM message for a reply quote (shared events/places show a label).
+  const dmSnippet = (m: Message): string => {
+    const { body } = parseReply(m.content);
+    if (parseEvent(body).event) return '📅 אירוע';
+    if (parsePlace(body).place) return '📍 מקום';
+    return body.slice(0, 90);
+  };
+  // Real display name of a message's sender (my name for mine, other's for theirs).
+  const senderName = (m: Message): string =>
+    m.sender_id === currentUserId ? (myName || 'אני') : (otherUser?.display_name || '');
+  // Begin replying to a message (from the swipe gesture) and focus the input.
+  const startReply = (m: Message) => { setReplyTo(m); setTimeout(() => inputRef.current?.focus(), 30); };
+
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
 
     if (!newMessage.trim() || sending) return;
 
-    const messageContent = newMessage.trim();
+    const text = newMessage.trim();
+    const replying = replyTo;
+    // Encode the quoted reply inline (no schema change) — same format as the group chats.
+    const messageContent = replying
+      ? encodeReply(senderName(replying), dmSnippet(replying), text)
+      : text;
     setNewMessage('');
+    setReplyTo(null);
     setSending(true);
     stopTyping();
 
@@ -450,11 +479,11 @@ export function ChatScreen({ conversationId, currentUserId, otherUserId, onBack,
 
   const renderMsg = (message: Message, index: number) => {
     const mine = message.sender_id === currentUserId;
-    const prev = messages[index - 1];
     const next = messages[index + 1];
     const isLast = !next || next.sender_id !== message.sender_id;
-    const evt = parseEvent(message.content).event;
-    const plc = parsePlace(message.content).place;
+    const { reply, body } = parseReply(message.content); // strip any inline reply quote
+    const evt = parseEvent(body).event;
+    const plc = parsePlace(body).place;
     const isNew = !seenIdsRef.current.has(message.id); // animate only freshly-arrived messages
     const popStyle = isNew ? { animation: 'gchat-pop 360ms cubic-bezier(0.34,1.56,0.64,1) both', transformOrigin: mine ? 'right bottom' : 'left bottom' } as const : undefined;
     return (
@@ -466,26 +495,34 @@ export function ChatScreen({ conversationId, currentUserId, otherUserId, onBack,
             </span>
           </div>
         )}
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: mine ? 'flex-end' : 'flex-start', paddingLeft: 8, paddingRight: 8, marginBottom: isLast ? 6 : 2 }}>
-          {evt ? (
-            <div style={popStyle}><EventChatCard data={evt} onClick={() => openEventById(evt.id)} /></div>
-          ) : plc ? (
-            <div style={popStyle}><PlaceChatCard data={plc} onClick={() => onOpenMapAt?.(plc.lat, plc.lng, plc.id, plc)} /></div>
-          ) : (
-            <div style={{ maxWidth: '78%', ...popStyle }}>
-              <MessageBubble mine={!mine} tail={isLast} color={mine ? '#FFD4A8' : '#FFFFFF'} contentStyle={{ padding: '7px 14px' }}>
-                <p style={{ fontSize: 14, lineHeight: 1.4, color: mine ? '#7C3400' : '#111111', margin: 0, wordBreak: 'break-word', whiteSpace: 'pre-wrap' }} dir="rtl">
-                  {message.content}
-                </p>
-              </MessageBubble>
-            </div>
-          )}
-          {isLast && (
-            <span style={{ fontSize: 10, color: message.failed ? '#DC2626' : '#9AA0A6', marginTop: 3, paddingInline: 2, fontVariantNumeric: 'tabular-nums' }}>
-              {message.failed ? 'לא נשלח ⚠️' : message.pending ? 'שולח… 🕓' : formatTime(message.created_at)}
-            </span>
-          )}
-        </div>
+        <SwipeToReplyRow align={mine ? 'end' : 'start'} onReply={() => startReply(message)}>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: mine ? 'flex-end' : 'flex-start', paddingLeft: 8, paddingRight: 8, marginBottom: isLast ? 6 : 2 }}>
+            {evt ? (
+              <div style={popStyle}><EventChatCard data={evt} onClick={() => openEventById(evt.id)} /></div>
+            ) : plc ? (
+              <div style={popStyle}><PlaceChatCard data={plc} onClick={() => onOpenMapAt?.(plc.lat, plc.lng, plc.id, plc)} /></div>
+            ) : (
+              <div style={{ maxWidth: '78%', ...popStyle }}>
+                <MessageBubble mine={!mine} tail={isLast} color={mine ? '#FFD4A8' : '#FFFFFF'} contentStyle={{ padding: '7px 14px' }}>
+                  {reply && (
+                    <div dir="rtl" style={{ borderInlineStart: '3px solid #EA580C', background: mine ? 'rgba(124,52,0,0.10)' : 'rgba(0,0,0,0.05)', borderRadius: 8, padding: '3px 8px', marginBottom: 5, maxWidth: 240 }}>
+                      <span style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#EA580C', lineHeight: 1.3 }}>{reply.n === myName ? 'אתה' : reply.n}</span>
+                      <span style={{ display: 'block', fontSize: 12, color: mine ? 'rgba(124,52,0,0.7)' : '#666', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{reply.t}</span>
+                    </div>
+                  )}
+                  <p style={{ fontSize: 14, lineHeight: 1.4, color: mine ? '#7C3400' : '#111111', margin: 0, wordBreak: 'break-word', whiteSpace: 'pre-wrap' }} dir="rtl">
+                    {body}
+                  </p>
+                </MessageBubble>
+              </div>
+            )}
+            {isLast && (
+              <span style={{ fontSize: 10, color: message.failed ? '#DC2626' : '#9AA0A6', marginTop: 3, paddingInline: 2, fontVariantNumeric: 'tabular-nums' }}>
+                {message.failed ? 'לא נשלח ⚠️' : message.pending ? 'שולח… 🕓' : formatTime(message.created_at)}
+              </span>
+            )}
+          </div>
+        </SwipeToReplyRow>
       </div>
     );
   };
@@ -494,7 +531,7 @@ export function ChatScreen({ conversationId, currentUserId, otherUserId, onBack,
   // "typing…", scroll-to-bottom button, or 3-dots menu state changes (those reuse the identical row
   // elements, so React skips re-rendering/re-measuring every bubble → WhatsApp-smooth scrolling).
   // eslint-disable-next-line react-hooks/exhaustive-deps -- callbacks inside are functional/stable.
-  const messageRows = useMemo(() => messages.map((m, i) => renderMsg(m, i)), [messages]);
+  const messageRows = useMemo(() => messages.map((m, i) => renderMsg(m, i)), [messages, myName]);
 
   if (loading || !otherUser) {
     return (
@@ -680,6 +717,24 @@ export function ChatScreen({ conversationId, currentUserId, otherUserId, onBack,
         WebkitMaskImage: 'linear-gradient(to top, #000 calc(100% - 16px), transparent)',
         maskImage: 'linear-gradient(to top, #000 calc(100% - 16px), transparent)',
       }}>
+        {/* "Replying to…" preview — appears when a message was swiped to reply. */}
+        {replyTo && !isBlocked && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#fff', borderRadius: 12, padding: '7px 10px', marginBottom: 6, boxShadow: '0 1px 5px rgba(0,0,0,0.10)' }}>
+            <div style={{ width: 3, alignSelf: 'stretch', borderRadius: 3, background: '#EA580C', flexShrink: 0 }} />
+            <div style={{ flex: 1, minWidth: 0 }} dir="rtl">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                <Reply size={13} style={{ color: '#EA580C' }} />
+                <span style={{ fontSize: 12.5, fontWeight: 700, color: '#EA580C' }}>
+                  {replyTo.sender_id === currentUserId ? 'אתה' : (otherUser?.display_name ?? '')}
+                </span>
+              </div>
+              <span style={{ display: 'block', fontSize: 12.5, color: '#666', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{dmSnippet(replyTo)}</span>
+            </div>
+            <button onClick={() => setReplyTo(null)} aria-label="בטל תשובה" style={{ width: 28, height: 28, borderRadius: '50%', border: 'none', background: 'rgba(0,0,0,0.06)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}>
+              <X size={15} style={{ color: '#666' }} />
+            </button>
+          </div>
+        )}
         {isBlocked ? (
           <button onClick={handleUnblock} style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, minHeight: 38, background: 'transparent', border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>
             <Ban size={17} style={{ color: '#E53935' }} />

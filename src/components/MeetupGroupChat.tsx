@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
-import { X, Send } from 'lucide-react';
+import { X, Send, Reply } from 'lucide-react';
 import { BackButton } from './BackButton';
 import { useSwipeBack } from '../hooks/useSwipeBack';
 import { useKeyboardViewport } from '../hooks/useKeyboardViewport';
+import { SwipeToReplyRow } from './SwipeToReplyRow';
+import { encodeReply, parseReply } from '../utils/replyMessage';
 import { supabase, type Meetup } from '../lib/supabase';
 import { createPersistedRecord } from '../utils/warmCache';
 
@@ -34,6 +36,9 @@ export function MeetupGroupChat({ meetup, currentUserId, onClose }: MeetupGroupC
   const [newMessage, setNewMessage] = useState('');
   const [sending,    setSending]    = useState(false);
   const [loading,    setLoading]    = useState(!_meetupMsgCache[meetup.id]?.length);
+  const [replyTo,    setReplyTo]    = useState<Message | null>(null); // message being replied to (swipe-to-reply)
+  const [myName,     setMyName]     = useState('');                   // my display name (localize "אתה" in reply quotes)
+  const textRef = useRef<HTMLTextAreaElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const msgScrollRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLDivElement>(null);
@@ -114,9 +119,23 @@ export function MeetupGroupChat({ meetup, currentUserId, onClose }: MeetupGroupC
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  // My display name — so a reply quoting my own message shows "אתה" to me.
+  useEffect(() => {
+    supabase.from('users').select('display_name').eq('id', currentUserId).maybeSingle()
+      .then(({ data }) => { if (data?.display_name) setMyName(data.display_name); });
+  }, [currentUserId]);
+
+  const msgSnippet = (m: Message): string => parseReply(m.content).body.slice(0, 90);
+  const senderName = (m: Message): string =>
+    m.sender_id === currentUserId ? (myName || 'אני') : (m.users?.display_name || _meetupNameCache[m.sender_id] || 'משתמש');
+  const startReply = (m: Message) => { setReplyTo(m); setTimeout(() => textRef.current?.focus(), 30); };
+
   const sendMessage = async () => {
-    const content = newMessage.trim();
-    if (!content || sending) return;
+    const text = newMessage.trim();
+    if (!text || sending) return;
+    // Encode the quoted reply inline (no schema change) — same format as the other chats.
+    const content = replyTo ? encodeReply(senderName(replyTo), msgSnippet(replyTo), text) : text;
+    setReplyTo(null);
     setSending(true);
     setNewMessage('');
 
@@ -191,8 +210,10 @@ export function MeetupGroupChat({ meetup, currentUserId, onClose }: MeetupGroupC
         ) : (
           messages.map((msg) => {
             const isMe = msg.sender_id === currentUserId;
+            const { reply, body } = parseReply(msg.content); // strip any inline reply quote
             return (
               <div key={msg.id} className={`flex ${isMe ? 'justify-end' : 'justify-start'}`}>
+                <SwipeToReplyRow align={isMe ? 'end' : 'start'} onReply={() => startReply(msg)}>
                 <div className={`max-w-[75%] ${isMe ? 'items-end' : 'items-start'} flex flex-col`}>
                   {!isMe && (
                     <span className="text-xs text-gray-500 mb-1 px-1">
@@ -206,12 +227,19 @@ export function MeetupGroupChat({ meetup, currentUserId, onClose }: MeetupGroupC
                         : 'bg-gray-100 text-gray-900 rounded-bl-md'
                     }`}
                   >
-                    {msg.content}
+                    {reply && (
+                      <div className="mb-1.5 rounded-lg px-2 py-1" dir="rtl" style={{ borderInlineStart: `3px solid ${isMe ? 'rgba(255,255,255,0.9)' : '#EA580C'}`, background: isMe ? 'rgba(255,255,255,0.18)' : 'rgba(0,0,0,0.05)' }}>
+                        <span className="block text-[11px] font-bold leading-tight" style={{ color: isMe ? '#fff' : '#EA580C' }}>{reply.n === myName ? 'אתה' : reply.n}</span>
+                        <span className="block text-[12px] truncate" style={{ color: isMe ? 'rgba(255,255,255,0.85)' : '#666' }}>{reply.t}</span>
+                      </div>
+                    )}
+                    {body}
                   </div>
                   <span className={`text-[10px] mt-1 px-1 ${msg.failed ? 'text-red-500' : 'text-gray-400'}`}>
                     {msg.failed ? 'לא נשלח ⚠️' : msg.pending ? 'שולח… 🕓' : formatTime(msg.created_at)}
                   </span>
                 </div>
+                </SwipeToReplyRow>
               </div>
             );
           })
@@ -220,25 +248,44 @@ export function MeetupGroupChat({ meetup, currentUserId, onClose }: MeetupGroupC
       </div>
 
       {/* Input */}
-      <div ref={composerRef} className="flex-shrink-0 px-4 py-3 border-t border-gray-100 bg-white flex items-end gap-3">
-        <textarea
-          value={newMessage}
-          onChange={e => setNewMessage(e.target.value)}
-          onKeyDown={e => {
-            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
-          }}
-          placeholder="כתוב הודעה..."
-          rows={1}
-          className="flex-1 px-4 py-3 bg-gray-100 rounded-2xl text-sm resize-none focus:outline-none focus:ring-2 focus:ring-orange-400 max-h-28"
-          style={{ overflowY: newMessage.split('\n').length > 3 ? 'auto' : 'hidden' }}
-        />
-        <button
-          onClick={sendMessage}
-          disabled={!newMessage.trim() || sending}
-          className="w-11 h-11 bg-gradient-to-br from-orange-500 to-orange-600 rounded-full flex items-center justify-center shadow-md shadow-orange-200 hover:from-orange-600 hover:to-orange-700 transition-all disabled:opacity-40 flex-shrink-0"
-        >
-          <Send className="w-5 h-5 text-white" style={{ transform: 'scaleX(-1)' }} />
-        </button>
+      <div ref={composerRef} className="flex-shrink-0 px-4 py-3 border-t border-gray-100 bg-white flex flex-col gap-2">
+        {/* "Replying to…" preview — appears when a message was swiped to reply. */}
+        {replyTo && (
+          <div className="flex items-center gap-2 bg-gray-50 rounded-xl px-2.5 py-1.5" dir="rtl">
+            <div className="w-[3px] self-stretch rounded bg-orange-500 flex-shrink-0" />
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-1">
+                <Reply className="w-3 h-3 text-orange-500" />
+                <span className="text-[12.5px] font-bold text-orange-500">{replyTo.sender_id === currentUserId ? 'אתה' : (replyTo.users?.display_name || 'משתמש')}</span>
+              </div>
+              <span className="block text-[12.5px] text-gray-500 truncate">{msgSnippet(replyTo)}</span>
+            </div>
+            <button onClick={() => setReplyTo(null)} aria-label="בטל תשובה" className="w-7 h-7 rounded-full bg-black/5 flex items-center justify-center flex-shrink-0">
+              <X className="w-4 h-4 text-gray-500" />
+            </button>
+          </div>
+        )}
+        <div className="flex items-end gap-3">
+          <textarea
+            ref={textRef}
+            value={newMessage}
+            onChange={e => setNewMessage(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+            }}
+            placeholder="כתוב הודעה..."
+            rows={1}
+            className="flex-1 px-4 py-3 bg-gray-100 rounded-2xl text-sm resize-none focus:outline-none focus:ring-2 focus:ring-orange-400 max-h-28"
+            style={{ overflowY: newMessage.split('\n').length > 3 ? 'auto' : 'hidden' }}
+          />
+          <button
+            onClick={sendMessage}
+            disabled={!newMessage.trim() || sending}
+            className="w-11 h-11 bg-gradient-to-br from-orange-500 to-orange-600 rounded-full flex items-center justify-center shadow-md shadow-orange-200 hover:from-orange-600 hover:to-orange-700 transition-all disabled:opacity-40 flex-shrink-0"
+          >
+            <Send className="w-5 h-5 text-white" style={{ transform: 'scaleX(-1)' }} />
+          </button>
+        </div>
       </div>
     </div>
   );

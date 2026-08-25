@@ -5,6 +5,7 @@ import { useSwipeBack } from '../hooks/useSwipeBack';
 import { useKeyboardViewport } from '../hooks/useKeyboardViewport';
 import { CHAT_BG } from '../utils/chatBg';
 import { MessageBubble } from './MessageBubble';
+import { SwipeToReplyRow } from './SwipeToReplyRow';
 import { ImageBubble } from './ImageBubble';
 import { EventChatCard } from './EventChatCard';
 import { PlaceChatCard } from './PlaceChatCard';
@@ -1098,6 +1099,7 @@ export function CityGroupChat({
             )}
 
             {/* Bubble */}
+            <SwipeToReplyRow align={mine ? 'end' : 'start'} style={{ minWidth: 0 }} onReply={() => { setReplyTo(msg); setTimeout(() => textRef.current?.focus(), 30); }}>
             <div
               style={{ position: 'relative', minWidth: 0, WebkitUserSelect: 'none', userSelect: 'none', WebkitTouchCallout: 'none' }}
               onTouchStart={() => startPress(msg)}
@@ -1225,6 +1227,7 @@ export function CityGroupChat({
                 </div>
               )}
             </div>
+            </SwipeToReplyRow>
           </div>
 
           {/* Timestamp — under the bubble (offset past the avatar); once per same-minute run */}

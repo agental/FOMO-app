@@ -59,17 +59,6 @@ function OrangeRing({ value, size = 136 }: { value: number; size?: number }) {
   );
 }
 
-function calcCompletion(p: User): number {
-  let s = 0;
-  if (p.display_name)      s += 20;
-  if (p.avatar_url)        s += 20;
-  if (p.bio)               s += 15;
-  if (p.age)               s += 10;
-  if (p.current_country)   s += 10;
-  if (p.interests?.length) s += 25;
-  return Math.min(s, 100);
-}
-
 function SectionCard({ label, icon, children, noMargin, onEdit }: { label: string; icon: React.ReactNode; children: React.ReactNode; noMargin?: boolean; onEdit?: () => void }) {
   return (
     <div style={{
@@ -290,7 +279,6 @@ export default function ProfileScreen({
     </div>
   );
 
-  const completion  = calcCompletion(profile);
 
   /* ═══════════════════════════════════════════════════ */
   return (
@@ -371,7 +359,7 @@ export default function ProfileScreen({
 
           {/* Ring + avatar */}
           <div style={{ position: 'relative', width: 136, height: 136, marginBottom: 22 }}>
-            <OrangeRing value={completion} size={136} />
+            <OrangeRing value={100} size={136} />
 
             <div
               onClick={isOwnProfile ? () => avatarInputRef.current?.click() : undefined}
@@ -447,18 +435,6 @@ export default function ProfileScreen({
               </>
             )}
 
-            {/* % badge */}
-            <div style={{
-              position: 'absolute', bottom: -3, left: '50%', transform: 'translateX(-50%)',
-              background: 'linear-gradient(90deg, #F97316, #EA580C)',
-              borderRadius: 30, padding: '3px 11px',
-              fontSize: 11, fontWeight: 900, color: 'white',
-              boxShadow: '0 2px 14px rgba(249,115,22,0.55)',
-              fontFamily: 'Heebo, sans-serif', whiteSpace: 'nowrap',
-              border: '2px solid #0C0C10',
-            }}>
-              {completion}%
-            </div>
           </div>
 
           {/* Name */}
@@ -553,35 +529,6 @@ export default function ProfileScreen({
         position: 'relative',
       }}>
 
-        {/* Events tile — own profile only (top position) */}
-        {isOwnProfile && (
-          <div
-            onClick={onNavigateToMyEvents}
-            role="button"
-            aria-label="האירועים שלי"
-            className="animate-card-entrance fomo-animated fomo-press"
-            style={{
-              display: 'flex', alignItems: 'center', gap: 12,
-              background: 'var(--color-surface)', borderRadius: 'var(--radius-lg)',
-              padding: '14px 16px', marginBottom: 12, boxShadow: 'var(--shadow-card)',
-              cursor: 'pointer',
-            }}
-          >
-            <div style={{
-              width: 44, height: 44, borderRadius: 14, flexShrink: 0,
-              background: 'var(--color-primary-tint)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-            }}>
-              <Ticket size={22} style={{ color: 'var(--color-primary)' }} />
-            </div>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 20, fontWeight: 900, color: 'var(--color-text-heading)', fontFamily: 'Heebo, sans-serif', lineHeight: 1 }}>{eventsCount}</div>
-              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--color-text-muted)', fontFamily: 'Heebo, sans-serif', marginTop: 4 }}>אירועים</div>
-            </div>
-            <ChevronLeft size={18} style={{ color: 'var(--color-primary)', opacity: 0.6, flexShrink: 0 }} />
-          </div>
-        )}
-
         {/* Action buttons + events tile — viewing other user */}
         {!isOwnProfile && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 12 }}>
@@ -621,46 +568,6 @@ export default function ProfileScreen({
                 <div style={{ fontSize: 20, fontWeight: 900, color: 'var(--color-text-heading)', fontFamily: 'Heebo, sans-serif', lineHeight: 1 }}>{eventsCount}</div>
                 <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--color-text-muted)', fontFamily: 'Heebo, sans-serif', marginTop: 4 }}>אירועים</div>
               </div>
-            </div>
-          </div>
-        )}
-
-        {/* Profile completion */}
-        {isOwnProfile && completion < 100 && (
-          <div className="animate-card-entrance fomo-animated" style={{
-            background: 'var(--color-surface)', borderRadius: 'var(--radius-lg)', padding: '18px 18px 20px',
-            marginBottom: 12, animationDelay: '60ms',
-            boxShadow: 'var(--shadow-card)',
-            border: '1.5px solid rgba(249,115,22,0.15)',
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 14 }}>
-              <div style={{
-                width: 46, height: 46, borderRadius: 15, flexShrink: 0,
-                background: 'linear-gradient(135deg, #F97316, #EA580C)',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                boxShadow: '0 4px 16px rgba(249,115,22,0.35)',
-              }}>
-                <span style={{ color: 'white', fontSize: 13, fontWeight: 900, fontFamily: 'Heebo, sans-serif' }}>{completion}%</span>
-              </div>
-              <div>
-                <p style={{ margin: 0, fontSize: 14, fontWeight: 800, color: '#111827', fontFamily: 'Heebo, sans-serif' }}>
-                  השלם את הפרופיל שלך
-                </p>
-                <p style={{ margin: '3px 0 0', fontSize: 12, color: '#6B7280', fontFamily: 'Rubik, sans-serif' }}>
-                  פרופיל מלא מקבל פי 3 יותר חיבורים
-                </p>
-              </div>
-            </div>
-            {/* Progress bar */}
-            <div style={{ height: 7, background: '#F3F4F6', borderRadius: 99, overflow: 'hidden' }}
-              role="progressbar" aria-valuenow={completion} aria-valuemin={0} aria-valuemax={100} aria-label="השלמת פרופיל">
-              <div className="fomo-animated" style={{
-                height: '100%', borderRadius: 99,
-                background: 'linear-gradient(90deg, #FB923C, #EA580C)',
-                width: `${completion}%`,
-                transition: 'width 1.2s cubic-bezier(0.4,0,0.2,1)',
-                boxShadow: '0 0 10px rgba(249,115,22,0.45)',
-              }} />
             </div>
           </div>
         )}
@@ -782,6 +689,34 @@ export default function ProfileScreen({
               </div>
             </div>
           </button>
+        )}
+        {/* Events tile — own profile only (moved to the bottom, last section) */}
+        {isOwnProfile && (
+          <div
+            onClick={onNavigateToMyEvents}
+            role="button"
+            aria-label="האירועים שלי"
+            className="animate-card-entrance fomo-animated fomo-press"
+            style={{
+              display: 'flex', alignItems: 'center', gap: 12,
+              background: 'var(--color-surface)', borderRadius: 'var(--radius-lg)',
+              padding: '14px 16px', marginTop: 12, boxShadow: 'var(--shadow-card)',
+              cursor: 'pointer',
+            }}
+          >
+            <div style={{
+              width: 44, height: 44, borderRadius: 14, flexShrink: 0,
+              background: 'var(--color-primary-tint)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+              <Ticket size={22} style={{ color: 'var(--color-primary)' }} />
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 20, fontWeight: 900, color: 'var(--color-text-heading)', fontFamily: 'Heebo, sans-serif', lineHeight: 1 }}>{eventsCount}</div>
+              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--color-text-muted)', fontFamily: 'Heebo, sans-serif', marginTop: 4 }}>אירועים</div>
+            </div>
+            <ChevronLeft size={18} style={{ color: 'var(--color-primary)', opacity: 0.6, flexShrink: 0 }} />
+          </div>
         )}
       </div>
 

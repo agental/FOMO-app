@@ -488,11 +488,21 @@ export function MapScreen({
     }
 
     let map: mapboxgl.Map;
+    // Open on the FRESHEST known position, not the (possibly stale) cached one.
+    // The native GPS bridge keeps window._nativeLocation current, so prefer it —
+    // otherwise the map first paints last session's spot (e.g. Tiberias) and only
+    // then the geolocate control flies to where the user actually is. Building on
+    // the live position means that recenter lands on the same point → no visible jump.
+    const nl = (window as any)._nativeLocation;
+    const initialCenter: [number, number] =
+      nl && nl.lat != null && !isNaN(nl.lat) && nl.lng != null && !isNaN(nl.lng)
+        ? [nl.lng, nl.lat]
+        : [location.longitude, location.latitude];
     try {
       map = new mapboxgl.Map({
         container: mapRef.current,
         style: 'mapbox://styles/ahon3210/cmrm5coki000b01qk9ley18e6',
-        center: [location.longitude, location.latitude],
+        center: initialCenter,
         zoom: 12,
         pitch: 45, // slight tilt so the 3D buildings read as 3D
         // Flat (mercator), NOT globe: the app pins are DOM markers, and on a globe projection in a
