@@ -1,21 +1,24 @@
 import { useState, useEffect } from 'react';
 import { useSwipeBack } from '../hooks/useSwipeBack';
-import { Check, X, Calendar, Clock, ChevronLeft, Bell } from 'lucide-react';
+import { Check, X, Calendar, Clock, ChevronLeft, Bell, Ticket, MessageCircle } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { UserAvatar } from './UserAvatar';
 import { FloatingNavBar } from './FloatingNavBar';
 import { JoinRequestCard } from './JoinRequestCard';
 import { BackButton } from './BackButton';
-import { getNotifLastSeen, setNotifLastSeen } from '../utils/notificationsSeen';
-
-type RequestDecision = {
+import { EventDetailsModal } from './EventDetailsModal';
+import { EventService } from '../services/eventService';
+import type { Event } from '../types/event';
+type NotifRow = {
   id: string;
-  event_id: string;
-  status: 'approved' | 'rejected';
-  updated_at: string;
-  eventTitle: string;
-  isNew: boolean;
-  paidAmount?: number | null;
+  type: string;
+  title: string | null;
+  body: string | null;
+  emoji: string | null;
+  read: boolean;
+  created_at: string;
+  entity_kind?: string | null;
+  entity_id?: string | null;
 };
 
 type JoinRequest = {
@@ -46,6 +49,7 @@ type RequestsScreenProps = {
   onMessagesClick?: () => void;
   onMyEventsClick?: () => void;
   onNavigateToUserProfile?: (userId: string) => void;
+  onOpenMapAt?: (lat: number, lng: number) => void;
 };
 
 type MeetupPendingRequest = {
@@ -56,27 +60,36 @@ type MeetupPendingRequest = {
   profile: { id: string; display_name: string; avatar_url: string | null };
 };
 
-export function RequestsScreen({ currentUserId, onBack, onHomeClick, onMapClick, onCreateClick, onMessagesClick, onMyEventsClick, onNavigateToUserProfile }: RequestsScreenProps) {
+export function RequestsScreen({ currentUserId, onBack, onHomeClick, onMapClick, onCreateClick, onMessagesClick, onMyEventsClick, onNavigateToUserProfile, onOpenMapAt }: RequestsScreenProps) {
   const swipeRef = useSwipeBack<HTMLDivElement>(onBack); // swipe from an edge to slide the screen back
   const [joinRequests, setJoinRequests] = useState<JoinRequest[]>([]);
   const [meetupRequests, setMeetupRequests] = useState<MeetupPendingRequest[]>([]);
-  const [decisions, setDecisions] = useState<RequestDecision[]>([]);
+  const [notifications, setNotifications] = useState<NotifRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [meetupLoading, setMeetupLoading] = useState(false);
+  // Full events behind APPROVED decision notifications → power the "view ticket / enter group" actions.
+  // Keyed by id, plus a title index used to resolve rows whose notification carries no event_id.
+  const [eventMap, setEventMap] = useState<Record<string, Event>>({});
+  const [eventByTitle, setEventByTitle] = useState<Record<string, Event>>({});
+  // The event opened from a notification action, and whether to jump straight into its group chat.
+  const [openEvent, setOpenEvent] = useState<Event | null>(null);
+  const [openInGroup, setOpenInGroup] = useState(false);
 
   useEffect(() => {
     loadJoinRequests();
     loadMeetupRequests();
-    loadDecisions();
+    loadNotifications();
 
     const requestsChannel = supabase
       .channel('requests-screen-sync')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'event_join_requests' }, () => {
         loadJoinRequests();
-        loadDecisions();
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'meetups' }, () => {
         loadMeetupRequests();
+      })
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'notifications', filter: `user_id=eq.${currentUserId}` }, () => {
+        loadNotifications();
       })
       .subscribe();
 
@@ -88,40 +101,66 @@ export function RequestsScreen({ currentUserId, onBack, onHomeClick, onMapClick,
   // Decisions on MY OWN join requests (approved / rejected). The "new" flag is
   // computed against the last time the user opened this screen; we then bump the
   // seen-timestamp so the bell badge clears and these stop counting as unread.
-  const loadDecisions = async () => {
+  const notifBg = (type: string) =>
+    type.endsWith('approved') ? 'linear-gradient(135deg,#22c55e,#16a34a)'
+      : type.endsWith('rejected') ? 'linear-gradient(135deg,#ef4444,#e11d48)'
+      : 'linear-gradient(135deg,#F97316,#EA580C)';
+
+  // Full notifications history (events + meetups; requests received AND decisions on my own requests).
+  // Loading it marks everything read → the bell dot clears, but the history itself stays (Instagram-style).
+  const loadNotifications = async () => {
     try {
-      const lastSeen = getNotifLastSeen(currentUserId);
-      const { data, error } = await supabase
-        .from('event_join_requests')
-        .select('id, event_id, status, updated_at, paid_amount')
+      // entity_kind/entity_id let an APPROVED event decision (type 'event_approved', entity_kind 'event')
+      // deep-link to its event for the "view ticket / enter group" actions. Kept behind a graceful fallback
+      // in case an older DB lacks the columns.
+      let rows: NotifRow[] = [];
+      const withEntity = await supabase
+        .from('notifications')
+        .select('id, type, title, body, emoji, read, created_at, entity_kind, entity_id')
         .eq('user_id', currentUserId)
-        .in('status', ['approved', 'rejected'])
-        .order('updated_at', { ascending: false })
-        .limit(50);
+        .order('created_at', { ascending: false })
+        .limit(100);
+      if (withEntity.error) {
+        const base = await supabase
+          .from('notifications')
+          .select('id, type, title, body, emoji, read, created_at')
+          .eq('user_id', currentUserId)
+          .order('created_at', { ascending: false })
+          .limit(100);
+        rows = (base.data || []) as NotifRow[];
+      } else {
+        rows = (withEntity.data || []) as NotifRow[];
+      }
+      setNotifications(rows);
 
-      if (error) throw error;
-      if (!data || data.length === 0) { setDecisions([]); setNotifLastSeen(currentUserId); return; }
+      // Load the full events behind approved decisions so the action buttons can open the card / group.
+      // Two sources so this works whatever the notifications schema looks like:
+      //   1. event_id straight off the notification (when the column exists), and
+      //   2. MY approved event_join_requests (always have event_id) — also used to match by title for
+      //      notifications that carry no event_id.
+      const { data: myApproved } = await supabase
+        .from('event_join_requests')
+        .select('event_id')
+        .eq('user_id', currentUserId)
+        .eq('status', 'approved');
+      const approvedEventIds = [...new Set([
+        ...rows.filter(n => n.type === 'event_approved' && n.entity_kind === 'event' && n.entity_id).map(n => n.entity_id as string),
+        ...((myApproved || []).map(r => r.event_id as string).filter(Boolean)),
+      ])];
+      if (approvedEventIds.length) {
+        const events = await Promise.all(approvedEventIds.map(id => EventService.getEventById(id)));
+        const byId: Record<string, Event> = {};
+        const byTitle: Record<string, Event> = {};
+        events.forEach(ev => { if (ev) { byId[ev.id] = ev; if (ev.title) byTitle[ev.title.trim()] = ev; } });
+        setEventMap(prev => ({ ...prev, ...byId }));
+        setEventByTitle(prev => ({ ...prev, ...byTitle }));
+      }
 
-      const eventIds = [...new Set(data.map(d => d.event_id))];
-      const { data: events } = await supabase
-        .from('events')
-        .select('id, title')
-        .in('id', eventIds);
-
-      setDecisions(data.map(d => ({
-        id: d.id,
-        event_id: d.event_id,
-        status: d.status as 'approved' | 'rejected',
-        updated_at: d.updated_at,
-        eventTitle: events?.find(e => e.id === d.event_id)?.title || 'אירוע',
-        isNew: new Date(d.updated_at).getTime() > lastSeen,
-        paidAmount: (d as any).paid_amount ?? null,
-      })));
-
-      // Mark everything seen as of now (badge clears on next home refresh).
-      setNotifLastSeen(currentUserId);
+      const unread = rows.filter((n: NotifRow) => !n.read).map((n: NotifRow) => n.id);
+      if (unread.length) await supabase.from('notifications').update({ read: true }).in('id', unread);
+      globalThis.__fomoPendingCount = 0;
     } catch (err) {
-      console.error('Error loading decisions:', err);
+      console.error('Error loading notifications:', err);
     }
   };
 
@@ -161,6 +200,7 @@ export function RequestsScreen({ currentUserId, onBack, onHomeClick, onMapClick,
   };
 
   const handleApproveMeetup = async (meetupId: string, userId: string) => {
+    setMeetupRequests(prev => prev.filter(r => !(r.meetupId === meetupId && r.userId === userId))); // optimistic
     const { data: meetup } = await supabase
       .from('meetups')
       .select('attendees, pending_requests')
@@ -175,6 +215,7 @@ export function RequestsScreen({ currentUserId, onBack, onHomeClick, onMapClick,
   };
 
   const handleRejectMeetup = async (meetupId: string, userId: string) => {
+    setMeetupRequests(prev => prev.filter(r => !(r.meetupId === meetupId && r.userId === userId))); // optimistic
     const { data: meetup } = await supabase
       .from('meetups')
       .select('pending_requests')
@@ -340,7 +381,7 @@ export function RequestsScreen({ currentUserId, onBack, onHomeClick, onMapClick,
             <div className="w-14 h-14 border-4 border-brand-100 border-t-brand-500 rounded-full animate-spin mb-4" />
             <p className="text-sm text-gray-500 font-medium" style={{ fontFamily: 'Rubik, sans-serif' }}>טוען בקשות...</p>
           </div>
-        ) : meetupRequests.length === 0 && joinRequests.length === 0 && decisions.length === 0 ? (
+        ) : meetupRequests.length === 0 && joinRequests.length === 0 && notifications.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20 px-6">
             <div className="w-24 h-24 bg-gradient-to-br from-orange-100 to-amber-100 rounded-3xl flex items-center justify-center mb-5 shadow-lg shadow-orange-100/50">
               <Bell className="w-11 h-11 text-orange-500" strokeWidth={1.8} />
@@ -463,52 +504,82 @@ export function RequestsScreen({ currentUserId, onBack, onHomeClick, onMapClick,
               </div>
             )}
 
-            {/* ── Updates: decisions on MY OWN requests (approved / rejected) ── */}
-            {decisions.length > 0 && (
+            {/* ── Notifications history (events + meetups; requests + decisions) — stays like Instagram ── */}
+            {notifications.length > 0 && (
               <div>
                 <p className="text-sm font-semibold text-gray-600 mb-3 px-1" style={{ fontFamily: 'Rubik, sans-serif' }}>
-                  עדכונים על הבקשות שלך
+                  היסטוריית התראות
                 </p>
                 <div className="space-y-3">
-                  {decisions.map((d, idx) => {
-                    const approved = d.status === 'approved';
+                  {notifications.map((n, idx) => {
+                    // Offer "view ticket / enter group" when this notification is about an event I'm APPROVED
+                    // for. eventMap/eventByTitle only ever hold events I'm an approved attendee of, so a match
+                    // (by event_id, else by the event title shown in the body/title) is safe regardless of the
+                    // exact notification `type` string — and never fires for pending/rejected rows.
+                    const ev = (n.entity_kind === 'event' && n.entity_id && eventMap[n.entity_id])
+                      || (n.body && eventByTitle[n.body.trim()])
+                      || (n.title && eventByTitle[n.title.trim()])
+                      || null;
                     return (
-                      <div
-                        key={d.id}
-                        className="bg-white rounded-2xl shadow-md border border-gray-100/50 animate-fade-in p-4 flex items-center gap-3"
-                        style={{ animationDelay: `${idx * 50}ms` }}
-                      >
+                    <div
+                      key={n.id}
+                      className="bg-white rounded-2xl shadow-md border border-gray-100/50 animate-fade-in p-4"
+                      style={{ animationDelay: `${idx * 40}ms` }}
+                    >
+                      <div className="flex items-center gap-3">
                         <div
-                          className="flex-shrink-0 w-11 h-11 rounded-full flex items-center justify-center"
-                          style={{ background: approved ? 'linear-gradient(135deg,#22c55e,#16a34a)' : 'linear-gradient(135deg,#ef4444,#e11d48)' }}
+                          className="flex-shrink-0 w-11 h-11 rounded-full flex items-center justify-center text-xl"
+                          style={{ background: notifBg(n.type) }}
                         >
-                          {approved
-                            ? <Check className="w-5 h-5 text-white" strokeWidth={3} />
-                            : <X className="w-5 h-5 text-white" strokeWidth={3} />}
+                          {n.emoji || '🔔'}
                         </div>
                         <div className="flex-1 min-w-0">
                           <p className="text-sm font-bold text-gray-900" style={{ fontFamily: 'Heebo, sans-serif' }}>
-                            {approved ? 'בקשתך אושרה 🎉' : (d.paidAmount ? `בקשתך נדחתה — הוחזרו ₪${d.paidAmount}` : 'בקשתך נדחתה')}
+                            {n.title || 'התראה'}
                           </p>
-                          <div className="flex items-center gap-1.5 mt-1">
-                            <Calendar className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" strokeWidth={2.5} />
-                            <span className="text-xs text-gray-600 font-medium truncate" style={{ fontFamily: 'Rubik, sans-serif' }}>
-                              {d.eventTitle}
-                            </span>
-                          </div>
+                          {n.body && (
+                            <div className="flex items-center gap-1.5 mt-1">
+                              <Calendar className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" strokeWidth={2.5} />
+                              <span className="text-xs text-gray-600 font-medium truncate" style={{ fontFamily: 'Rubik, sans-serif' }}>
+                                {n.body}
+                              </span>
+                            </div>
+                          )}
                           <div className="flex items-center gap-1.5 mt-1">
                             <Clock className="w-3 h-3 text-gray-400 flex-shrink-0" strokeWidth={2} />
                             <span className="text-[11px] text-gray-400 font-medium" style={{ fontFamily: 'Rubik, sans-serif' }}>
-                              {formatTimeAgo(d.updated_at)}
+                              {formatTimeAgo(n.created_at)}
                             </span>
                           </div>
                         </div>
-                        {d.isNew && (
-                          <span className="flex-shrink-0 text-[10px] font-bold text-white bg-orange-500 rounded-full px-2 py-0.5" style={{ fontFamily: 'Heebo, sans-serif' }}>
-                            חדש
-                          </span>
+                        {!n.read && (
+                          <span className="flex-shrink-0 w-2.5 h-2.5 rounded-full bg-orange-500" />
                         )}
                       </div>
+
+                      {ev && (
+                        <div className="flex gap-2 mt-3">
+                          <button
+                            onClick={() => { setOpenInGroup(false); setOpenEvent(ev); }}
+                            className="flex-1 flex items-center justify-center gap-1.5 py-2.5 px-3 bg-gradient-to-r from-orange-500 to-amber-500 text-white rounded-xl font-bold text-sm shadow-lg shadow-orange-500/20 active:scale-95 transition-all"
+                            style={{ fontFamily: 'Heebo, sans-serif' }}
+                          >
+                            <Ticket className="w-4 h-4" strokeWidth={2.5} />
+                            צפה בכרטיס
+                          </button>
+                          {!!(ev as any).has_group && (
+                            <button
+                              onClick={() => { setOpenInGroup(true); setOpenEvent(ev); }}
+                              className="flex-1 flex items-center justify-center gap-1.5 py-2.5 px-3 bg-white text-orange-600 border-2 border-orange-200 rounded-xl font-bold text-sm active:scale-95 transition-all"
+                              style={{ fontFamily: 'Heebo, sans-serif' }}
+                            >
+                              <MessageCircle className="w-4 h-4" strokeWidth={2.5} />
+                              כניסה לקבוצה
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
                     );
                   })}
                 </div>
@@ -528,6 +599,17 @@ export function RequestsScreen({ currentUserId, onBack, onHomeClick, onMapClick,
         onChatClick={onMessagesClick}
         onMyEventsClick={onMyEventsClick}
       />
+
+      {openEvent && (
+        <EventDetailsModal
+          event={openEvent}
+          currentUserId={currentUserId}
+          onClose={() => { setOpenEvent(null); setOpenInGroup(false); }}
+          onOpenMapAt={onOpenMapAt}
+          onNavigateToUserProfile={onNavigateToUserProfile}
+          initialOpenGroup={openInGroup}
+        />
+      )}
     </div>
   );
 }

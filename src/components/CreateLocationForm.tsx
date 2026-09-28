@@ -6,8 +6,7 @@ import { createPlacePinSVG } from '../utils/createLocationPin';
 import { placePinColor, PLACE_COLORS } from '../utils/placePinColor';
 import { EmojiPickerSheet } from './EmojiPickerSheet';
 import { reverseGeocode } from '../utils/geocoding';
-import mapboxgl from 'mapbox-gl';
-import 'mapbox-gl/dist/mapbox-gl.css';
+import { loadMapKit } from '../utils/mapkit';
 
 type CreateLocationFormProps = {
   onSuccess: () => void;
@@ -82,51 +81,71 @@ export function CreateLocationForm({ onSuccess, onCancel, currentUserId }: Creat
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const mapContainerRef = useRef<HTMLDivElement>(null);
-  const mapInstanceRef = useRef<mapboxgl.Map | null>(null);
-  const markerRef = useRef<mapboxgl.Marker | null>(null);
+  const mapInstanceRef = useRef<any>(null);   // mapkit.Map
+  const markerRef = useRef<any>(null);        // mapkit.MarkerAnnotation (draggable pin)
+  const mapkitRef = useRef<any>(null);        // the mapkit namespace
 
   useEffect(() => {
-    mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN || '';
     return () => {
       if (mapInstanceRef.current) {
-        mapInstanceRef.current.remove();
+        try { mapInstanceRef.current.destroy(); } catch { /* ignore */ }
         mapInstanceRef.current = null;
       }
     };
   }, []);
 
+  // Location picker map — Apple MapKit JS (draggable pin + tap-to-move), replacing the old Mapbox picker.
   useEffect(() => {
-    if (!showMapPicker || !mapContainerRef.current || !latitude || !longitude || mapInstanceRef.current) return;
+    if (!showMapPicker || !mapContainerRef.current || latitude == null || longitude == null || mapInstanceRef.current) return;
 
-    const map = new mapboxgl.Map({
-      container: mapContainerRef.current,
-      style: 'mapbox://styles/mapbox/streets-v11',
-      center: [longitude, latitude],
-      zoom: 15,
-    });
+    let cancelled = false;
+    const startLat = latitude, startLng = longitude;
+    (async () => {
+      try {
+        const mapkit = await loadMapKit();
+        if (cancelled || mapInstanceRef.current || !mapContainerRef.current) return;
+        mapkitRef.current = mapkit;
 
-    map.addControl(new mapboxgl.NavigationControl(), 'top-right');
+        const map = new mapkit.Map(mapContainerRef.current, {
+          showsCompass: mapkit.FeatureVisibility.Hidden,
+          showsScale: mapkit.FeatureVisibility.Hidden,
+          showsZoomControl: true,
+          isRotationEnabled: false,
+        });
+        map.region = new mapkit.CoordinateRegion(
+          new mapkit.Coordinate(startLat, startLng),
+          new mapkit.CoordinateSpan(0.01, 0.01),
+        );
 
-    const marker = new mapboxgl.Marker({ color: pinColor, draggable: true })
-      .setLngLat([longitude, latitude])
-      .addTo(map);
+        const marker = new mapkit.MarkerAnnotation(new mapkit.Coordinate(startLat, startLng), { color: pinColor, draggable: true, animates: false });
+        map.addAnnotation(marker);
 
-    marker.on('dragend', () => {
-      const lngLat = marker.getLngLat();
-      setLatitude(lngLat.lat);
-      setLongitude(lngLat.lng);
-    });
+        // Drag the pin, or tap the map, to move the location.
+        marker.addEventListener('drag-end', () => {
+          const c = marker.coordinate;
+          setLatitude(c.latitude);
+          setLongitude(c.longitude);
+        });
+        map.addEventListener('single-tap', (ev: any) => {
+          try {
+            const p = ev?.pointOnPage; if (!p) return;
+            const c = map.convertPointOnPageToCoordinate(p);
+            marker.coordinate = c;
+            setLatitude(c.latitude);
+            setLongitude(c.longitude);
+          } catch { /* ignore */ }
+        });
 
-    map.on('click', (e) => {
-      const { lng, lat } = e.lngLat;
-      setLatitude(lat);
-      setLongitude(lng);
-      marker.setLngLat([lng, lat]);
-    });
+        mapInstanceRef.current = map;
+        markerRef.current = marker;
+      } catch (e) {
+        console.error('[CreateLocation] MapKit init failed:', e);
+      }
+    })();
 
-    mapInstanceRef.current = map;
-    markerRef.current = marker;
-  }, [showMapPicker, latitude, longitude]);
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showMapPicker]);
 
   const fetchPlaceFromGoogleMaps = async () => {
     if (!googleMapsUrl.trim()) return;
@@ -740,8 +759,9 @@ export function CreateLocationForm({ onSuccess, onCancel, currentUserId }: Creat
                   type="button"
                   onClick={() => {
                     if (mapInstanceRef.current) {
-                      mapInstanceRef.current.remove();
+                      try { mapInstanceRef.current.destroy(); } catch { /* ignore */ }
                       mapInstanceRef.current = null;
+                      markerRef.current = null;
                     }
                     setShowMapPicker(false);
                     if (!placeData) {

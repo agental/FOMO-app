@@ -224,6 +224,10 @@ export function AdminLocationBottomSheet({ isOpen, onClose, location, currentUse
   // A tapped base-map POI is fed in as a synthetic place keyed by a text id (not an admin_locations
   // uuid). Its photos/upload live only on real admin places; save + reviews work for both.
   const isRealPlace = !!location && UUID_RE.test(location.id);
+  // A base-map POI (Apple/Google) is keyed 'poi:…'. An admin can edit its likes too — saving ADOPTS it into
+  // admin_locations first (creates a real FOMO place), so it can then cross 50 likes → become featured ⭐.
+  const isPoi = !!location && location.id.startsWith('poi:');
+  const canEditLikes = isRealPlace || isPoi;
 
   /* ── sheet snap machine: three detents, like Apple Maps ──
      peek  — title + address only; the map is yours again
@@ -268,6 +272,7 @@ export function AdminLocationBottomSheet({ isOpen, onClose, location, currentUse
   const [reviewError, setReviewError]         = useState('');
   const [myExistingReview, setMyExistingReview] = useState<Review | null>(null);
   const [isAdmin, setIsAdmin]                 = useState(false);
+  const [adoptedId, setAdoptedId]             = useState<string | null>(null); // uuid of a POI adopted into admin_locations
 
   useEffect(() => {
     if (currentUserId) {
@@ -293,19 +298,57 @@ export function AdminLocationBottomSheet({ isOpen, onClose, location, currentUse
   // Admin: set the TOTAL likes a pin should show. Stored as extra_likes = total − real saves, so real
   // saves keep counting on top. Also drives the "50 likes → featured" alert (RPC counts saves+extra_likes).
   const saveLikes = async () => {
-    if (!location || !isRealPlace) return; // only real admin_locations have extra_likes (chabad/POI don't)
+    if (!location || !canEditLikes) return;
     const total = Math.max(0, Math.floor(Number(likesInput) || 0));
+    let placeId = isRealPlace ? location.id : adoptedId;
+
+    // Base-map POI → not a FOMO place yet. Adopt it into admin_locations ONCE (a real, permanent place) so it
+    // can hold likes and become featured. Guard against duplicates: reuse the place adopted earlier this
+    // session, or any existing place already sitting at these exact coords — otherwise insert a single row.
+    if (!placeId) {
+      const { data: existing } = await supabase.from('admin_locations').select('id')
+        .eq('latitude', location.latitude).eq('longitude', location.longitude).limit(1).maybeSingle();
+      if (existing?.id) {
+        placeId = existing.id;
+      } else {
+        const emojiV = location.emoji || '📍';
+        const pinColor = location.pin_color && location.pin_color.includes('|')
+          ? location.pin_color
+          : `${location.pin_color || '#F97316'}|${emojiV}`;
+        const { data: created, error: insErr } = await supabase.from('admin_locations').insert({
+          name: location.name || location.place_name || 'מקום',
+          country: location.country || 'TH',
+          latitude: location.latitude, longitude: location.longitude,
+          pin_color: pinColor, created_by: currentUserId,
+          address: location.address || location.place_address || null,
+          place_name: location.place_name || location.name || null,
+          image_url: location.image_url || null,
+        }).select('id').single();
+        if (insErr || !created) {
+          showToast({ title: 'שגיאה', text: `יצירת המקום נכשלה: ${insErr?.message || ''}`, emoji: '⚠️', background: 'linear-gradient(135deg,#EF4444,#DC2626)' });
+          return;
+        }
+        placeId = created.id;
+      }
+      setAdoptedId(placeId);
+    }
+
     const extra = Math.max(0, total - savers.length);
-    const { data, error } = await supabase.from('admin_locations').update({ extra_likes: extra }).eq('id', location.id).select('id');
+    // 50+ likes → auto-mark featured (the gold Apple pin) so it appears immediately, without depending on the
+    // admin-panel alert (whose RPC may not be applied to this DB). Below 50 → un-feature, so it's toggleable.
+    const featured = total >= 50;
+    const { data, error } = await supabase.from('admin_locations').update({ extra_likes: extra, is_featured: featured }).eq('id', placeId).select('id');
     if (error) { showToast({ title: 'שגיאה', text: `העדכון נכשל: ${error.message}`, emoji: '⚠️', background: 'linear-gradient(135deg,#EF4444,#DC2626)' }); return; }
     if (!data || data.length === 0) { showToast({ title: 'לא נשמר', text: 'אין הרשאת מנהל או שהמקום לא נמצא', emoji: '🔒', background: 'linear-gradient(135deg,#EF4444,#DC2626)' }); return; }
     setExtraLikes(extra); setEditLikes(false);
-    showToast({ title: 'הלייקים עודכנו', text: `הפין מציג ${savers.length + extra} לייקים ❤️`, emoji: '⭐', background: 'linear-gradient(135deg,#22c55e,#16a34a)' });
+    showToast(featured
+      ? { title: 'המקום סומן כמומלץ ⭐', text: `${savers.length + extra} לייקים — הפין הפך לפין אפל זהב`, emoji: '⭐', background: 'linear-gradient(135deg,#F59E0B,#D97706)' }
+      : { title: 'הלייקים עודכנו', text: `הפין מציג ${savers.length + extra} לייקים ❤️`, emoji: '❤️', background: 'linear-gradient(135deg,#22c55e,#16a34a)' });
   };
 
   useEffect(() => {
     if (!isOpen || !location) return;
-    setSnap('half'); setDragDy(0); setEntered(false);
+    setSnap('half'); setDragDy(0); setEntered(false); setAdoptedId(null);
     setShowFullHours(false); setShowNav(false); setWebUrl(null); setLightbox(null);
     // Seed instantly from the (possibly stale) prop so the mosaic paints…
     setPhotos(location.place_photos?.length ? location.place_photos
@@ -825,14 +868,15 @@ export function AdminLocationBottomSheet({ isOpen, onClose, location, currentUse
                       ? <><b style={{ fontWeight: 900 }}>{n}</b> אהבו את המקום</>
                       : 'היה הראשון שאוהב — הקש על הלב'}
                   </span>
-                  {/* Admin: edit how many likes the pin shows (real admin places only — not chabad/POI) */}
-                  {isAdmin && isRealPlace && !editLikes && (
+                  {/* Admin: edit how many likes the pin shows. Real FOMO places + base-map POIs (a POI is
+                      adopted into admin_locations on save). Chabad houses stay excluded. */}
+                  {isAdmin && canEditLikes && !editLikes && (
                     <button onClick={() => { setLikesInput(String(n)); setEditLikes(true); }}
                       style={{ marginRight: 'auto', background: 'none', border: 'none', padding: '2px 6px', cursor: 'pointer', color: '#9AA0A6', fontSize: 12, fontWeight: 800, fontFamily: HEEBO, whiteSpace: 'nowrap' }}>
                       ✎ ערוך לייקים
                     </button>
                   )}
-                  {isAdmin && isRealPlace && editLikes && (
+                  {isAdmin && canEditLikes && editLikes && (
                     <div style={{ marginRight: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
                       <input type="number" inputMode="numeric" value={likesInput} onChange={e => setLikesInput(e.target.value)} autoFocus
                         style={{ width: 64, padding: '4px 8px', border: '1px solid #E5E7EB', borderRadius: 8, fontSize: 13, fontFamily: HEEBO, textAlign: 'center', outline: 'none' }} />

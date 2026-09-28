@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { X, ChevronLeft } from 'lucide-react';
 import type { GuideSection, GuideItem } from '../data/countryGuides';
+import { useSheetDrag } from '../hooks/useSheetDrag';
 
 /**
  * The list of items inside one guide section ("8 אפליקציות", "4 רשתות סים"…).
@@ -19,6 +20,10 @@ const MUTED = '#8B90A0';
 export function GuideSectionSheet({ section, onClose, onOpenItem }: GuideSectionSheetProps) {
   const [entered, setEntered] = useState(false);
 
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const close = () => { setEntered(false); setTimeout(onClose, 240); };
+  const { dragY, dragging, handlers } = useSheetDrag(scrollRef, close);
+
   useEffect(() => {
     if (!section) { setEntered(false); return; }
     const id = requestAnimationFrame(() => setEntered(true));
@@ -28,24 +33,24 @@ export function GuideSectionSheet({ section, onClose, onOpenItem }: GuideSection
   if (!section) return null;
 
   const color = section.color;
-  const close = () => { setEntered(false); setTimeout(onClose, 240); };
 
   return (
     <>
       <div
         className="fixed inset-0 bg-black/45 z-[58]"
-        style={{ opacity: entered ? 1 : 0, transition: 'opacity 0.24s ease' }}
+        style={{ opacity: entered ? Math.max(0, 1 - dragY / 400) : 0, transition: dragging ? 'none' : 'opacity 0.24s ease' }}
         onClick={close}
       />
       <div
         className="fixed left-0 right-0 bottom-0 bg-white rounded-t-3xl z-[58] flex flex-col"
         style={{
           maxHeight: '82vh',
-          transform: entered ? 'translateY(0)' : 'translateY(100%)',
-          transition: 'transform 0.3s cubic-bezier(0.22,1,0.3,1)',
+          transform: entered ? `translateY(${dragY}px)` : 'translateY(100%)',
+          transition: dragging ? 'none' : 'transform 0.3s cubic-bezier(0.22,1,0.3,1)',
           boxShadow: '0 -8px 40px rgba(0,0,0,0.18)',
         }}
         dir="rtl"
+        {...handlers}
       >
         <div style={{ flexShrink: 0, padding: '10px 20px 12px' }}>
           <div className="w-9 h-1 rounded-full bg-gray-300 mx-auto" />
@@ -76,7 +81,7 @@ export function GuideSectionSheet({ section, onClose, onOpenItem }: GuideSection
           </div>
         </div>
 
-        <div style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto', padding: '4px 14px 22px', overscrollBehavior: 'contain' }}>
+        <div ref={scrollRef} style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto', padding: '4px 14px 22px', overscrollBehavior: 'contain' }}>
           {section.items.map((item, i) => (
             <button
               key={item.id}

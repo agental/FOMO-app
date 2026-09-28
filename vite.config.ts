@@ -20,7 +20,6 @@ export default {
       output: {
         manualChunks: {
           'react-vendor': ['react', 'react-dom'],
-          'mapbox': ['mapbox-gl'],
         },
       },
     },

@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>הוזמנת ל-FOMO</title>
+  <meta property="og:title" content="הוזמנת להיות בפנים · FOMO" />
+  <meta property="og:description" content="הרשת החברתית של הטיילים הישראלים — אירועים, מפגשים ומקומות מומלצים לידך." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;700;800;900&family=Rubik:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    :root { --orange:#F97316; --orange-dark:#EA580C; --ink:#141821; --muted:#6B7280; }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body { height: 100%; }
+    body {
+      margin: 0; background: #FFFFFF; color: var(--ink);
+      font-family: 'Heebo', -apple-system, BlinkMacSystemFont, sans-serif;
+      display: flex; align-items: center; justify-content: center;
+      padding: 32px 24px calc(32px + env(safe-area-inset-bottom));
+    }
+    .card { width: 100%; max-width: 400px; text-align: center; }
+    .logo { font-family: 'Heebo', sans-serif; font-weight: 900; font-size: 46px; letter-spacing: -2px; color: var(--ink); }
+    .logo span { color: var(--orange); }
+    .badge {
+      display: inline-block; margin: 22px 0 0; padding: 7px 16px; border-radius: 999px;
+      background: #FFF4EC; color: var(--orange-dark); font-weight: 800; font-size: 13.5px;
+    }
+    h1 { font-weight: 900; font-size: 30px; letter-spacing: -0.5px; margin: 16px 0 0; line-height: 1.2; }
+    p.desc { font-family: 'Rubik', sans-serif; font-size: 16px; line-height: 1.65; color: var(--muted); margin: 14px 0 0; }
+    .pills { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin: 22px 0 0; }
+    .pill { font-size: 13px; font-weight: 700; color: #57606A; background: #F4F5F7; border-radius: 999px; padding: 7px 13px; }
+    .cta {
+      display: block; width: 100%; margin: 30px 0 0; padding: 17px 20px; border: none;
+      border-radius: 999px; background: linear-gradient(135deg, var(--orange), var(--orange-dark));
+      color: #fff; font-family: 'Heebo', sans-serif; font-weight: 800; font-size: 17px;
+      text-decoration: none; box-shadow: 0 10px 26px rgba(249,115,22,0.30); cursor: pointer;
+    }
+    .cta:active { transform: scale(0.98); }
+    .fine { font-family: 'Rubik', sans-serif; font-size: 12.5px; color: #9AA0AC; margin: 16px 0 0; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo" dir="ltr">FOMO<span>.</span></div>
+    <div class="badge">הוזמנת להיות בפנים ✨</div>
+    <h1>הרשת החברתית של הטיילים</h1>
+    <p class="desc">
+      גלה מי מהישראלים בסביבה, לאילו אירועים ומפגשים שווה להגיע, ואילו מקומות הכי מומלצים —
+      הכול על מפה אחת.
+    </p>
+    <div class="pills">
+      <span class="pill">🗺️ מפה חיה</span>
+      <span class="pill">🎉 אירועים</span>
+      <span class="pill">☕ מפגשים</span>
+      <span class="pill">📍 מקומות מומלצים</span>
+    </div>
+
+    <a id="cta" class="cta" href="https://fomo-tal.netlify.app">להורדת האפליקציה</a>
+    <p class="fine">בקרוב גם ב-App Store</p>
+  </div>
+
+  <script>
+    // The "download" button points at the App Store once the app is live. For now it opens the app
+    // (or the referral link passed as ?to=… so the invite attribution is preserved).
+    (function () {
+      try {
+        var to = new URLSearchParams(location.search).get('to');
+        if (to) document.getElementById('cta').setAttribute('href', to);
+      } catch (e) {}
+    })();
+  </script>
+</body>
+</html>

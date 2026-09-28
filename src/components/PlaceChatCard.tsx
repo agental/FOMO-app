@@ -8,11 +8,9 @@ import type { PlacePayload } from '../utils/placeMessage';
 /**
  * A shared place, rendered in the chat as a map with the place's own pin standing on it.
  *
- * The map is a Mapbox Static Images render (a plain <img> — no GL context, so a thread full of
- * these stays cheap), and the pin is the very same `createPlacePinSVG` the live map uses, dropped
- * on the centre point. Tapping opens the place.
+ * The map background is a styled gradient placeholder (Mapbox removed); the pin is the very same
+ * `createPlacePinSVG` the live map uses, dropped on the centre point. Tapping opens the place.
  */
-const TOKEN = import.meta.env.VITE_MAPBOX_TOKEN as string | undefined;
 const W = 250, MAP_H = 132;
 
 export function PlaceChatCard({ data, onClick }: { data: PlacePayload; onClick: () => void }) {
@@ -28,12 +26,6 @@ export function PlaceChatCard({ data, onClick }: { data: PlacePayload; onClick: 
     host.replaceChildren(isChabad ? createChabadPinSVG() : createPlacePinSVG(emoji, color));
   }, [emoji, color, isChabad]);
 
-  // @2x so it stays sharp on a phone; no logo/attribution chrome inside a chat bubble.
-  const mapUrl = TOKEN
-    ? `https://api.mapbox.com/styles/v1/mapbox/streets-v12/static/${data.lng},${data.lat},15.4,0/${W}x${MAP_H}@2x`
-      + `?access_token=${TOKEN}&attribution=false&logo=false`
-    : null;
-
   return (
     <button
       onClick={onClick}
@@ -45,15 +37,7 @@ export function PlaceChatCard({ data, onClick }: { data: PlacePayload; onClick: 
       }}
     >
       {/* map */}
-      <div style={{ position: 'relative', height: MAP_H, background: '#E8EAED' }}>
-        {mapUrl && (
-          <img
-            src={mapUrl}
-            alt=""
-            loading="lazy"
-            style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
-          />
-        )}
+      <div style={{ position: 'relative', height: MAP_H, background: 'linear-gradient(135deg,#DCE7F2,#E7EFE2)' }}>
 
         {/* the pin stands on the centre of the map — its tip is the coordinate */}
         <div

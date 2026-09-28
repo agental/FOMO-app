@@ -196,7 +196,7 @@ export function MeetupGroupChat({ meetup, currentUserId, onClose }: MeetupGroupC
       </div>
 
       {/* Messages */}
-      <div ref={msgScrollRef} className="flex-1 overflow-y-auto px-4 pt-4 space-y-3 scrollbar-hide" style={{ paddingBottom: 'calc(1rem + var(--kb-pad, 0px))' }}>
+      <div ref={msgScrollRef} className="flex-1 overflow-y-auto overflow-x-hidden px-4 pt-4 space-y-3 scrollbar-hide" style={{ overscrollBehaviorX: 'none', paddingBottom: 'calc(1rem + var(--kb-pad, 0px))' }}>
         {loading ? (
           <div className="flex justify-center py-10">
             <div className="w-8 h-8 border-2 border-orange-300 border-t-orange-500 rounded-full animate-spin" />

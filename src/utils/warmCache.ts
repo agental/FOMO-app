@@ -60,19 +60,46 @@ function readRaw<T>(name: string, fallback: T): T {
   }
 }
 
-const timers: Record<string, ReturnType<typeof setTimeout>> = {};
+type Pending = { timer: ReturnType<typeof setTimeout>; getSnapshot: () => unknown };
+const pending: Record<string, Pending> = {};
+
+function writeNow(name: string, getSnapshot: () => unknown) {
+  const fullKey = PREFIX + name;
+  let str: string | null = null;
+  try { str = JSON.stringify(getSnapshot()); } catch { str = null; }
+  if (str == null) return;
+  // Mirror to BOTH: localStorage (web / same-session) and native AsyncStorage (survives phone relaunch).
+  try { localStorage.setItem(fullKey, str); } catch { try { localStorage.removeItem(fullKey); } catch { /* ignore */ } }
+  nativeWrite(fullKey, str);
+}
+
 function scheduleWrite(name: string, getSnapshot: () => unknown) {
-  if (timers[name]) return;
-  timers[name] = setTimeout(() => {
-    delete timers[name];
-    const fullKey = PREFIX + name;
-    let str: string | null = null;
-    try { str = JSON.stringify(getSnapshot()); } catch { str = null; }
-    if (str == null) return;
-    // Mirror to BOTH: localStorage (web / same-session) and native AsyncStorage (survives phone relaunch).
-    try { localStorage.setItem(fullKey, str); } catch { try { localStorage.removeItem(fullKey); } catch { /* ignore */ } }
-    nativeWrite(fullKey, str);
-  }, 500);
+  const existing = pending[name];
+  if (existing) { existing.getSnapshot = getSnapshot; return; } // keep the timer, but persist the LATEST value
+  pending[name] = {
+    getSnapshot,
+    timer: setTimeout(() => {
+      const p = pending[name];
+      delete pending[name];
+      if (p) writeNow(name, p.getSnapshot);
+    }, 500),
+  };
+}
+
+/**
+ * Persist EVERY pending write immediately (localStorage + native), and ask the native wrapper to
+ * flush its own debounced AsyncStorage write now. Call this the moment the app is about to be
+ * backgrounded/hidden, so the latest state (e.g. the current screen) is never lost if iOS reclaims
+ * the WebView before the debounce fires. Safe to call anytime; a no-op when nothing is pending.
+ */
+export function flushWrites(): void {
+  for (const name of Object.keys(pending)) {
+    const p = pending[name];
+    clearTimeout(p.timer);
+    delete pending[name];
+    writeNow(name, p.getSnapshot);
+  }
+  if (rnBridge) { try { rnBridge.postMessage(JSON.stringify({ type: 'cacheFlush' })); } catch { /* ignore */ } }
 }
 
 /**
@@ -116,7 +143,7 @@ export function saveValue<T>(name: string, value: T): void {
 /** Remove a single persisted value from BOTH localStorage and native AsyncStorage. */
 export function removeValue(name: string): void {
   const fullKey = PREFIX + name;
-  if (timers[name]) { clearTimeout(timers[name]); delete timers[name]; }
+  if (pending[name]) { clearTimeout(pending[name].timer); delete pending[name]; }
   try { localStorage.removeItem(fullKey); } catch { /* ignore */ }
   nativeRemove(fullKey);
 }

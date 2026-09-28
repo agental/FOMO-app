@@ -1,11 +1,10 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { X, ChevronRight, Lock, Users, Check } from 'lucide-react';
 import { supabase } from '../lib/supabase';
-import { getMeetupPinColor } from '../utils/meetupPinColor';
-import { createMeetupPinSVG } from '../utils/createMeetupPin';
+import { emojiColor } from '../utils/emojiColor';
+import { createRecommendationPin } from '../utils/createRecommendationPin';
 import { EmojiPickerSheet } from './EmojiPickerSheet';
-import mapboxgl from 'mapbox-gl';
-import 'mapbox-gl/dist/mapbox-gl.css';
+import { loadMapKit } from '../utils/mapkit';
 
 interface CreateMeetupFlowProps {
   isOpen: boolean;
@@ -68,8 +67,9 @@ export function CreateMeetupFlow({
   const [latitude,  setLatitude]  = useState<number | null>(initialLocation?.latitude  ?? null);
   const [longitude, setLongitude] = useState<number | null>(initialLocation?.longitude ?? null);
   const mapContainerRef = useRef<HTMLDivElement>(null);
-  const mapRef          = useRef<mapboxgl.Map | null>(null);
-  const markerRef       = useRef<mapboxgl.Marker | null>(null);
+  const mapRef          = useRef<any>(null);   // mapkit.Map
+  const markerRef       = useRef<any>(null);   // mapkit.MarkerAnnotation (draggable pin)
+  const mapkitRef       = useRef<any>(null);   // the mapkit namespace
 
   /* Step 2 — date only (today default), privacy */
   const todayStr = localDateStr(new Date());
@@ -106,7 +106,8 @@ export function CreateMeetupFlow({
   useEffect(() => {
     if (!pinPreviewRef.current) return;
     pinPreviewRef.current.innerHTML = '';
-    const pin = createMeetupPinSVG(selectedEmoji, avatarUrl);
+    // Use the SAME pin the map shows (createRecommendationPin — avatar coin + emoji), not the old SVG pin.
+    const pin = createRecommendationPin({ avatarUrl, color: emojiColor(selectedEmoji), emoji: selectedEmoji });
     pin.style.animation = 'pinBounce 0.55s cubic-bezier(0.36,0.07,0.19,0.97) both';
     pin.style.transformOrigin = 'bottom center';
     pinPreviewRef.current.appendChild(pin);
@@ -126,42 +127,53 @@ export function CreateMeetupFlow({
     }
   }, [isOpen]);
 
-  /* mount mini-map on step 1 */
+  /* mount the Apple (MapKit JS) mini-map on step 1 */
   useEffect(() => {
     if (step !== 1 || !mapContainerRef.current || mapRef.current) return;
-    const center: [number, number] = longitude && latitude
-      ? [longitude, latitude]
-      : [34.78, 32.08];
-    const map = new mapboxgl.Map({
-      container: mapContainerRef.current,
-      style: 'mapbox://styles/mapbox/streets-v11',
-      center,
-      zoom: 14,
-    });
-    map.addControl(new mapboxgl.NavigationControl(), 'top-right');
-    const startLat = latitude ?? center[1];
-    const startLng = longitude ?? center[0];
+    const startLat = latitude ?? 32.08;
+    const startLng = longitude ?? 34.78;
     setLatitude(startLat);
     setLongitude(startLng);
-    const marker = new mapboxgl.Marker({ color: '#FF9F43', draggable: true })
-      .setLngLat([startLng, startLat])
-      .addTo(map);
-    marker.on('dragend', () => {
-      const ll = marker.getLngLat();
-      setLatitude(ll.lat);
-      setLongitude(ll.lng);
-    });
-    map.on('click', (e) => {
-      setLatitude(e.lngLat.lat);
-      setLongitude(e.lngLat.lng);
-      marker.setLngLat([e.lngLat.lng, e.lngLat.lat]);
-    });
-    mapRef.current   = map;
-    markerRef.current = marker;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const mapkit = await loadMapKit();
+        if (cancelled || mapRef.current || !mapContainerRef.current) return;
+        mapkitRef.current = mapkit;
+
+        const map = new mapkit.Map(mapContainerRef.current, {
+          showsCompass: mapkit.FeatureVisibility.Hidden,
+          showsScale: mapkit.FeatureVisibility.Hidden,
+          showsMapTypeControl: false,
+          showsZoomControl: true,
+          isRotationEnabled: false,
+        });
+        map.region = new mapkit.CoordinateRegion(new mapkit.Coordinate(startLat, startLng), new mapkit.CoordinateSpan(0.03, 0.03));
+
+        const marker = new mapkit.MarkerAnnotation(new mapkit.Coordinate(startLat, startLng), { color: '#FF9F43', draggable: true, animates: false });
+        map.addAnnotation(marker);
+
+        marker.addEventListener('drag-end', () => { const c = marker.coordinate; setLatitude(c.latitude); setLongitude(c.longitude); });
+        map.addEventListener('single-tap', (ev: any) => {
+          try {
+            const p = ev?.pointOnPage; if (!p) return;
+            const c = map.convertPointOnPageToCoordinate(p);
+            marker.coordinate = c;
+            setLatitude(c.latitude); setLongitude(c.longitude);
+          } catch { /* ignore */ }
+        });
+
+        mapRef.current = map; markerRef.current = marker;
+      } catch (e) {
+        console.error('[CreateMeetupFlow] MapKit init failed:', e);
+      }
+    })();
+
     return () => {
-      map.remove();
-      mapRef.current   = null;
-      markerRef.current = null;
+      cancelled = true;
+      try { mapRef.current?.destroy?.(); } catch { /* ignore */ }
+      mapRef.current = null; markerRef.current = null;
     };
   }, [step]);
 
@@ -221,7 +233,7 @@ export function CreateMeetupFlow({
     step === 1 ? !!latitude && !!longitude :
     true;
 
-  const pinColor = getMeetupPinColor(selectedEmoji);
+  const pinColor = emojiColor(selectedEmoji);
 
   return (
     <>

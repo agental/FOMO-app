@@ -107,6 +107,7 @@ export function FloatingNavBar({
               onClick={onMapClick}
               className="p-1.5 transition-all active:scale-95"
               aria-label="מפה"
+              data-tour="nav-map"
             >
               <div className={`w-9 h-9 flex items-center justify-center rounded-full transition-all duration-300 ${
                 activeTab === 'map'
@@ -121,6 +122,7 @@ export function FloatingNavBar({
               onClick={onCreateClick}
               className="absolute left-1/2 -translate-x-1/2 -top-6 transition-all active:scale-95 hover:scale-110 duration-300 group"
               aria-label="צור חדש"
+              data-tour="nav-create"
             >
               <div className="w-12 h-12 bg-gray-900 rounded-full flex items-center justify-center shadow-lg hover:shadow-xl transition-all" style={{ boxShadow: '0 8px 30px rgba(0, 0, 0, 0.3), 0 0 20px rgba(0, 0, 0, 0.2)' }}>
                 <Plus className="w-6 h-6 text-white group-hover:rotate-90 transition-transform duration-300 font-bold" strokeWidth={3} />
@@ -131,6 +133,7 @@ export function FloatingNavBar({
               onClick={onChatClick}
               className="p-1.5 transition-all active:scale-95 relative"
               aria-label="צ'אט"
+              data-tour="nav-chat"
             >
               <div className={`w-9 h-9 flex items-center justify-center rounded-full transition-all duration-300 ${
                 activeTab === 'chat'
@@ -161,6 +164,7 @@ export function FloatingNavBar({
               onClick={onMyEventsClick}
               className="p-1.5 transition-all active:scale-95"
               aria-label="האירועים שלי"
+              data-tour="nav-events"
             >
               <div className={`w-9 h-9 flex items-center justify-center rounded-full transition-all duration-300 ${
                 activeTab === 'myEvents'

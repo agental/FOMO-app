@@ -20,6 +20,7 @@ type MyEventsScreenProps = {
   onCreateClick?: () => void;
   onMessagesClick?: () => void;
   onNavigateToUserProfile?: (userId: string) => void;
+  onOpenMapAt?: (lat: number, lng: number) => void;
 };
 
 type Item = { event: Event; registeredAt?: string };
@@ -81,7 +82,7 @@ type MyEventsCache = { pending: Item[]; confirmed: Item[]; past: Item[] };
 const _myEventsCache: Record<string, MyEventsCache> = {};
 
 export function MyEventsScreen({
-  currentUserId, onBack, onHomeClick, onMapClick, onCreateClick, onMessagesClick, onNavigateToUserProfile,
+  currentUserId, onBack, onHomeClick, onMapClick, onCreateClick, onMessagesClick, onNavigateToUserProfile, onOpenMapAt,
 }: MyEventsScreenProps) {
   const swipeRef = useSwipeBack<HTMLDivElement>(onBack); // swipe from an edge to slide the screen back
   const _cached = _myEventsCache[currentUserId];
@@ -241,6 +242,7 @@ export function MyEventsScreen({
           event={selectedEvent}
           currentUserId={currentUserId}
           onClose={() => setSelectedEvent(null)}
+          onOpenMapAt={onOpenMapAt}
           onNavigateToUserProfile={onNavigateToUserProfile}
           onDeleted={load}
         />

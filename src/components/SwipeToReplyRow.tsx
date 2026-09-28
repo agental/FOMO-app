@@ -14,6 +14,12 @@ const TRIGGER = 52;  // px of inward travel needed to fire a reply
 const MAX = 82;      // px the bubble is allowed to travel
 const DECIDE = 8;    // px before we commit the gesture to horizontal vs vertical
 
+// The align of the row the finger is currently on (set at touchstart, cleared at touchend). The
+// window-level swipe-back reads this to bail out for a "mine" (end) bubble WITHOUT a DOM lookup —
+// deterministic even if the touch target / closest() behaves oddly on the WebView.
+let touchedRowAlign: 'start' | 'end' | null = null;
+export const getTouchedRowAlign = () => touchedRowAlign;
+
 export function SwipeToReplyRow({
   onReply,
   align,
@@ -28,7 +34,10 @@ export function SwipeToReplyRow({
   const slideRef = useRef<HTMLDivElement>(null);
   const iconRef = useRef<HTMLDivElement>(null);
   const st = useRef({ x0: 0, y0: 0, dir: '' as '' | 'h' | 'v', d: 0 });
-  const dirSign = align === 'end' ? -1 : 1; // my bubble swipes left, other's swipes right
+  // ALL bubbles swipe the SAME way — to the RIGHT (WhatsApp-style). This also sidesteps the edge
+  // swipe-back completely: that only fires on a LEFT drag from the right edge, so a right-swipe on a
+  // "mine" bubble can never trigger it.
+  const dirSign = 1;
 
   const setIcon = (p: number) => {
     const el = iconRef.current;
@@ -40,6 +49,7 @@ export function SwipeToReplyRow({
   const onStart = (e: React.TouchEvent) => {
     const t = e.touches[0];
     st.current = { x0: t.clientX, y0: t.clientY, dir: '', d: 0 };
+    touchedRowAlign = align; // tell the swipe-back this touch began on a message bubble
   };
 
   const onMove = (e: React.TouchEvent) => {
@@ -55,6 +65,11 @@ export function SwipeToReplyRow({
     }
     if (s.dir !== 'h') return; // vertical → let the list scroll
 
+    // We own this horizontal gesture — stop it bubbling to the window-level swipe-back handler,
+    // which would otherwise slide the WHOLE chat sideways (its edge-swipe overlaps a right-aligned
+    // "mine" bubble swiped left).
+    e.stopPropagation();
+
     let d = rawdx * dirSign;           // travel in the allowed inward direction
     if (d < 0) d = 0;                  // ignore wrong-way drags
     if (d > MAX) d = MAX + (d - MAX) * 0.18; // rubber-band past the cap
@@ -68,6 +83,7 @@ export function SwipeToReplyRow({
   };
 
   const onEnd = () => {
+    touchedRowAlign = null;
     const s = st.current;
     const fired = s.dir === 'h' && s.d >= TRIGGER;
     if (slideRef.current) {
@@ -88,6 +104,7 @@ export function SwipeToReplyRow({
 
   return (
     <div
+      data-swipe-reply={align}
       style={{ position: 'relative', touchAction: 'pan-y', ...style }}
       onTouchStart={onStart}
       onTouchMove={onMove}
@@ -99,8 +116,7 @@ export function SwipeToReplyRow({
         ref={iconRef}
         style={{
           position: 'absolute', top: '50%', marginTop: -15,
-          left: align === 'end' ? 'auto' : 14,
-          right: align === 'end' ? 14 : 'auto',
+          left: 14, right: 'auto',
           width: 30, height: 30, borderRadius: '50%',
           background: 'rgba(234,88,12,0.16)',
           display: 'flex', alignItems: 'center', justifyContent: 'center',

@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>מדיניות פרטיות · FOMO</title>
+  <meta name="robots" content="index,follow" />
+  <style>
+    :root { --ink:#1C1917; --muted:#6B7280; --line:#ECECEC; --accent:#EA580C; --bg:#FBFAF8; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg); color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Rubik, Heebo, Arial, sans-serif;
+      line-height: 1.7; font-size: 16px;
+    }
+    .wrap { max-width: 760px; margin: 0 auto; padding: 40px 20px 80px; }
+    header { border-bottom: 1px solid var(--line); padding-bottom: 20px; margin-bottom: 28px; }
+    .logo { font-size: 22px; font-weight: 900; letter-spacing: -0.02em; }
+    .logo span { color: var(--accent); }
+    h1 { font-size: 27px; font-weight: 900; margin: 14px 0 6px; letter-spacing: -0.02em; }
+    .updated { color: var(--muted); font-size: 13.5px; }
+    h2 { font-size: 19px; font-weight: 800; margin: 34px 0 8px; }
+    p, li { color: #2A2622; }
+    ul { padding-inline-start: 22px; margin: 8px 0; }
+    li { margin: 5px 0; }
+    a { color: var(--accent); }
+    .muted { color: var(--muted); font-size: 14px; }
+    .card { background: #fff; border: 1px solid var(--line); border-radius: 16px; padding: 18px 20px; margin-top: 10px; }
+    footer { margin-top: 44px; padding-top: 20px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13.5px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="logo" dir="ltr">FOMO<span>.</span></div>
+      <h1>מדיניות פרטיות</h1>
+      <div class="updated">עודכן לאחרונה: ספטמבר 2026</div>
+    </header>
+
+    <p>
+      FOMO היא רשת חברתית לטיילים — מציאת אירועים, מפגשים ומקומות מומלצים בקרבתך, וצ׳אט עם מטיילים אחרים.
+      מדיניות זו מסבירה איזה מידע אנחנו אוספים, כיצד אנו משתמשים בו, ואילו שליטה יש לך עליו. השימוש באפליקציה
+      מהווה הסכמה למדיניות זו.
+    </p>
+
+    <h2>המידע שאנו אוספים</h2>
+    <ul>
+      <li><strong>פרטי חשבון:</strong> כתובת אימייל, שם תצוגה, תמונת פרופיל, גיל, וקישור אינסטגרם (אופציונלי) — לפי מה שתמסור. ההתחברות מתבצעת דרך Supabase Auth, כולל התחברות עם Google או Apple.</li>
+      <li><strong>מיקום:</strong> מיקום ה-GPS של המכשיר, כדי להציג אירועים ומקומות בקרבתך ואת מיקומך על המפה. שיתוף המיקום עם משתמשים אחרים כבוי כברירת מחדל וניתן לשליטה בכל רגע דרך הגדרות הפרטיות באפליקציה.</li>
+      <li><strong>תמונות:</strong> תמונות שתבחר לצלם או להעלות מהגלריה — לפרופיל, לאירועים, למקומות ולצ׳אט.</li>
+      <li><strong>תוכן שאתה יוצר:</strong> הודעות (פרטיות וקבוצתיות), אירועים ומפגשים שאתה יוצר, מקומות, תגובות ובקשות הצטרפות.</li>
+      <li><strong>מזהה התראות (Push token):</strong> כדי לשלוח לך התראות על הודעות, בקשות ועדכונים.</li>
+      <li><strong>נתוני שימוש בסיסיים:</strong> מידע טכני נחוץ לתפעול השירות ולאבטחתו.</li>
+    </ul>
+
+    <h2>כיצד אנו משתמשים במידע</h2>
+    <ul>
+      <li>להפעלת האפליקציה — הצגת אירועים, מפגשים, מקומות ומשתמשים בקרבתך על המפה.</li>
+      <li>לאפשר צ׳אט, בקשות הצטרפות והתראות.</li>
+      <li>לשמור את ההעדפות שלך ולסנכרן אותן בין המכשירים שלך.</li>
+      <li>לאבטחת השירות, מניעת שימוש לרעה ותמיכה.</li>
+    </ul>
+
+    <h2>שיתוף מידע</h2>
+    <p>איננו מוכרים את המידע שלך. מידע משותף רק במקרים הבאים:</p>
+    <ul>
+      <li><strong>עם משתמשים אחרים:</strong> הפרופיל הציבורי, התוכן שאתה מפרסם, וההופעה שלך במפה — בהתאם להגדרות הפרטיות שבחרת (שיתוף מיקום, הצגה במפה, פרופיל ציבורי, הצגת גיל/אינסטגרם, ניתן לחיפוש).</li>
+      <li><strong>ספקי שירות:</strong> אנו משתמשים ב-Supabase (בסיס נתונים, אימות ואחסון) וב-Expo (משלוח התראות) כדי לתפעל את השירות.</li>
+      <li><strong>דרישות חוק:</strong> אם נידרש לכך על פי דין.</li>
+    </ul>
+
+    <h2>אחסון ואבטחה</h2>
+    <p>
+      הנתונים נשמרים בשרתי Supabase ומאובטחים באמצעות בקרות גישה (Row Level Security) והצפנה בתעבורה.
+      איננו יכולים להבטיח אבטחה מוחלטת, אך אנו נוקטים באמצעים סבירים כדי להגן על המידע שלך.
+    </p>
+
+    <h2>שמירה ומחיקה</h2>
+    <p>
+      אנו שומרים את המידע כל עוד חשבונך פעיל. באפשרותך למחוק את חשבונך בכל עת מתוך האפליקציה (הגדרות),
+      ובכך יימחקו הפרופיל והתוכן המשויך אליו. ניתן גם לפנות אלינו בבקשת מחיקה.
+    </p>
+
+    <h2>השליטה שלך</h2>
+    <ul>
+      <li>הגדרות פרטיות מפורטות באפליקציה — שיתוף מיקום, הצגה במפה, פרופיל ציבורי, קבלת הודעות ועוד.</li>
+      <li>ניהול הרשאות מיקום, מצלמה, גלריה והתראות דרך הגדרות המכשיר.</li>
+      <li>מחיקת חשבון בכל עת.</li>
+    </ul>
+
+    <h2>ילדים</h2>
+    <p>השירות אינו מיועד למשתמשים מתחת לגיל 13. איננו אוספים ביודעין מידע מילדים מתחת לגיל זה.</p>
+
+    <h2>שינויים במדיניות</h2>
+    <p>אנו עשויים לעדכן מדיניות זו מעת לעת. גרסה מעודכנת תפורסם בעמוד זה עם תאריך עדכון חדש.</p>
+
+    <h2>יצירת קשר</h2>
+    <div class="card">
+      <p style="margin:0">בשאלות בנוגע לפרטיות או בבקשות למחיקת נתונים, ניתן לפנות אלינו בכתובת:
+      <br /><a href="mailto:Hello.fomoapp@gmail.com" dir="ltr"><strong>Hello.fomoapp@gmail.com</strong></a></p>
+    </div>
+
+    <footer>
+      © 2026 FOMO. כל הזכויות שמורות.
+    </footer>
+  </div>
+</body>
+</html>

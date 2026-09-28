@@ -10,6 +10,16 @@ import { messagePreview } from '../utils/eventMessage';
 import { loadValue, saveValue } from '../utils/warmCache';
 import { fetchChatList, cleanupDuplicateGroups, chatListCache, type Conversation, type GroupChat } from '../services/chatListService';
 import { getBlockedIdsCached, refreshBlockedIds } from '../services/blockService';
+import { OnboardingTour, type TourStep } from './OnboardingTour';
+
+// First-run guide for the Messages screen — how to find & join city group chats. Shown once per user.
+const MSG_TOUR_STEPS: TourStep[] = [
+  { emoji: '💬', title: 'צ׳אטים וקבוצות', body: 'כאן מדברים עם טיילים אחרים ומצטרפים לקבוצות הצ׳אט של הערים.' },
+  { target: '[data-tour="msg-countries"]', emoji: '🌍', title: 'בחר מדינה', body: 'הקש על דגל של מדינה כדי לפתוח את הערים שבה.' },
+  { target: '[data-tour="msg-cities"]', emoji: '🏙️', title: 'הצטרף לקבוצת עיר', body: 'הקש על עיר כדי להיכנס לקבוצת הצ׳אט שלה ולהצטרף לטיילים שם.' },
+  { target: '[data-tour="msg-tabs"]', emoji: '🗂️', title: 'סינון', body: 'עבור בין כל השיחות, הקבוצות שלך, והצ׳אטים הפרטיים.' },
+  { emoji: '🎉', title: 'מוכנים!', body: 'בחר מדינה ← עיר, והצטרף לשיחה של הטיילים שם!' },
+];
 
 const COUNTRY_CITIES: Record<string, { name: string; emoji: string }[]> = {
   TH: [
@@ -209,6 +219,24 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
   // Top tab filter. Default 'all' shows BOTH groups + chats together; tapping a tab filters to it
   // (and tapping the active tab again returns to 'all'). Active tab's text is bold/orange.
   const [activeTab, setActiveTab] = useState<'all' | 'groups' | 'chats'>('all');
+
+  // First-run Messages guide (how to find + join city group chats). Auto-expands a country so the city
+  // chips are on screen for the tour to point at, then shows the coach-marks. Once per user (native-safe).
+  const [showMsgTour, setShowMsgTour] = useState(false);
+  useEffect(() => {
+    if (!currentUserId) return;
+    if (loadValue<boolean>(`msgTourSeen:${currentUserId}`, false)) return;
+    const first = userCountries[0];
+    if (first) setExpandedCountry(prev => prev ?? first);
+    const t = setTimeout(() => setShowMsgTour(true), 800); // let the city chips animate in first
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once when the user id is known.
+  }, [currentUserId]);
+  const finishMsgTour = () => {
+    if (currentUserId) saveValue<boolean>(`msgTourSeen:${currentUserId}`, true);
+    setShowMsgTour(false);
+  };
+
   // WhatsApp-style header: as the list scrolls down, the search bar thins out and disappears, leaving
   // just the (glass) title. Driven imperatively off the scroll position so the long list never re-renders.
   const listScrollRef = useRef<HTMLDivElement>(null);
@@ -765,7 +793,7 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
           </div>
 
           {/* Country selector */}
-          <div className="overflow-x-auto scrollbar-hide" style={{ touchAction: 'pan-x', overscrollBehaviorX: 'contain' }}>
+          <div data-tour="msg-countries" className="overflow-x-auto scrollbar-hide" style={{ touchAction: 'pan-x', overscrollBehaviorX: 'contain' }}>
             <div className="flex gap-3.5 px-4 pb-1" style={{ width: 'max-content' }}>
               {userCountries.map((code) => {
                 const country = COUNTRIES[code];
@@ -821,7 +849,7 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
 
           {/* City chips — animate in when a country is expanded */}
           {expandedCountry && COUNTRY_CITIES[expandedCountry] && (
-            <div ref={cityRowRef} className="overflow-x-auto scrollbar-hide mt-3" style={{ touchAction: 'pan-x', overscrollBehaviorX: 'contain' }}>
+            <div ref={cityRowRef} data-tour="msg-cities" className="overflow-x-auto scrollbar-hide mt-3" style={{ touchAction: 'pan-x', overscrollBehaviorX: 'contain' }}>
               <div className="flex gap-2 px-4 pb-1" style={{ width: 'max-content' }}>
                 {COUNTRY_CITIES[expandedCountry].map((city, i) => {
                   const accent = emojiColor(city.emoji); // frame + tint colour matched to the emoji
@@ -866,7 +894,7 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
         <div className="h-px bg-gray-100 mx-4 my-2" />
 
         {/* ── Filter pills: All · Chats · Groups (All selected by default) ── */}
-        <div className="flex items-center gap-2 px-4 mb-1 mt-3">
+        <div data-tour="msg-tabs" className="flex items-center gap-2 px-4 mb-1 mt-3">
           {([['all', 'הכל', null], ['chats', 'צאטים', conversations.length], ['groups', 'קבוצות', groupChats.length]] as const).map(([key, label, count]) => {
             const on = activeTab === key;
             return (
@@ -944,7 +972,7 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
         onHomeClick={onHomeClick}
         onMapClick={onMapClick}
         onCreateClick={onCreateClick}
-        onChatClick={onBack}
+        onChatClick={() => {}}
         onMyEventsClick={onMyEventsClick}
       />
 
@@ -962,6 +990,11 @@ export function MessagesScreen({ currentUserId, onBack, onConversationClick, onH
           onOpenMapAt={onOpenMapAt}
           onNavigateToUserProfile={onNavigateToUserProfile}
         />
+      )}
+
+      {/* First-run city-groups guide (hidden while a city chat is open) */}
+      {showMsgTour && !openCity && (
+        <OnboardingTour steps={MSG_TOUR_STEPS} onFinish={finishMsgTour} />
       )}
     </div>
   );

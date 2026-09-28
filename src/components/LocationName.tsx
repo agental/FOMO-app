@@ -1,28 +1,26 @@
 import { useEffect, useState } from 'react';
+import { loadMapKit } from '../utils/mapkit';
 
 /**
- * Resolves a lat/lng to a human street / place name via Mapbox reverse
- * geocoding (street-level), so shared-location bubbles show e.g. a street
- * name instead of raw coordinates. Results are cached per-coordinate.
+ * Resolves a lat/lng to a human street / place name via Apple MapKit reverse
+ * geocoding, so shared-location bubbles show e.g. a street name instead of raw
+ * coordinates. Results are cached per-coordinate.
  */
 const cache = new Map<string, string>();
 
 async function fetchStreet(lat: number, lng: number): Promise<string | null> {
-  const token = import.meta.env.VITE_MAPBOX_TOKEN;
-  if (!token) return null;
   try {
-    const res = await fetch(
-      `https://api.mapbox.com/geocoding/v5/mapbox.places/${lng},${lat}.json?access_token=${token}&types=address,poi&language=he&limit=1`
-    );
-    if (!res.ok) return null;
-    const data = await res.json();
-    const f = data.features?.[0];
-    if (!f) return null;
-    // For an address result, `text` is the street name (house number is in `address`).
-    const street = f.text as string | undefined;
-    const num = f.address as string | undefined;
-    if (street) return num ? `${street} ${num}` : street;
-    return (f.place_name as string | undefined)?.split(',')[0] || null;
+    const mapkit = await loadMapKit();
+    const geocoder = new mapkit.Geocoder({ language: 'he', getsUserLocation: false });
+    const place = await new Promise<any>((resolve) => {
+      geocoder.reverseLookup(new mapkit.Coordinate(lat, lng), (err: any, data: any) => {
+        resolve(err ? null : (data?.results?.[0] || null));
+      });
+    });
+    if (!place) return null;
+    const name = (place.name as string | undefined)?.trim();
+    if (name) return name;
+    return (place.formattedAddress as string | undefined)?.split(',')[0]?.trim() || null;
   } catch {
     return null;
   }

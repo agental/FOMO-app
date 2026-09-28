@@ -139,7 +139,7 @@ export function CountryGuide({ countryCode, onSelectCountry, onOpenMap, places =
         <section style={{ marginTop: 22 }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 18px 11px' }}>
             <h3 style={{ fontSize: 16.5, fontWeight: 900, color: INK, fontFamily: HEEBO, margin: 0 }}>
-              מקומות מומלצים
+              מדריך למטייל
             </h3>
             {onOpenMap && (
               <button

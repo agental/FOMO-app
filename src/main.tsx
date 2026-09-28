@@ -1,12 +1,35 @@
-import { StrictMode } from 'react';
+import { StrictMode, Suspense } from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App.tsx';
 import { ToastHost } from './components/ToastHost';
 import './index.css';
 
+// A lazily-loaded chunk failed to load — almost always a STALE chunk hash after a redeploy (the open app
+// references files the new build renamed → "Failed to fetch dynamically imported module / module script
+// failed"). Reload once to pull the fresh index + chunks. Guarded (max once / 10s) so a genuine, persistent
+// failure can't loop.
+{
+  const reloadOnce = () => {
+    try {
+      const last = Number(sessionStorage.getItem('vpe') || '0');
+      if (Date.now() - last < 10000) return;
+      sessionStorage.setItem('vpe', String(Date.now()));
+    } catch { /* sessionStorage may be blocked — still reload */ }
+    window.location.reload();
+  };
+  window.addEventListener('vite:preloadError', reloadOnce);
+  window.addEventListener('unhandledrejection', (e) => {
+    const msg = String((e && ((e as PromiseRejectionEvent).reason?.message || (e as PromiseRejectionEvent).reason)) || '');
+    if (/dynamically imported module|module script failed|error loading dynamically imported/i.test(msg)) reloadOnce();
+  });
+}
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
+    {/* Root boundary for lazily-loaded screens (code-split to keep the initial bundle small). */}
+    <Suspense fallback={null}>
+      <App />
+    </Suspense>
     <ToastHost />
   </StrictMode>
 );

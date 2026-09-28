@@ -1,8 +1,9 @@
-import { useState, useRef, useLayoutEffect } from 'react';
+import { useState, useRef, useLayoutEffect, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ChevronRight, Check, Camera, Loader2, Circle } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { SUGGESTED_INTERESTS } from '../utils/suggestions';
+import { loadValue, saveValue } from '../utils/warmCache';
 
 interface CreateProfileWizardProps {
   userId: string;
@@ -22,7 +23,7 @@ const haptic = (ms: number) => { try { navigator.vibrate?.(ms); } catch { /* uns
 
 type StepKey = 'name' | 'photo' | 'age' | 'gender' | 'interests' | 'bio' | 'instagram' | 'done';
 const FLOW: StepKey[] = ['age', 'name', 'gender', 'instagram', 'bio', 'interests', 'photo', 'done'];
-const OPTIONAL: StepKey[] = ['photo', 'bio', 'instagram'];
+const OPTIONAL: StepKey[] = ['bio', 'instagram']; // photo is MANDATORY (a null avatar breaks downstream)
 
 const GENDERS = [
   { key: 'male', label: 'גבר', icon: '♂' },
@@ -81,7 +82,12 @@ function Wheel({ items, value, onChange }: { items: string[]; value: number; onC
 }
 
 export function CreateProfileWizard({ userId, onComplete, onBack }: CreateProfileWizardProps) {
-  const [[index], setPage] = useState<[number, number]>([0, 0]);
+  // Persist the in-progress signup so leaving the app mid-wizard (which reloads the WebView on iOS)
+  // doesn't wipe it. warmCache mirrors to native storage → survives a reload; plain localStorage doesn't.
+  const DRAFT_KEY = `createProfileDraft:${userId}`;
+  const [draft] = useState<Record<string, any> | null>(() => loadValue<Record<string, any> | null>(DRAFT_KEY, null));
+
+  const [[index], setPage] = useState<[number, number]>([draft?.index ?? 0, 0]);
   const step = FLOW[index];
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -89,34 +95,55 @@ export function CreateProfileWizard({ userId, onComplete, onBack }: CreateProfil
   const [error, setError] = useState<string | null>(null);
   const [isUploadingImage, setIsUploadingImage] = useState(false);
 
-  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
-  const [displayName, setDisplayName] = useState('');
-  const [birthD, setBirthD] = useState(2);   // default: 2 July 2001
-  const [birthM, setBirthM] = useState(6);
-  const [birthY, setBirthY] = useState(2001);
-  const [ageOpen, setAgeOpen] = useState(false); // date wheel hidden until the user taps "בחר גיל"
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(draft?.avatarUrl ?? null);
+  const [displayName, setDisplayName] = useState<string>(draft?.displayName ?? '');
+  const [birthD, setBirthD] = useState<number>(draft?.birthD ?? 2);   // default: 2 July 2001
+  const [birthM, setBirthM] = useState<number>(draft?.birthM ?? 6);
+  const [birthY, setBirthY] = useState<number>(draft?.birthY ?? 2001);
+  const [ageOpen, setAgeOpen] = useState<boolean>(!!draft?.ageOpen); // date wheel hidden until the user taps "בחר גיל"
   const [ageConfirm, setAgeConfirm] = useState(false); // "your age is X — confirm?" dialog
   const age = computeAge(birthY, birthM, birthD);
-  const [gender, setGender] = useState('');
-  const [interests, setInterests] = useState<string[]>([]);
-  const [bio, setBio] = useState('');
-  const [instagram, setInstagram] = useState('');
+  const [gender, setGender] = useState<string>(draft?.gender ?? '');
+  const [interests, setInterests] = useState<string[]>(draft?.interests ?? []);
+  const [bio, setBio] = useState<string>(draft?.bio ?? '');
+  const [instagram, setInstagram] = useState<string>(draft?.instagram ?? '');
+
+  // Auto-save the draft on every meaningful change.
+  useEffect(() => {
+    saveValue(DRAFT_KEY, { index, avatarUrl, displayName, birthD, birthM, birthY, ageOpen, gender, interests, bio, instagram });
+  }, [DRAFT_KEY, index, avatarUrl, displayName, birthD, birthM, birthY, ageOpen, gender, interests, bio, instagram]);
 
   const firstName = displayName.trim().split(' ')[0];
 
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+    const input = e.target;
+    const file = input.files?.[0];
+    input.value = ''; // reset so re-picking the same file always re-fires onChange
     if (!file) return;
     if (!file.type.startsWith('image/')) { setError('נא להעלות קובץ תמונה בלבד'); return; }
     if (file.size > 5 * 1024 * 1024) { setError('התמונה גדולה מדי (מקס׳ 5MB)'); return; }
     setError(null);
     setIsUploadingImage(true);
-    try {
-      const ext = file.name.split('.').pop();
-      const path = `avatars/${userId}-${Date.now()}.${ext}`;
-      const { error: upErr } = await supabase.storage.from('images').upload(path, file, { cacheControl: '3600', upsert: false });
+
+    const uploadOnce = async () => {
+      const ext = (file.name.split('.').pop() || 'jpg').toLowerCase();
+      const path = `avatars/${userId}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}.${ext}`;
+      const { error: upErr } = await supabase.storage.from('images')
+        .upload(path, file, { cacheControl: '3600', upsert: false, contentType: file.type || 'image/jpeg' });
       if (upErr) throw upErr;
-      const { data: { publicUrl } } = supabase.storage.from('images').getPublicUrl(path);
+      return supabase.storage.from('images').getPublicUrl(path).data.publicUrl;
+    };
+
+    try {
+      let publicUrl: string;
+      try {
+        publicUrl = await uploadOnce();
+      } catch {
+        // The FIRST upload right after a fresh signup can fail (the auth token isn't yet attached to the
+        // storage request, or an iCloud photo wasn't downloaded yet) — retry once before surfacing an error.
+        await new Promise((r) => setTimeout(r, 400));
+        publicUrl = await uploadOnce();
+      }
       setAvatarUrl(publicUrl);
       supabase.from('users').update({ avatar_url: publicUrl }).eq('id', userId);
     } catch (err: any) {
@@ -144,6 +171,7 @@ export function CreateProfileWizard({ userId, onComplete, onBack }: CreateProfil
   };
 
   const paginate = (d: number) => {
+    setError(null); // clear any per-step error when moving between steps
     const next = index + d;
     if (next < 0) { onBack?.(); return; }
     if (next >= FLOW.length) return;
@@ -153,6 +181,7 @@ export function CreateProfileWizard({ userId, onComplete, onBack }: CreateProfil
 
   const handleSubmit = async () => {
     setError(null);
+    if (!avatarUrl) { setError('חובה להוסיף תמונת פרופיל כדי ליצור חשבון'); return; } // never create a user without a photo
     setLoading(true);
     try {
       // The users row is auto-created at signup (email already set), so this is an UPDATE, not an
@@ -174,6 +203,7 @@ export function CreateProfileWizard({ userId, onComplete, onBack }: CreateProfil
       }).eq('id', userId);
       if (upErr) throw upErr;
       if (gender) { const { error: gErr } = await supabase.from('users').update({ gender }).eq('id', userId); if (gErr) console.warn('gender not saved (add a `gender` column):', gErr.message); }
+      saveValue(DRAFT_KEY, null); // signup finished → clear the saved draft
       onComplete();
     } catch (err: any) {
       setError(err?.message || 'אירעה שגיאה בשמירת הפרופיל');
@@ -374,6 +404,12 @@ export function CreateProfileWizard({ userId, onComplete, onBack }: CreateProfil
         <button
           onClick={() => {
             if (btnDisabled) return;
+            // Profile photo is MANDATORY — block advancing without one and show a clear error.
+            if (step === 'photo' && !avatarUrl) {
+              haptic(10);
+              setError(isUploadingImage ? 'רגע, התמונה עדיין נטענת…' : 'חובה להוסיף תמונת פרופיל כדי להמשיך');
+              return;
+            }
             haptic(10);
             if (step === 'done') handleSubmit();
             else if (step === 'age') setAgeConfirm(true); // confirm the computed age first

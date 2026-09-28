@@ -1,4 +1,5 @@
 import { useEffect, useRef, type RefObject } from 'react';
+import { getTouchedRowAlign } from '../components/SwipeToReplyRow';
 
 /**
  * App-wide "swipe to go back" — the interactive, WhatsApp/Instagram style: the page FOLLOWS your finger
@@ -49,6 +50,10 @@ function onTouchStart(e: TouchEvent) {
   const t = e.touches[0];
   const w = window.innerWidth;
   if (t.clientX < w - EDGE) return; // right edge only
+  // Belt-and-suspenders: never arm the back-gesture on a message bubble (the reply-swipe owns it).
+  if (getTouchedRowAlign() === 'end') return;
+  const tgt = t.target as Element | null;
+  if (tgt && typeof tgt.closest === 'function' && tgt.closest('[data-swipe-reply="end"]')) return;
   const top = stack[stack.length - 1];
   if (!top.el.current) return; // nothing to move → let it be a plain (non-swipe) screen
   entry = top;

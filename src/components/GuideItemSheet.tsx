@@ -1,6 +1,9 @@
-import { useEffect, useState } from 'react';
-import { X, ExternalLink, Check } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { X, ExternalLink, Check, Download } from 'lucide-react';
+import { useSheetDrag } from '../hooks/useSheetDrag';
 import type { GuideItem } from '../data/countryGuides';
+import { APP_STORE_IDS } from '../data/appStoreIds';
+import { openAppStore, canOpenAppStore } from '../utils/openAppStore';
 
 /**
  * The full description of one guide item (an app, a SIM, a tip…). Opens above the
@@ -21,6 +24,10 @@ const MUTED = '#8B90A0';
 export function GuideItemSheet({ item, color, onClose }: GuideItemSheetProps) {
   const [entered, setEntered] = useState(false);
 
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const close = () => { setEntered(false); setTimeout(onClose, 240); };
+  const { dragY, dragging, handlers } = useSheetDrag(scrollRef, close);
+
   useEffect(() => {
     if (!item) { setEntered(false); return; }
     const id = requestAnimationFrame(() => setEntered(true));
@@ -29,25 +36,25 @@ export function GuideItemSheet({ item, color, onClose }: GuideItemSheetProps) {
 
   if (!item) return null;
 
-  const close = () => { setEntered(false); setTimeout(onClose, 240); };
   const paragraphs = item.description.split('\n').filter(Boolean);
 
   return (
     <>
       <div
         className="fixed inset-0 bg-black/50 z-[60]"
-        style={{ opacity: entered ? 1 : 0, transition: 'opacity 0.24s ease' }}
+        style={{ opacity: entered ? Math.max(0, 1 - dragY / 400) : 0, transition: dragging ? 'none' : 'opacity 0.24s ease' }}
         onClick={close}
       />
       <div
         className="fixed left-0 right-0 bottom-0 bg-white rounded-t-3xl z-[60] flex flex-col"
         style={{
           maxHeight: '86vh',
-          transform: entered ? 'translateY(0)' : 'translateY(100%)',
-          transition: 'transform 0.32s cubic-bezier(0.22,1,0.3,1)',
+          transform: entered ? `translateY(${dragY}px)` : 'translateY(100%)',
+          transition: dragging ? 'none' : 'transform 0.32s cubic-bezier(0.22,1,0.3,1)',
           boxShadow: '0 -8px 40px rgba(0,0,0,0.2)',
         }}
         dir="rtl"
+        {...handlers}
       >
         {/* Pinned header */}
         <div style={{ flexShrink: 0, padding: '10px 20px 14px', borderBottom: '1px solid #F2F3F6' }}>
@@ -96,7 +103,7 @@ export function GuideItemSheet({ item, color, onClose }: GuideItemSheetProps) {
         </div>
 
         {/* Scrollable body */}
-        <div style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto', padding: '18px 20px 26px', overscrollBehavior: 'contain' }}>
+        <div ref={scrollRef} style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto', padding: '18px 20px 26px', overscrollBehavior: 'contain' }}>
           {paragraphs.map((p, i) => (
             <p key={i} style={{
               margin: i === 0 ? 0 : '13px 0 0', fontSize: 15, lineHeight: 1.65, color: '#374151',
@@ -122,6 +129,21 @@ export function GuideItemSheet({ item, color, onClose }: GuideItemSheetProps) {
                 </div>
               ))}
             </div>
+          )}
+
+          {APP_STORE_IDS[item.id] && canOpenAppStore() && (
+            <button
+              onClick={() => openAppStore(APP_STORE_IDS[item.id])}
+              style={{
+                marginTop: 20, width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                height: 52, borderRadius: 16, background: color, color: '#fff', border: 'none', cursor: 'pointer',
+                fontSize: 15.5, fontWeight: 800, fontFamily: HEEBO,
+                boxShadow: `0 8px 22px ${color}4D`,
+              }}
+            >
+              <Download size={18} strokeWidth={2.4} />
+              התקן מ‑App Store
+            </button>
           )}
 
           {item.link && (

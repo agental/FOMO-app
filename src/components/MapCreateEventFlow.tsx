@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { X, MapPin, Lock, Users, Upload, ChevronLeft, Check, Tag, Plus, Trash2, Landmark } from 'lucide-react';
+import { X, MapPin, Lock, Users, Upload, ChevronLeft, Check, Tag, Plus, Trash2, Landmark, Search } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import mapboxgl from 'mapbox-gl';
+import { loadMapKit } from '../utils/mapkit';
 import confetti from 'canvas-confetti';
 import { EventService } from '../services/eventService';
 import { reverseGeocode } from '../utils/geocoding';
@@ -88,6 +88,8 @@ export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initial
   const [latitude,       setLatitude]       = useState<number|null>(initialLocation?.latitude||null);
   const [longitude,      setLongitude]      = useState<number|null>(initialLocation?.longitude||null);
   const [locationName,   setLocationName]   = useState('');
+  const [locSearch,      setLocSearch]      = useState('');
+  const [locSearching,   setLocSearching]   = useState(false);
   const [detectedCity,   setDetectedCity]   = useState<string|null>(null);
   const [detectedCountry,setDetectedCountry]= useState<string|null>(null);
 
@@ -114,17 +116,21 @@ export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initial
   const [createdEvent,    setCreatedEvent]     = useState<Record<string, any> | null>(null);
 
   const mapContainerRef = useRef<HTMLDivElement>(null);
-  const mapRef          = useRef<mapboxgl.Map|null>(null);
-  const markerRef       = useRef<mapboxgl.Marker|null>(null);
+  const mapRef          = useRef<any>(null);   // mapkit.Map
+  const markerRef       = useRef<any>(null);   // mapkit.MarkerAnnotation (draggable pin)
+  const mapkitRef       = useRef<any>(null);   // the mapkit namespace
+  const searchRef       = useRef<any>(null);   // mapkit.Search (place search)
   const fileInputRef    = useRef<HTMLInputElement>(null);
+  const dateInputRef    = useRef<HTMLInputElement>(null);
 
-  const days        = getNextDays(10);
+  const days        = getNextDays(14);
+  const todayStr    = new Date().toISOString().split('T')[0];
+  const maxDayStr   = (() => { const d = new Date(); d.setMonth(d.getMonth() + 6); return d.toISOString().split('T')[0]; })(); // up to 6 months ahead
   const currentType = EVENT_TYPES.find(t => t.id === eventType) || EVENT_TYPES[0];
   const accent      = currentType.color;
 
   useEffect(() => {
-    mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN || '';
-    return () => { mapRef.current?.remove(); mapRef.current = null; };
+    return () => { try { mapRef.current?.destroy?.(); } catch { /* ignore */ } mapRef.current = null; };
   }, []);
 
   // Load the organizer's payout account the first time they enable paid tickets, so the status
@@ -172,56 +178,122 @@ export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initial
     }
   }, [isOpen, existingEvent]);
 
-  // init map once when component opens — map container is always in DOM
+  // init the Apple (MapKit JS) map once the location step is VISIBLE — MapKit needs a laid-out,
+  // non-`display:none` container, and the map section is hidden until step 2.
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen || step !== 2) return;
     if (mapRef.current) return;
     if (!mapContainerRef.current) return;
 
+    let cancelled = false;
     const fallbackLat = initialLocation?.latitude || 32.0853;
     const fallbackLng = initialLocation?.longitude || 34.7818;
 
-    const map = new mapboxgl.Map({
-      container: mapContainerRef.current,
-      style: 'mapbox://styles/mapbox/streets-v11',
-      center: [fallbackLng, fallbackLat],
-      zoom: 14,
-    });
-    map.addControl(new mapboxgl.NavigationControl(), 'top-left');
-    const marker = new mapboxgl.Marker({ color: accent, draggable: true })
-      .setLngLat([fallbackLng, fallbackLat]).addTo(map);
-
     setLatitude(fallbackLat); setLongitude(fallbackLng);
 
-    const update = async (la: number, lo: number) => {
-      setLatitude(la); setLongitude(lo);
-      const r = await reverseGeocode(la, lo);
-      setLocationName(r.address || `${la.toFixed(4)}, ${lo.toFixed(4)}`);
-      setDetectedCity(r.city); setDetectedCountry(r.countryCode);
-    };
+    (async () => {
+      try {
+        const mapkit = await loadMapKit();
+        if (cancelled || mapRef.current || !mapContainerRef.current) return;
+        mapkitRef.current = mapkit;
 
-    const safeUpdate = (la: number, lo: number) => update(la, lo).catch(e => console.error('[MapCreateEventFlow] reverseGeocode failed:', e));
-    marker.on('dragend', () => { const l = marker.getLngLat(); safeUpdate(l.lat, l.lng); });
-    map.on('click', e => { marker.setLngLat([e.lngLat.lng, e.lngLat.lat]); safeUpdate(e.lngLat.lat, e.lngLat.lng); });
-    map.once('load', () => {
-      map.resize();
-      // fly to user location after map loads
-      navigator.geolocation?.getCurrentPosition(
-        pos => {
-          const la = pos.coords.latitude, lo = pos.coords.longitude;
-          map.flyTo({ center: [lo, la], zoom: 15, duration: 1200 });
-          marker.setLngLat([lo, la]);
-          safeUpdate(la, lo);
-        },
-        () => safeUpdate(fallbackLat, fallbackLng),
-        { timeout: 8000, maximumAge: 60000 }
-      );
-    });
+        const map = new mapkit.Map(mapContainerRef.current, {
+          showsCompass: mapkit.FeatureVisibility.Hidden,
+          showsScale: mapkit.FeatureVisibility.Hidden,
+          showsMapTypeControl: false,
+          showsZoomControl: true,
+          showsUserLocationControl: true,
+          isRotationEnabled: false,
+        });
+        map.region = new mapkit.CoordinateRegion(new mapkit.Coordinate(fallbackLat, fallbackLng), new mapkit.CoordinateSpan(0.03, 0.03));
 
-    mapRef.current = map; markerRef.current = marker;
-  }, [isOpen]);
+        const marker = new mapkit.MarkerAnnotation(new mapkit.Coordinate(fallbackLat, fallbackLng), { color: accent, draggable: true, animates: false });
+        map.addAnnotation(marker);
+
+        const update = (la: number, lo: number) => {
+          setLatitude(la); setLongitude(lo);
+          reverseGeocode(la, lo).then(r => {
+            setLocationName(r.address || `${la.toFixed(4)}, ${lo.toFixed(4)}`);
+            setDetectedCity(r.city); setDetectedCountry(r.countryCode);
+          }).catch(e => console.error('[MapCreateEventFlow] reverseGeocode failed:', e));
+        };
+
+        // Drag the pin, or tap the map, to move the location.
+        marker.addEventListener('drag-end', () => { const c = marker.coordinate; update(c.latitude, c.longitude); });
+        map.addEventListener('single-tap', (ev: any) => {
+          try {
+            const p = ev?.pointOnPage; if (!p) return;
+            const c = map.convertPointOnPageToCoordinate(p);
+            marker.coordinate = c;
+            update(c.latitude, c.longitude);
+          } catch { /* ignore */ }
+        });
+
+        mapRef.current = map; markerRef.current = marker;
+
+        const goTo = (la: number, lo: number) => {
+          try { map.setRegionAnimated(new mapkit.CoordinateRegion(new mapkit.Coordinate(la, lo), new mapkit.CoordinateSpan(0.02, 0.02)), true); } catch { /* ignore */ }
+          marker.coordinate = new mapkit.Coordinate(la, lo);
+          update(la, lo);
+        };
+
+        // When EDITING keep the event's own location; when CREATING, drop the pin on the user's CURRENT
+        // location automatically (native bridge first — navigator.geolocation is dead in the iOS WebView).
+        if (existingEvent) { update(fallbackLat, fallbackLng); return; }
+
+        const cached = (window as any)._nativeLocation;
+        if (cached?.lat != null && !isNaN(cached.lat)) { goTo(cached.lat, cached.lng); return; }
+        const onNative = (e: any) => {
+          const { lat, lng } = e?.detail || {};
+          if (lat != null && !isNaN(lat)) { window.removeEventListener('nativeLocation', onNative); goTo(lat, lng); }
+        };
+        window.addEventListener('nativeLocation', onNative);
+        navigator.geolocation?.getCurrentPosition(
+          pos => { window.removeEventListener('nativeLocation', onNative); goTo(pos.coords.latitude, pos.coords.longitude); },
+          () => { /* keep waiting for the native event */ },
+          { timeout: 8000, maximumAge: 60000 }
+        );
+        setTimeout(() => window.removeEventListener('nativeLocation', onNative), 12000);
+      } catch (e) {
+        console.error('[MapCreateEventFlow] MapKit init failed:', e);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [isOpen, step]);
 
   const go = useCallback((next: FlowStep, d = 1) => { setDir(d); setStep(next); }, []);
+
+  // Type a place/address → Apple's own search finds it and moves the pin there.
+  const searchLocation = () => {
+    const q = locSearch.trim();
+    if (!q || locSearching) return;
+    const mapkit = mapkitRef.current, map = mapRef.current, marker = markerRef.current;
+    if (!mapkit || !map || !marker) return;
+    setLocSearching(true);
+    try {
+      if (!searchRef.current) searchRef.current = new mapkit.Search({ getsUserLocation: true, language: 'he' });
+      searchRef.current.search(q, (err: any, data: any) => {
+        try {
+          const place = data?.places?.[0];
+          if (err || !place?.coordinate) return;
+          const c = place.coordinate;
+          try { map.setRegionAnimated(new mapkit.CoordinateRegion(c, new mapkit.CoordinateSpan(0.02, 0.02)), true); } catch { /* ignore */ }
+          marker.coordinate = c;
+          setLatitude(c.latitude); setLongitude(c.longitude);
+          reverseGeocode(c.latitude, c.longitude).then(rev => {
+            setLocationName(rev.address || place.name || q);
+            setDetectedCity(rev.city); setDetectedCountry(rev.countryCode);
+          }).catch(() => { setLocationName(place.name || q); });
+        } finally {
+          setLocSearching(false);
+        }
+      });
+    } catch (e) {
+      console.error('[MapCreateEventFlow] location search failed:', e);
+      setLocSearching(false);
+    }
+  };
 
   const handleNext = () => {
     if (step === 1 && title.trim()) go(2);
@@ -370,7 +442,8 @@ export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initial
   };
 
   const handleClose = () => {
-    mapRef.current?.remove(); mapRef.current = null;
+    try { mapRef.current?.destroy?.(); } catch { /* ignore */ }
+    mapRef.current = null; markerRef.current = null;
     setStep(1); setTitle(''); setDescription(''); setSelectedEmoji('🎉'); setEventType('parties');
     setSelectedDay(''); setSelectedTime('20:00'); setMaxAttendees(20);
     setIsPaid(false); setTicketTypes([freshTicket('כרטיס רגיל')]); setCreateGroup(false);
@@ -520,10 +593,30 @@ export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initial
 
         {/* ═══ MAP — always in DOM, shown only on step 2 ═══ */}
         <div style={{ display: step === 2 ? 'block' : 'none' }} className="flex-1 px-4 pb-4 overflow-hidden">
+          {/* Search a place by text → moves the pin */}
+          <form onSubmit={e => { e.preventDefault(); searchLocation(); }} className="mb-2.5">
+            <div className="relative">
+              <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+              <input
+                value={locSearch}
+                onChange={e => setLocSearch(e.target.value)}
+                placeholder="חפש מקום או כתובת…"
+                enterKeyHint="search"
+                className="w-full h-11 rounded-[12px] bg-[#F2F2F7] pr-10 pl-[72px] text-[14px] text-[#1C1C1E] placeholder:text-gray-400 focus:outline-none"
+              />
+              <button
+                type="submit" disabled={!locSearch.trim() || locSearching}
+                className="absolute left-1.5 top-1/2 -translate-y-1/2 h-8 px-3.5 rounded-[9px] text-white text-[13px] font-bold active:scale-95 transition disabled:opacity-40"
+                style={{ background: accent }}
+              >
+                {locSearching ? '…' : 'חפש'}
+              </button>
+            </div>
+          </form>
           <div className="rounded-[12px] mb-3 px-4 py-2.5 flex items-center gap-2"
             style={{ background: `${accent}15`, border: `1px solid ${accent}30` }}>
             <MapPin className="w-4 h-4 flex-shrink-0" style={{ color: accent }} />
-            <p className="text-[13px] font-medium" style={{ color: accent }}>לחץ על המפה או גרור את הסמן</p>
+            <p className="text-[13px] font-medium" style={{ color: accent }}>חפש מקום, לחץ על המפה או גרור את הסמן</p>
           </div>
           <div className="rounded-[20px] overflow-hidden shadow-md border-2 mb-3"
             style={{ height: 320, borderColor: `${accent}50` }}>
@@ -550,33 +643,25 @@ export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initial
                 initial={{ x: dir * 50, opacity: 0 }} animate={{ x: 0, opacity: 1 }} exit={{ x: dir * -50, opacity: 0 }}
                 transition={{ type: 'spring', damping: 26, stiffness: 260 }}
               >
-                {/* big emoji pin (driven by the selected category) */}
-                <div className="flex flex-col items-center py-4">
-                  <div className="relative">
-                    <div className="absolute inset-0 rounded-full blur-2xl opacity-30" style={{ background: accent, transform: 'scale(1.6)' }} />
-                    <div className="relative w-28 h-28 rounded-full flex items-center justify-center shadow-xl"
-                      style={{ background: `linear-gradient(145deg, ${accent}dd, ${accent})` }}>
-                      <span className="text-6xl">{selectedEmoji}</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* category grid */}
+                {/* category — 2×2 premium tiles (drives the pin emoji + the title placeholder) */}
                 <div className="bg-white rounded-[20px] p-4 shadow-sm border border-black/[0.05]">
-                  <p className="text-[11px] font-semibold text-[#8E8E93] uppercase tracking-wider mb-3">קטגוריה</p>
-                  <div className="grid grid-cols-5 gap-2">
+                  <p className="text-[11px] font-semibold text-[#8E8E93] uppercase tracking-wider mb-3">סוג האירוע</p>
+                  <div className="grid grid-cols-2 gap-2.5">
                     {EVENT_TYPES.map(t => {
                       const active = eventType === t.id;
                       return (
-                        <motion.button key={t.id} type="button" whileTap={{ scale: 0.88 }}
+                        <motion.button key={t.id} type="button" whileTap={{ scale: 0.97 }}
                           onClick={() => { setEventType(t.id); setSelectedEmoji(t.emoji); }}
-                          className="flex flex-col items-center gap-1 py-3 rounded-[14px] transition-all relative overflow-hidden"
+                          className="relative flex items-center gap-3 p-3 rounded-[16px] transition-all overflow-hidden text-right"
                           style={active
-                            ? { background: t.color, boxShadow: `0 4px 16px ${t.color}55` }
-                            : { background: '#F2F2F7' }}>
-                          {active && <Check className="absolute top-1 right-1 w-3 h-3 text-white" strokeWidth={3} />}
-                          <span className="text-[24px]">{t.emoji}</span>
-                          <span className="text-[11px] font-semibold" style={{ color: active ? 'white' : '#6B7280' }}>{t.label}</span>
+                            ? { background: t.color, boxShadow: `0 6px 18px ${t.color}55` }
+                            : { background: '#F5F5F7' }}>
+                          <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
+                            style={{ background: active ? 'rgba(255,255,255,0.22)' : '#fff', boxShadow: active ? 'none' : '0 1px 4px rgba(0,0,0,0.06)' }}>
+                            <span className="text-[22px] leading-none">{t.emoji}</span>
+                          </div>
+                          <span className="text-[14px] font-bold" style={{ color: active ? '#fff' : '#3C3C43' }}>{t.label}</span>
+                          {active && <Check className="absolute top-2 left-2 w-3.5 h-3.5 text-white" strokeWidth={3} />}
                         </motion.button>
                       );
                     })}
@@ -595,7 +680,6 @@ export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initial
                         eventType === 'treks'   ? 'טיול להר' : 'סדנת יצירה'
                       }
                       className="w-full text-[18px] font-semibold text-[#1C1C1E] placeholder-[#D1D1D6] bg-transparent outline-none"
-                      autoFocus
                     />
                     {title && <p className="text-[11px] text-[#C7C7CC] mt-1 text-left">{title.length}/60</p>}
                   </div>
@@ -645,6 +729,33 @@ export function MapCreateEventFlow({ isOpen, onClose, onSuccess, userId, initial
                         </motion.button>
                       );
                     })}
+                    {/* Pick ANY date, up to 6 months ahead, via the native date picker */}
+                    {(() => {
+                      const customActive = !!selectedDay && !days.some(dd => dd.value === selectedDay);
+                      const cd = customActive ? new Date(selectedDay) : null;
+                      return (
+                        // A transparent native date input sits ON TOP of the button, so a tap lands
+                        // directly on it and iOS opens its date picker natively (showPicker()/.click()
+                        // on a hidden 1×1 input doesn't fire the picker in the iOS WebView).
+                        <div className="relative flex-shrink-0">
+                          <div
+                            className="flex flex-col items-center justify-center rounded-[16px] px-4 py-3 min-w-[60px]"
+                            style={customActive ? { background: accent, boxShadow: `0 4px 14px ${accent}44` } : { background: '#F2F2F7' }}
+                          >
+                            <span className="text-[10px] font-semibold mb-0.5" style={{ color: customActive ? 'rgba(255,255,255,0.8)' : '#9CA3AF' }}>{customActive ? DAYS_HE[cd!.getDay()] : 'תאריך'}</span>
+                            <span className="text-[20px] font-bold leading-none" style={{ color: customActive ? 'white' : '#1C1C1E' }}>{customActive ? cd!.getDate() : '📅'}</span>
+                            <span className="text-[10px] mt-0.5" style={{ color: customActive ? 'rgba(255,255,255,0.7)' : '#9CA3AF' }}>{customActive ? `${cd!.getMonth() + 1}/${cd!.getFullYear().toString().slice(-2)}` : 'אחר'}</span>
+                          </div>
+                          <input
+                            ref={dateInputRef} type="date" min={todayStr} max={maxDayStr}
+                            value={customActive ? selectedDay : ''}
+                            onChange={e => { if (e.target.value) setSelectedDay(e.target.value); }}
+                            aria-label="בחר תאריך אחר"
+                            style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer', WebkitAppearance: 'none' }}
+                          />
+                        </div>
+                      );
+                    })()}
                   </div>
                 </div>
 

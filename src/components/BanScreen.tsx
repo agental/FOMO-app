@@ -1,5 +1,5 @@
 import { Ban } from 'lucide-react';
-import { supabase } from '../lib/supabase';
+import { hardSignOut } from '../lib/supabase';
 import { isPermanent } from '../services/banService';
 
 /*
@@ -47,7 +47,7 @@ export function BanScreen({ until, reason }: { until: string | null; reason: str
       )}
 
       <button
-        onClick={() => supabase.auth.signOut()}
+        onClick={() => { hardSignOut(); }}
         style={{
           marginTop: 30, height: 50, padding: '0 40px', borderRadius: 25, border: 'none', cursor: 'pointer',
           background: 'rgba(255,255,255,0.1)', color: '#fff', fontSize: 15.5, fontWeight: 700, fontFamily: 'inherit',

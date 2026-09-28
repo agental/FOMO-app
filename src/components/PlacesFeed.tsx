@@ -171,14 +171,7 @@ export function PlacesFeed({ places, currentUserId, searchQuery = '', userLocati
   const fresh     = useMemo(() => enriched.filter(p => p.isNew).slice(0, 10), [enriched]);
   const allSorted = useMemo(() => sortList(enriched), [enriched, sort, userLocation]);
 
-  const mapUrl = useMemo(() => {
-    const token = import.meta.env.VITE_MAPBOX_TOKEN;
-    if (!token || !enriched.length) return null;
-    const markers = enriched.slice(0, 12)
-      .map(p => `pin-s+${p.color.replace('#', '')}(${p.loc.longitude.toFixed(5)},${p.loc.latitude.toFixed(5)})`)
-      .join(',');
-    return `https://api.mapbox.com/styles/v1/mapbox/streets-v12/static/${markers}/auto/640x200@2x?padding=48&access_token=${token}`;
-  }, [enriched]);
+  const showMapHero = enriched.length > 0;
 
   const catCount = tiles.filter(t => t.key !== ALL && t.key !== SAVED).length;
 
@@ -224,7 +217,7 @@ export function PlacesFeed({ places, currentUserId, searchQuery = '', userLocati
       <style>{`.pf-hscroll::-webkit-scrollbar{display:none}.pf-hscroll{scrollbar-width:none}`}</style>
 
       {/* ── Guide cover: the map is the hero ── */}
-      {mapUrl && (
+      {showMapHero && (
         <div
           onClick={onOpenMap}
           style={{
@@ -233,7 +226,7 @@ export function PlacesFeed({ places, currentUserId, searchQuery = '', userLocati
             boxShadow: '0 4px 20px rgba(0,0,0,0.1)', background: '#EAEAEA',
           }}
         >
-          <img src={mapUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+          <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(135deg,#5B7FB9,#8FB0D9 55%,#A7C5B5)' }} />
           <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to top, rgba(10,12,20,0.72), rgba(10,12,20,0.05) 65%)' }} />
           <div style={{ position: 'absolute', bottom: 12, right: 14, left: 14, display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 8 }}>
             <div>

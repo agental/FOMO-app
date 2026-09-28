@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
 import { useSwipeBack } from '../hooks/useSwipeBack';
-import { LogOut, MessageCircle, Edit2, Search, Check, Camera, MapPin, Globe, Loader2, Heart, Ticket, X, Cake, Settings, ChevronLeft, Plus } from 'lucide-react';
+import { LogOut, MessageCircle, Edit2, Search, Check, Camera, MapPin, Globe, Loader2, Heart, Ticket, X, Cake, Settings, ChevronLeft, Plus, Flag } from 'lucide-react';
 import { BackButton } from './BackButton';
-import { supabase, type User } from '../lib/supabase';
+import { supabase, hardSignOut, type User } from '../lib/supabase';
+import { reportUser } from '../services/blockService';
 import { flagEmoji } from '../utils/flags';
 import { COUNTRIES } from '../utils/countries';
 import { SUGGESTED_INTERESTS } from '../utils/suggestions';
@@ -92,12 +93,11 @@ function SectionCard({ label, icon, children, noMargin, onEdit }: { label: strin
             aria-label={`עריכת ${label}`}
             className="fomo-press"
             style={{
-              width: 32, height: 32, borderRadius: 10, flexShrink: 0,
-              background: '#F9FAFB', border: '1.5px solid var(--color-border)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
+              background: 'none', border: 'none', cursor: 'pointer', color: '#F97316', padding: 4, flexShrink: 0,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
             }}
           >
-            <Edit2 size={13} style={{ color: 'var(--color-text-muted)' }} />
+            <Edit2 size={16} />
           </button>
         )}
       </div>
@@ -113,6 +113,17 @@ const INTEREST_EMOJI: Record<string, string> = {
   'אופנה':'👗','כושר':'💪','מדיטציה':'🧘‍♀️','ריקוד':'💃','שחייה':'🏊','אופניים':'🚴',
   'קמפינג':'🏕️','צלילה':'🤿','סקי':'⛷️','כדורגל':'⚽','כדורסל':'🏀','טניס':'🎾',
 };
+
+/* Report topics (Instagram-style) — the user picks one, optionally adds detail, and it's sent to admins. */
+const REPORT_TOPICS = [
+  'ספאם או הונאה',
+  'הטרדה או בריונות',
+  'תוכן מיני או עירום',
+  'דברי שנאה או אלימות',
+  'התחזות',
+  'מידע כוזב',
+  'אחר',
+];
 
 /* ── module-level cache (survives navigation) ── */
 type ProfileCache = { profile: User; eventsCount: number; selectedCountries: string[] };
@@ -136,7 +147,22 @@ export default function ProfileScreen({
   const [editCustom,           setEditCustom]           = useState('');
   const [editIg,               setEditIg]               = useState(false);   // editing the Instagram handle
   const [igInput,              setIgInput]              = useState('');
+  // Report-user sheet (Instagram-style: pick a topic + optional details → sent to admins for review)
+  const [reportOpen,           setReportOpen]           = useState(false);
+  const [reportTopic,          setReportTopic]          = useState<string | null>(null);
+  const [reportText,           setReportText]           = useState('');
+  const [reportSending,        setReportSending]        = useState(false);
   const avatarInputRef = useRef<HTMLInputElement>(null);
+
+  // Lock background scroll while the report sheet is open (otherwise the profile scrolls behind it).
+  useEffect(() => {
+    if (!reportOpen) return;
+    const prevBody = document.body.style.overflow;
+    const prevHtml = document.documentElement.style.overflow;
+    document.body.style.overflow = 'hidden';
+    document.documentElement.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = prevBody; document.documentElement.style.overflow = prevHtml; };
+  }, [reportOpen]);
 
   const targetUserId = viewUserId || currentUserId;
   const isOwnProfile = !viewUserId || viewUserId === currentUserId;
@@ -228,7 +254,7 @@ export default function ProfileScreen({
   };
 
   const handleLogout = async () => {
-    await supabase.auth.signOut();
+    await hardSignOut();
     window.location.reload();
   };
 
@@ -267,15 +293,15 @@ export default function ProfileScreen({
 
   /* ── loading ── */
   if (loading) return (
-    <div style={{ minHeight: '100dvh', background: '#0C0C10', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+    <div style={{ minHeight: '100dvh', background: '#EFEFEF', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
       <style>{`@keyframes sp{to{transform:rotate(360deg)}}`}</style>
       <div style={{ width: 40, height: 40, borderRadius: '50%', border: '2.5px solid rgba(249,115,22,0.2)', borderTop: '2.5px solid #F97316', animation: 'sp 0.75s linear infinite' }} />
     </div>
   );
 
   if (!profile) return (
-    <div style={{ minHeight: '100dvh', background: '#0C0C10', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <p style={{ color: 'rgba(255,255,255,0.35)', fontFamily: 'Heebo, sans-serif' }}>לא נמצא פרופיל</p>
+    <div style={{ minHeight: '100dvh', background: '#EFEFEF', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <p style={{ color: '#6B7280', fontFamily: 'Heebo, sans-serif' }}>לא נמצא פרופיל</p>
     </div>
   );
 
@@ -299,18 +325,16 @@ export default function ProfileScreen({
       <div style={{
         position: 'relative', overflow: 'hidden',
         background: `
-          radial-gradient(120% 80% at 82% -10%, rgba(249,115,22,0.20), transparent 52%),
-          radial-gradient(110% 70% at 0% 18%, rgba(234,88,12,0.12), transparent 56%),
-          radial-gradient(90% 60% at 50% 120%, rgba(251,146,60,0.10), transparent 60%),
-          #0A0A0E
+          radial-gradient(120% 75% at 50% -18%, rgba(249,115,22,0.08), transparent 60%),
+          #EFEFEF
         `,
         paddingTop: 'max(16px, env(safe-area-inset-top))',
         paddingBottom: 52,
       }}>
         {/* Subtle dot grid */}
         <div style={{
-          position: 'absolute', inset: 0, pointerEvents: 'none', opacity: 0.035,
-          backgroundImage: 'radial-gradient(circle, #ffffff 1px, transparent 1px)',
+          position: 'absolute', inset: 0, pointerEvents: 'none', opacity: 0.04,
+          backgroundImage: 'radial-gradient(circle, #1C1917 1px, transparent 1px)',
           backgroundSize: '28px 28px',
         }} />
 
@@ -326,29 +350,40 @@ export default function ProfileScreen({
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           padding: '0 18px', marginBottom: 36, position: 'relative',
         }}>
-          <BackButton onClick={onBack} variant="dark" />
+          <BackButton onClick={onBack} />
 
           <div style={{ display: 'flex', gap: 8 }}>
+            {!isOwnProfile && (
+              <button
+                onClick={() => { setReportTopic(null); setReportText(''); setReportOpen(true); }}
+                aria-label="דווח על המשתמש" className="fomo-press" style={{
+                  width: 44, height: 44, borderRadius: '50%',
+                  background: '#FEF2F2', border: '1px solid #FEE2E2',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
+                }}>
+                <Flag size={16} style={{ color: '#EF4444' }} />
+              </button>
+            )}
             {isOwnProfile && (
               <button onClick={onNavigateToSettings} aria-label="הגדרות" className="fomo-press" style={{
                 width: 44, height: 44, borderRadius: '50%',
-                background: 'rgba(255,255,255,0.07)',
-                border: '1px solid rgba(255,255,255,0.1)',
+                background: '#F3F4F6',
+                border: '1px solid #E5E7EB',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
-                cursor: 'pointer', backdropFilter: 'blur(8px)',
+                cursor: 'pointer',
               }}>
-                <Settings size={16} style={{ color: 'rgba(255,255,255,0.75)' }} />
+                <Settings size={16} style={{ color: '#6B7280' }} />
               </button>
             )}
             {isOwnProfile && (
               <button onClick={handleLogout} aria-label="התנתק" className="fomo-press" style={{
                 width: 44, height: 44, borderRadius: '50%',
-                background: 'rgba(239,68,68,0.12)',
-                border: '1px solid rgba(239,68,68,0.18)',
+                background: '#FEF2F2',
+                border: '1px solid #FEE2E2',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
-                cursor: 'pointer', backdropFilter: 'blur(8px)',
+                cursor: 'pointer',
               }}>
-                <LogOut size={16} style={{ color: '#F87171' }} />
+                <LogOut size={16} style={{ color: '#EF4444' }} />
               </button>
             )}
           </div>
@@ -368,9 +403,9 @@ export default function ProfileScreen({
               aria-label={isOwnProfile ? 'החלף תמונת פרופיל' : undefined}
               style={{
                 position: 'absolute', inset: 8, borderRadius: '50%', overflow: 'hidden',
-                background: '#1E2030',
+                background: '#F1F5F9',
                 cursor: isOwnProfile ? 'pointer' : 'default',
-                boxShadow: '0 0 0 2px rgba(255,255,255,0.08), 0 24px 64px rgba(0,0,0,0.7), 0 0 40px rgba(249,115,22,0.15)',
+                boxShadow: '0 0 0 3px #FFFFFF, 0 12px 32px rgba(0,0,0,0.12), 0 0 30px rgba(249,115,22,0.12)',
               }}>
               {profile.avatar_url ? (
                 <img
@@ -423,7 +458,7 @@ export default function ProfileScreen({
                       position: 'absolute', bottom: 2, right: 2,
                       width: 40, height: 40, borderRadius: '50%',
                       background: 'linear-gradient(135deg, #F97316, #EA580C)',
-                      border: '3px solid #0C0C10',
+                      border: '3px solid #FFFFFF',
                       display: 'flex', alignItems: 'center', justifyContent: 'center',
                       cursor: 'pointer', padding: 0,
                       boxShadow: '0 4px 14px rgba(249,115,22,0.5)',
@@ -440,7 +475,7 @@ export default function ProfileScreen({
           {/* Name */}
           <h1 style={{
             margin: '0 0 10px',
-            fontSize: 30, fontWeight: 900, color: '#FFFFFF',
+            fontSize: 30, fontWeight: 900, color: '#0F172A',
             fontFamily: 'Heebo, sans-serif', letterSpacing: '-0.03em', lineHeight: 1,
           }}>
             {profile.display_name}
@@ -451,13 +486,13 @@ export default function ProfileScreen({
             <p style={{
               margin: '0 0 18px', padding: '0 24px',
               fontSize: 14, lineHeight: 1.65, textAlign: 'center',
-              color: 'rgba(255,255,255,0.48)',
+              color: '#64748B',
               fontFamily: 'Rubik, sans-serif', maxWidth: 280,
             }}>
               {profile.bio}
             </p>
           ) : isOwnProfile ? (
-            <p style={{ margin: '0 0 18px', fontSize: 12, fontStyle: 'italic', color: 'rgba(255,255,255,0.2)', fontFamily: 'Heebo, sans-serif' }}>
+            <p style={{ margin: '0 0 18px', fontSize: 12, fontStyle: 'italic', color: '#9CA3AF', fontFamily: 'Heebo, sans-serif' }}>
               הוסף תיאור אישי
             </p>
           ) : <div style={{ marginBottom: 14 }} />}
@@ -547,28 +582,6 @@ export default function ProfileScreen({
               <MessageCircle size={20} />
               שלח הודעה
             </button>
-
-            <div
-              className="animate-card-entrance fomo-animated"
-              style={{
-                display: 'flex', alignItems: 'center', gap: 12,
-                background: 'var(--color-surface)', borderRadius: 'var(--radius-lg)',
-                padding: '14px 16px', boxShadow: 'var(--shadow-card)',
-                cursor: 'default',
-              }}
-            >
-              <div style={{
-                width: 44, height: 44, borderRadius: 14, flexShrink: 0,
-                background: 'var(--color-primary-tint)',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-              }}>
-                <Ticket size={22} style={{ color: 'var(--color-primary)' }} />
-              </div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 20, fontWeight: 900, color: 'var(--color-text-heading)', fontFamily: 'Heebo, sans-serif', lineHeight: 1 }}>{eventsCount}</div>
-                <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--color-text-muted)', fontFamily: 'Heebo, sans-serif', marginTop: 4 }}>אירועים</div>
-              </div>
-            </div>
           </div>
         )}
 
@@ -624,6 +637,7 @@ export default function ProfileScreen({
         <div className="animate-card-entrance fomo-animated" style={{ animationDelay: '160ms' }}>
           <CountriesVisitedCard
             userId={targetUserId!}
+            name={profile.display_name}
             visitedCodes={profile.visited_countries || []}
             isOwnProfile={isOwnProfile}
             onUpdate={(codes) => setProfile(p => p ? { ...p, visited_countries: codes } : p)}
@@ -680,12 +694,10 @@ export default function ProfileScreen({
                 </div>
               </div>
               <div style={{
-                width: 36, height: 36, borderRadius: 12, flexShrink: 0,
-                background: '#F9FAFB', border: '1.5px solid #EBEBEB',
+                flexShrink: 0, color: '#F97316', padding: 4, marginRight: 10,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
-                marginRight: 10,
               }}>
-                <Edit2 size={14} style={{ color: '#6B7280' }} />
+                <Edit2 size={16} />
               </div>
             </div>
           </button>
@@ -716,6 +728,30 @@ export default function ProfileScreen({
               <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--color-text-muted)', fontFamily: 'Heebo, sans-serif', marginTop: 4 }}>אירועים</div>
             </div>
             <ChevronLeft size={18} style={{ color: 'var(--color-primary)', opacity: 0.6, flexShrink: 0 }} />
+          </div>
+        )}
+        {/* Events tile — viewing another user (moved to the bottom to match the own profile) */}
+        {!isOwnProfile && (
+          <div
+            className="animate-card-entrance fomo-animated"
+            style={{
+              display: 'flex', alignItems: 'center', gap: 12,
+              background: 'var(--color-surface)', borderRadius: 'var(--radius-lg)',
+              padding: '14px 16px', marginTop: 12, boxShadow: 'var(--shadow-card)',
+              cursor: 'default',
+            }}
+          >
+            <div style={{
+              width: 44, height: 44, borderRadius: 14, flexShrink: 0,
+              background: 'var(--color-primary-tint)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+              <Ticket size={22} style={{ color: 'var(--color-primary)' }} />
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 20, fontWeight: 900, color: 'var(--color-text-heading)', fontFamily: 'Heebo, sans-serif', lineHeight: 1 }}>{eventsCount}</div>
+              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--color-text-muted)', fontFamily: 'Heebo, sans-serif', marginTop: 4 }}>אירועים</div>
+            </div>
           </div>
         )}
       </div>
@@ -901,6 +937,51 @@ export default function ProfileScreen({
         </div>
       )}
 
+      {/* Report-user sheet — pick a topic + optional details → message_reports (admins get a push + review it). */}
+      {reportOpen && !isOwnProfile && (
+        <div dir="rtl" onClick={() => !reportSending && setReportOpen(false)}
+          onTouchMove={e => { if (e.target === e.currentTarget) e.preventDefault(); }}
+          style={{ position: 'fixed', inset: 0, zIndex: 300, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', overscrollBehavior: 'contain' }}>
+          <div onClick={e => e.stopPropagation()}
+            style={{ width: '100%', maxWidth: 480, background: '#fff', borderRadius: '24px 24px 0 0', padding: '18px 18px calc(20px + env(safe-area-inset-bottom))', boxShadow: '0 -10px 40px rgba(0,0,0,0.25)', fontFamily: 'Heebo, sans-serif', maxHeight: '88vh', overflowY: 'auto' }}>
+            <div style={{ width: 42, height: 5, borderRadius: 999, background: '#E5E7EB', margin: '0 auto 14px' }} />
+            <h3 style={{ fontSize: 18, fontWeight: 900, color: '#0F172A', margin: '0 0 4px' }}>דיווח על {profile.display_name || 'המשתמש'}</h3>
+            <p style={{ fontSize: 13, color: '#64748B', margin: '0 0 16px', lineHeight: 1.5 }}>בחר את סיבת הדיווח. הדיווח נשלח לצוות שלנו לבדיקה ונשאר אנונימי.</p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 14 }}>
+              {REPORT_TOPICS.map(t => {
+                const on = reportTopic === t;
+                return (
+                  <button key={t} onClick={() => setReportTopic(t)}
+                    style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', textAlign: 'right', padding: '13px 15px', borderRadius: 14, cursor: 'pointer', fontSize: 14.5, fontWeight: 700, fontFamily: 'Heebo, sans-serif', border: on ? '1.5px solid #F97316' : '1.5px solid #E5E7EB', background: on ? '#FFF7ED' : '#fff', color: on ? '#EA580C' : '#334155' }}>
+                    <span>{t}</span>
+                    <span style={{ flexShrink: 0, width: 20, height: 20, borderRadius: '50%', border: on ? '6px solid #F97316' : '2px solid #CBD5E1', boxSizing: 'border-box' }} />
+                  </button>
+                );
+              })}
+            </div>
+            <textarea value={reportText} onChange={e => setReportText(e.target.value)} placeholder="פרטים נוספים (לא חובה)…" rows={3}
+              style={{ width: '100%', borderRadius: 14, border: '1.5px solid #E5E7EB', background: '#F9FAFB', padding: '11px 14px', fontSize: 14, color: '#1C1917', outline: 'none', resize: 'none', fontFamily: 'Heebo, sans-serif', marginBottom: 16, boxSizing: 'border-box' }} />
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button onClick={() => setReportOpen(false)} disabled={reportSending}
+                style={{ flex: 1, padding: 13, borderRadius: 14, border: '1px solid #E5E7EB', background: '#fff', color: '#6B7280', fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'Heebo, sans-serif' }}>ביטול</button>
+              <button disabled={!reportTopic || reportSending}
+                onClick={async () => {
+                  if (!currentUserId || !viewUserId || !reportTopic) return;
+                  setReportSending(true);
+                  const reason = `${reportTopic}${reportText.trim() ? ' — ' + reportText.trim() : ''}`;
+                  const ok = await reportUser(currentUserId, viewUserId, reason);
+                  setReportSending(false);
+                  setReportOpen(false);
+                  alert(ok ? 'הדיווח נשלח לצוות שלנו. תודה — נבדוק אותו בהקדם.' : 'שגיאה בשליחת הדיווח, נסה שוב.');
+                }}
+                style={{ flex: 2, padding: 13, borderRadius: 14, border: 'none', background: 'linear-gradient(135deg,#EF4444,#DC2626)', color: '#fff', fontWeight: 800, fontSize: 14, cursor: 'pointer', opacity: (!reportTopic || reportSending) ? 0.5 : 1, fontFamily: 'Heebo, sans-serif' }}>
+                {reportSending ? 'שולח…' : 'שלח דיווח'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <FloatingNavBar
         activeTab="home"
         currentUserId={currentUserId}
@@ -920,11 +1001,11 @@ function Chip({ children }: { children: React.ReactNode }) {
   return (
     <span style={{
       display: 'inline-flex', alignItems: 'center',
-      background: 'rgba(255,255,255,0.08)',
-      border: '1px solid rgba(255,255,255,0.11)',
+      background: '#F3F4F6',
+      border: '1px solid #E5E7EB',
       borderRadius: 30, padding: '6px 13px',
-      fontSize: 12, fontWeight: 700, color: 'rgba(255,255,255,0.8)',
-      fontFamily: 'Heebo, sans-serif', backdropFilter: 'blur(6px)',
+      fontSize: 12, fontWeight: 700, color: '#475569',
+      fontFamily: 'Heebo, sans-serif',
     }}>
       {children}
     </span>

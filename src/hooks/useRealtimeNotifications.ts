@@ -46,19 +46,22 @@ export function useRealtimeNotifications(
   const myConversations = useRef<Set<string>>(new Set());
   const myChannels = useRef<Map<string, string>>(new Map()); // channelId → group title (flag + city emoji + name)
   const senderNames = useRef<Map<string, string>>(new Map()); // userId → display name
+  const myMeetups = useRef<Map<string, number>>(new Map());   // meetupId I organize → current pending-request count
 
   useEffect(() => {
     if (!currentUserId) return;
     let cancelled = false;
 
     const loadSets = async () => {
-      const [events, convos, members] = await Promise.all([
+      const [events, convos, members, meetups] = await Promise.all([
         supabase.from('events').select('id').eq('user_id', currentUserId),
         supabase.from('conversations').select('id').or(`participant_1_id.eq.${currentUserId},participant_2_id.eq.${currentUserId}`),
         supabase.from('group_members').select('channel_id, status').eq('user_id', currentUserId),
+        supabase.from('meetups').select('id, pending_requests').eq('user_id', currentUserId),
       ]);
       if (cancelled) return;
       myEventIds.current = new Set((events.data || []).map((e) => e.id as string));
+      myMeetups.current = new Map((meetups.data || []).map((m) => [m.id as string, Array.isArray(m.pending_requests) ? m.pending_requests.length : 0]));
       myConversations.current = new Set((convos.data || []).map((c) => c.id as string));
       const chIds = (members.data || []).filter((m) => m.status !== 'left').map((m) => m.channel_id as string);
       if (chIds.length) {
@@ -110,6 +113,23 @@ export function useRealtimeNotifications(
         if (!row.event_id || row.user_id === currentUserId) return;
         if (!myEventIds.current.has(row.event_id)) return;
         deliver('FOMO', 'בקשה חדשה להצטרף לאירוע שלך', { emoji: '🎟️', background: 'linear-gradient(135deg,#F97316,#EA580C)', onClick: () => reqRef.current() });
+      })
+      // ── new request to join a MEETUP ("ציוץ") I organize — a request is an id ADDED to
+      //    meetups.pending_requests (a text[]), so we compare the new length to the last we knew. ──
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'meetups', filter: `user_id=eq.${currentUserId}` }, (payload) => {
+        const row = payload.new as { id?: string; pending_requests?: string[] | null };
+        if (!row.id) return;
+        const prevCount = myMeetups.current.get(row.id) ?? 0;
+        const nowCount = Array.isArray(row.pending_requests) ? row.pending_requests.length : 0;
+        myMeetups.current.set(row.id, nowCount);
+        if (nowCount > prevCount) {
+          deliver('FOMO', 'בקשה חדשה להצטרף לציוץ שלך', { emoji: '☕', background: 'linear-gradient(135deg,#F97316,#EA580C)', onClick: () => reqRef.current() });
+        }
+      })
+      // A meetup I just created won't be in myMeetups yet — pick it up so its first request notifies.
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'meetups', filter: `user_id=eq.${currentUserId}` }, (payload) => {
+        const row = payload.new as { id?: string; pending_requests?: string[] | null };
+        if (row.id) myMeetups.current.set(row.id, Array.isArray(row.pending_requests) ? row.pending_requests.length : 0);
       })
       // ── new direct message ──
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, async (payload) => {

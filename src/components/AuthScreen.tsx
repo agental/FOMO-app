@@ -46,9 +46,45 @@ const HEEBO = "'Heebo', sans-serif";
 const RUBIK = "'Rubik', sans-serif";
 const INK = '#141821';
 
+// Open the public legal pages in the system browser (native) / a new tab (web) — never inside the SPA,
+// so the login flow isn't replaced.
+const SITE_URL = 'https://fomo-tal.netlify.app';
+const openLegal = (path: string) => {
+  const url = SITE_URL + path;
+  const rn = (window as unknown as { ReactNativeWebView?: { postMessage: (m: string) => void } }).ReactNativeWebView;
+  if (rn) { try { rn.postMessage(JSON.stringify({ type: 'openExternal', url })); return; } catch { /* ignore */ } }
+  window.open(url, '_blank', 'noopener');
+};
+
 export function AuthScreen(_props: AuthScreenProps) {
   const [error, setError] = useState<string | null>(null);
   const [busy,  setBusy]  = useState<'google' | 'apple' | null>(null);
+
+  // Cancelling the Google/Apple browser (tapping X) returns NO session, so the button would spin forever.
+  // When the app regains focus after the auth browser closes, check shortly after for a session: if none
+  // arrived, the sign-in was cancelled → reset the button. On success a session IS present, so we leave it
+  // (the SIGNED_IN handler navigates away).
+  useEffect(() => {
+    if (!busy) return;
+    let t: ReturnType<typeof setTimeout> | null = null;
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (t) clearTimeout(t);
+      t = setTimeout(async () => {
+        try {
+          const { data } = await supabase.auth.getSession();
+          if (!data.session) setBusy(null);
+        } catch { setBusy(null); }
+      }, 800);
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', onVisible);
+    return () => {
+      if (t) clearTimeout(t);
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', onVisible);
+    };
+  }, [busy]);
   const [now,   setNow]   = useState(() => new Date()); // keeps the city clocks live
 
   useEffect(() => {
@@ -258,7 +294,9 @@ export function AuthScreen(_props: AuthScreenProps) {
           {isIOS ? <>{AppleButton}{GoogleButton}</> : <>{GoogleButton}{AppleButton}</>}
         </div>
         <p style={{ margin: '16px 0 0', textAlign: 'center', fontSize: 11.5, lineHeight: 1.6, color: '#9AA0AC', fontFamily: RUBIK }}>
-          בהמשך אתה מאשר את <span style={{ color: '#EA580C', fontWeight: 700 }}>תנאי השימוש</span> ו<span style={{ color: '#EA580C', fontWeight: 700 }}>מדיניות הפרטיות</span>
+          בהמשך אתה מאשר את{' '}
+          <span onClick={() => openLegal('/terms.html')} style={{ color: '#EA580C', fontWeight: 700, textDecoration: 'underline', cursor: 'pointer' }}>תנאי השימוש</span>
+          {' '}ו<span onClick={() => openLegal('/privacy.html')} style={{ color: '#EA580C', fontWeight: 700, textDecoration: 'underline', cursor: 'pointer' }}>מדיניות הפרטיות</span>
         </p>
       </div>
 
@@ -308,7 +346,8 @@ function MiniMap() {
 
   const token = import.meta.env.VITE_MAPBOX_TOKEN as string | undefined;
   const W = 156, H = 78;
-  // Tel-Aviv coastline — pretty, and reads as "places near you". No labels/logo for a clean card.
+  // Decorative Tel-Aviv streets tile behind the pins (Mapbox Static Images — the ONE intentional Mapbox
+  // usage kept, by request, for this login preview; no GL library, just an <img>).
   const mapUrl = token
     ? `https://api.mapbox.com/styles/v1/mapbox/streets-v12/static/34.7691,32.0813,13.4,0/${W}x${H}@2x`
       + `?access_token=${token}&attribution=false&logo=false`

@@ -63,6 +63,11 @@ export function useKeyboardViewport<T extends HTMLElement>(
     const vv = window.visualViewport;
 
     const lockScroll = () => {
+      // Only pin the window while the keyboard is actually raised. When it's down (curRise === 0) this
+      // must be a no-op — otherwise the scroll listener hijacks EVERY window scroll for the whole life of
+      // the chat component, which silently kills vertical scrolling on any screen that shares the window
+      // (e.g. the home feed) if a chat lingers mounted.
+      if (curRise === 0) return;
       if (window.scrollX !== 0 || window.scrollY !== 0) window.scrollTo(0, 0);
       const de = document.scrollingElement || document.documentElement;
       if (de && de.scrollTop !== 0) de.scrollTop = 0;

@@ -39,6 +39,8 @@ interface CityGroupChatProps {
   countryCode: string; countryFlag: string; cityName: string; cityEmoji: string;
   currentUserId: string; currentUserName: string; currentUserAvatar: string | null;
   onClose: () => void;
+  /** Event group only: the organizer's user id — the SOLE admin of the event's chat (not app admins). */
+  ownerId?: string | null;
   onOpenMapAt?: (lat: number, lng: number, placeId?: string, place?: PlacePayload) => void;
   onNavigateToUserProfile?: (userId: string) => void;
 }
@@ -144,7 +146,10 @@ const slugify = (s: string) => s.toLowerCase().replace(/\s+/g, '-').replace(/[^\
 const fmtTime = (ts: string) => new Date(ts).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit', hour12: false });
 const fmtSep = (ts: string) => {
   const d = new Date(ts);
-  const diff = Math.floor((Date.now() - d.getTime()) / 86400000);
+  // Compare CALENDAR days (midnight→midnight), not raw 24h periods — otherwise a message from yesterday
+  // evening still reads "היום" this morning.
+  const startOfDay = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diff = Math.round((startOfDay(new Date()) - startOfDay(d)) / 86400000);
   if (diff === 0) return 'היום';
   if (diff === 1) return 'אתמול';
   return d.toLocaleDateString('he-IL', { day: 'numeric', month: 'long' });
@@ -228,6 +233,7 @@ const saveLeftChannels = () => { try { localStorage.setItem(LEFT_KEY, JSON.strin
 export function CityGroupChat({
   countryCode, countryFlag, cityName, cityEmoji,
   currentUserId, currentUserName, currentUserAvatar, onClose,
+  ownerId,
   onOpenMapAt,
   onNavigateToUserProfile,
 }: CityGroupChatProps) {
@@ -281,7 +287,32 @@ export function CityGroupChat({
   // the admin view of deleted messages shows instantly on entry (no "flash" from regular→admin view),
   // then refreshed from the server in the background.
   const [iAmAdmin, setIAmAdmin] = useState<boolean>(() => loadValue<boolean>('iAmAdmin', false));
-  const amAdmin = iAmAdmin || members.some(x => x.user_id === currentUserId && x.is_admin);
+  // An EVENT/MEETUP group has exactly ONE admin — its organizer. App admins are NOT group admins here
+  // (only plain CITY groups keep the app-admin model). The map passes `ownerId`; other entry points
+  // (e.g. the Messages list) don't, so resolve the organizer from the channel code (event:<id> /
+  // meetup:<id>) when it's missing — otherwise an app admin wrongly appears as the group's admin.
+  const isOwnedGroup = countryCode.startsWith('event:') || countryCode.startsWith('meetup:');
+  const [resolvedOwner, setResolvedOwner] = useState<string | null>(null);
+  const effectiveOwner = ownerId ?? resolvedOwner;
+  const amAdmin = isOwnedGroup
+    ? currentUserId === effectiveOwner
+    : (iAmAdmin || members.some(x => x.user_id === currentUserId && x.is_admin));
+  useEffect(() => {
+    if (ownerId || !isOwnedGroup) return; // owner already provided, or a plain city group
+    let cancelled = false;
+    (async () => {
+      let owner: string | null = null;
+      if (countryCode.startsWith('event:')) {
+        const { data } = await supabase.from('events').select('user_id').eq('id', countryCode.slice(6)).maybeSingle();
+        owner = (data?.user_id as string) ?? null;
+      } else if (countryCode.startsWith('meetup:')) {
+        const { data } = await supabase.from('meetups').select('user_id').eq('id', countryCode.slice(7)).maybeSingle();
+        owner = (data?.user_id as string) ?? null;
+      }
+      if (!cancelled) setResolvedOwner(owner);
+    })();
+    return () => { cancelled = true; };
+  }, [ownerId, countryCode, isOwnedGroup]);
   useEffect(() => {
     let cancelled = false;
     supabase.from('users').select('role').eq('id', currentUserId).maybeSingle()
@@ -404,9 +435,13 @@ export function CityGroupChat({
     if (cachedSeen) { setLastRead(cachedSeen); setUnreadReady(true); }
     const markSeen = () => {
       const ts = new Date().toISOString();
-      const p = supabase.from('group_members').upsert(
-        { channel_id: channelId, user_id: currentUserId, display_name: currentUserName, avatar_url: currentUserAvatar, last_seen_at: ts, status: 'approved' },
-        { onConflict: 'channel_id,user_id' });
+      // UPDATE only — never upsert an 'approved' row. Membership is created by the join flow
+      // (join_event_group RPC) or the admin approve RPC; a direct insert of status:'approved' is now
+      // blocked by RLS (the self-approve guard) and isn't our job here. If no row exists yet this
+      // updates 0 rows (harmless). Status is left untouched, so the guard trigger never fires.
+      const p = supabase.from('group_members')
+        .update({ last_seen_at: ts, display_name: currentUserName, avatar_url: currentUserAvatar })
+        .eq('channel_id', channelId).eq('user_id', currentUserId);
       _lastSeenCache[uk(channelId)] = ts; // next open's divider reads this instantly
       return p;
     };
@@ -456,10 +491,11 @@ export function CityGroupChat({
           });
           // they just sent → they're no longer typing
           setTypingUsers(prev => { if (!prev[msg.user_id]) return prev; const n = { ...prev }; delete n[msg.user_id]; return n; });
-          if (msg.type === 'system' || (msg.content ?? '').startsWith(SYS_MARK)) loadMemberCount(); // someone left → refresh the participant count live
+          const isSystem = msg.type === 'system' || (msg.content ?? '').startsWith(SYS_MARK);
+          if (isSystem) loadMemberCount(); // someone joined/left → refresh the participant count live
           // Only auto-scroll if already at the bottom, or if it's my own message — don't yank away from history
           if (stickRef.current || msg.user_id === currentUserId) scrollToBottom(true);
-          else setUnreadNew(n => n + 1); // arrived while reading history → count it for the badge
+          else if (!isSystem) setUnreadNew(n => n + 1); // arrived while reading history → count it (skip system notices)
           markSeen();
         })
       // Soft-delete propagation: when a message is marked deleted, flip it live for everyone.
@@ -600,14 +636,25 @@ export function CityGroupChat({
         .eq('channel_id', channelId).eq('status', 'pending'),
       supabase.from('group_channels').select('description').eq('id', channelId).maybeSingle(),
     ]);
-    // Admin status comes ONLY from the app admin panel (users.role === 'admin') — not per-group.
-    const memberIds = (mems ?? []).map(m => m.user_id);
-    const { data: roleRows } = memberIds.length
-      ? await supabase.from('users').select('id, role').in('id', memberIds)
-      : { data: [] as { id: string; role: string | null }[] };
-    const adminSet = new Set((roleRows ?? []).filter(u => u.role === 'admin').map(u => u.id));
-    setMembers((mems ?? []).map(m => ({ ...m, is_admin: adminSet.has(m.user_id) })));
-    setPendingReqs((pending ?? []).map(m => ({ ...m, is_admin: false })));
+    // Enrich every member/pending row with their CURRENT name + avatar + role from the users table
+    // (the source of truth) — so a stale or empty group_members.display_name never shows as "אנונימי",
+    // for existing members OR the viewer who just joined. Also drives the admin badge.
+    const ids = [...new Set([...(mems ?? []).map(m => m.user_id), ...(pending ?? []).map(m => m.user_id)])];
+    const { data: userRows } = ids.length
+      ? await supabase.from('users').select('id, role, display_name, avatar_url').in('id', ids)
+      : { data: [] as { id: string; role: string | null; display_name: string | null; avatar_url: string | null }[] };
+    const userMap = new Map((userRows ?? []).map(u => [u.id, u]));
+    // Group admin: an EVENT/meetup group has exactly ONE admin (its organizer). A CITY group uses app admins.
+    const adminSet: Set<string> = isOwnedGroup
+      ? (effectiveOwner ? new Set([effectiveOwner]) : new Set<string>())
+      : new Set((userRows ?? []).filter(u => u.role === 'admin').map(u => u.id));
+    const enrich = (m: GMember, admin: boolean): GMember => {
+      const u = userMap.get(m.user_id);
+      const name = (u?.display_name && u.display_name.trim()) || (m.display_name && m.display_name.trim()) || 'משתמש';
+      return { ...m, display_name: name, avatar_url: u?.avatar_url ?? m.avatar_url ?? null, is_admin: admin };
+    };
+    setMembers((mems ?? []).map(m => enrich(m as GMember, adminSet.has(m.user_id))));
+    setPendingReqs((pending ?? []).map(m => enrich(m as GMember, false)));
     setGroupDesc(ch?.description ?? null);
   };
 
@@ -763,7 +810,10 @@ export function CityGroupChat({
   const firstUnreadId = (() => {
     if (!lastRead) return null;
     const t = new Date(lastRead).getTime();
-    const m = messages.find(mm => mm.user_id !== currentUserId && new Date(mm.created_at).getTime() > t);
+    const m = messages.find(mm =>
+      mm.user_id !== currentUserId &&
+      !(mm.content ?? '').startsWith(SYS_MARK) &&               // skip "joined/left" system notices
+      new Date(mm.created_at).getTime() > t);
     return m?.id ?? null;
   })();
 
@@ -1191,7 +1241,7 @@ export function CityGroupChat({
                     </span>
                   )}
                   <ImageBubble
-                    src={`https://api.mapbox.com/styles/v1/mapbox/streets-v12/static/pin-l+FF3B30(${msg.location_lng},${msg.location_lat})/${msg.location_lng},${msg.location_lat},15,0/460x320@2x?access_token=${import.meta.env.VITE_MAPBOX_TOKEN}`}
+                    src={`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/mapkit-snapshot?lat=${msg.location_lat}&lng=${msg.location_lng}&w=460&h=320`}
                     tailLeft={mine}
                     tail={showAvatar}
                     maxW={230}
@@ -1483,16 +1533,18 @@ export function CityGroupChat({
             </div>
           </button>
 
-          {/* Actions */}
-          <button onClick={() => setShowMenu(v => !v)} style={{ width: 38, height: 38, borderRadius: '50%', border: 'none', background: showMenu ? 'rgba(0,0,0,0.12)' : 'rgba(0,0,0,0.07)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}>
-            <MoreVertical size={19} style={{ color: '#333' }} />
-          </button>
+          {/* Actions — the "…" menu only holds the country guide, which is irrelevant for a meetup chat. */}
+          {!countryCode.startsWith('meetup:') && (
+            <button onClick={() => setShowMenu(v => !v)} style={{ width: 38, height: 38, borderRadius: '50%', border: 'none', background: showMenu ? 'rgba(0,0,0,0.12)' : 'rgba(0,0,0,0.07)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}>
+              <MoreVertical size={19} style={{ color: '#333' }} />
+            </button>
+          )}
         </div>
       </div>
 
       {/* ── Messages area with WA-style bg (fills container; scrolls behind glass bars) ── */}
       <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: '#F3EFE9', backgroundImage: `url(${CHAT_BG})`, backgroundSize: '50%', backgroundRepeat: 'repeat' }}>
-        <div ref={scrollRef} className="scrollbar-hide" style={{ position: 'absolute', inset: 0, overflowY: 'auto', WebkitOverflowScrolling: 'touch', overscrollBehavior: 'contain', paddingTop: headerH + 10, paddingBottom: `calc(${inputH + 8}px + var(--kb-pad, 0px))` }}>
+        <div ref={scrollRef} className="scrollbar-hide" style={{ position: 'absolute', inset: 0, overflowY: 'auto', overflowX: 'hidden', overscrollBehaviorX: 'none', WebkitOverflowScrolling: 'touch', overscrollBehavior: 'contain', paddingTop: headerH + 10, paddingBottom: `calc(${inputH + 8}px + var(--kb-pad, 0px))` }}>
          <div ref={contentRef}>
 
           {/* Skeleton while loading */}
@@ -2149,6 +2201,7 @@ export function CityGroupChat({
           event={openEvent}
           currentUserId={currentUserId}
           onClose={() => setOpenEvent(null)}
+          onOpenMapAt={onOpenMapAt}
         />
       )}
     </div>

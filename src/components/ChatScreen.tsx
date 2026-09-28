@@ -590,7 +590,7 @@ export function ChatScreen({ conversationId, currentUserId, otherUserId, onBack,
         <div ref={scrollContainerRef}
           className="scrollbar-hide"
           onScroll={e => { const el = e.currentTarget; const dist = el.scrollHeight - el.scrollTop - el.clientHeight; atBottomRef.current = dist < 80; setShowScroll(dist > 100); if (dist < 80) setUnreadNew(0); }}
-          style={{ position: 'absolute', inset: 0, overflowY: 'auto', paddingTop: headerH + 10, paddingBottom: `calc(${inputH + 8}px + var(--kb-pad, 0px))` }}>
+          style={{ position: 'absolute', inset: 0, overflowY: 'auto', overflowX: 'hidden', overscrollBehaviorX: 'none', paddingTop: headerH + 10, paddingBottom: `calc(${inputH + 8}px + var(--kb-pad, 0px))` }}>
           {messageRows}
 
           {/* Live typing indicator (ephemeral broadcast) */}
@@ -778,6 +778,7 @@ export function ChatScreen({ conversationId, currentUserId, otherUserId, onBack,
           event={openEvent}
           currentUserId={currentUserId}
           onClose={() => setOpenEvent(null)}
+          onOpenMapAt={onOpenMapAt}
           onNavigateToUserProfile={onNavigateToUserProfile}
         />
       )}

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useSwipeBack } from '../hooks/useSwipeBack';
-import { LogOut, Globe, Bell, Shield, Info, ChevronLeft } from 'lucide-react';
-import { supabase } from '../lib/supabase';
+import { LogOut, Globe, Bell, Shield, Info, ChevronLeft, Sparkles } from 'lucide-react';
+import { hardSignOut } from '../lib/supabase';
 import { FloatingNavBar } from './FloatingNavBar';
 import { BackButton } from './BackButton';
 
@@ -17,6 +17,7 @@ interface SettingsScreenProps {
   onNavigateToNotifications?: () => void;
   onNavigateToPrivacy?: () => void;
   onNavigateToAbout?: () => void;
+  onReplayTour?: () => void;
   onSignOut?: () => void;
 }
 
@@ -40,6 +41,7 @@ export function SettingsScreen({
   onNavigateToNotifications,
   onNavigateToPrivacy,
   onNavigateToAbout,
+  onReplayTour,
   onSignOut,
 }: SettingsScreenProps) {
   const swipeRef = useSwipeBack<HTMLDivElement>(onBack); // swipe from an edge to slide the screen back
@@ -48,12 +50,14 @@ export function SettingsScreen({
   const handleSignOut = async () => {
     setSigningOut(true);
     try {
-      await supabase.auth.signOut();
-      onSignOut?.();
+      // scope:'local' clears the session WITHOUT the global network revoke, which can hang in the WebView
+      // and leave the user stuck on "מתנתק…". SIGNED_OUT still fires → App routes to the auth screen.
+      await hardSignOut();
     } catch (err) {
       console.error('Sign out error:', err);
     } finally {
       setSigningOut(false);
+      onSignOut?.(); // always leave the account, even if the SDK call errored
     }
   };
 
@@ -89,6 +93,12 @@ export function SettingsScreen({
     {
       title: 'אודות',
       rows: [
+        {
+          icon: <Sparkles className="w-5 h-5" />,
+          label: 'הצג הדרכה שוב',
+          sublabel: 'סיור מודרך על האפליקציה',
+          onClick: onReplayTour,
+        },
         {
           icon: <Info className="w-5 h-5" />,
           label: 'אודות FOMO',

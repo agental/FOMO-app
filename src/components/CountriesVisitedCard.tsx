@@ -7,14 +7,16 @@ import { supabase } from '../lib/supabase';
 
 interface CountriesVisitedCardProps {
   userId: string;
+  name?: string | null;
   visitedCodes: string[];
   isOwnProfile: boolean;
   onUpdate: (codes: string[]) => void;
 }
 
 export function CountriesVisitedCard({
-  userId, visitedCodes, isOwnProfile, onUpdate,
+  userId, name, visitedCodes, isOwnProfile, onUpdate,
 }: CountriesVisitedCardProps) {
+  const who = (name || '').trim() || 'המשתמש';
   const [isEditing, setIsEditing] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -42,7 +44,7 @@ export function CountriesVisitedCard({
 
   return (
     <>
-      <div style={{
+      <div dir="rtl" style={{
         background: '#fff', borderRadius: 22,
         padding: '18px 18px 20px',
         boxShadow: '0 1px 3px rgba(0,0,0,0.04), 0 4px 20px rgba(0,0,0,0.06)',
@@ -52,9 +54,9 @@ export function CountriesVisitedCard({
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
           <span style={{
             fontSize: 17, fontWeight: 800, color: '#111827',
-            fontFamily: 'system-ui, sans-serif',
+            fontFamily: 'Heebo, sans-serif',
           }}>
-            Countries Visited
+            {isOwnProfile ? 'מדינות שביקרתי' : `המדינות ש${who} ביקר/ה בהם`}
           </span>
           {isOwnProfile && (
             <button
@@ -82,11 +84,11 @@ export function CountriesVisitedCard({
                 display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
                 marginBottom: visitedCodes.length ? 12 : 0,
                 color: '#F97316', fontSize: 14, fontWeight: 700,
-                fontFamily: 'system-ui, sans-serif',
+                fontFamily: 'Heebo, sans-serif',
               }}
             >
               <Plus size={15} />
-              Add Countries
+              הוסף מדינות
             </button>
 
             {/* Chips */}
@@ -123,10 +125,10 @@ export function CountriesVisitedCard({
               style={{
                 width: '100%', padding: '10px', borderRadius: 12, border: 'none',
                 background: '#F3F4F6', color: '#6B7280', fontWeight: 700,
-                fontSize: 14, cursor: 'pointer', fontFamily: 'system-ui',
+                fontSize: 14, cursor: 'pointer', fontFamily: 'Heebo, sans-serif',
               }}
             >
-              Done
+              סיום
             </button>
           </div>
         ) : (
@@ -136,9 +138,9 @@ export function CountriesVisitedCard({
               <div style={{
                 textAlign: 'center', padding: '24px 0',
                 color: '#D1D5DB', fontSize: 14,
-                fontFamily: 'system-ui, sans-serif',
+                fontFamily: 'Heebo, sans-serif',
               }}>
-                {isOwnProfile ? 'Tap edit to add countries you\'ve visited' : 'No countries added yet'}
+                {isOwnProfile ? 'הקש על העיפרון כדי להוסיף מדינות שביקרת' : `${who} עדיין לא הוסיף/ה מדינות`}
               </div>
             ) : (
               <>
@@ -152,11 +154,11 @@ export function CountriesVisitedCard({
                   <div style={{ fontSize: 28, fontWeight: 800, color: '#111827', lineHeight: 1.1 }}>
                     {pct}%
                   </div>
-                  <div style={{ fontSize: 13, color: '#6B7280', marginTop: 2 }}>
-                    of the world explored
+                  <div style={{ fontSize: 13, color: '#6B7280', marginTop: 2, fontFamily: 'Heebo, sans-serif' }}>
+                    {isOwnProfile ? 'מהעולם ראית' : 'מהעולם'}
                   </div>
-                  <div style={{ fontSize: 12, color: '#9CA3AF', marginTop: 1 }}>
-                    {visitedCodes.length} countries visited
+                  <div style={{ fontSize: 12, color: '#9CA3AF', marginTop: 1, fontFamily: 'Heebo, sans-serif' }}>
+                    {isOwnProfile ? `ביקרת ב-${visitedCodes.length} מדינות` : `${who} ביקר/ה ב-${visitedCodes.length} מדינות`}
                   </div>
                 </div>
               </>
@@ -165,7 +167,7 @@ export function CountriesVisitedCard({
         )}
 
         {saving && (
-          <div style={{ textAlign: 'center', fontSize: 12, color: '#9CA3AF', marginTop: 8 }}>Saving...</div>
+          <div style={{ textAlign: 'center', fontSize: 12, color: '#9CA3AF', marginTop: 8, fontFamily: 'Heebo, sans-serif' }}>שומר…</div>
         )}
       </div>
 

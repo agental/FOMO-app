@@ -2,6 +2,18 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Native feel: block long-press text-selection and the iOS callout menu across the whole app, so it
+   doesn't behave like a web page. Editable fields stay selectable so typing/editing still works. */
+* {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+input, textarea, [contenteditable="true"], [contenteditable=""] {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
 /* ============================================================
    FOMO — DESIGN TOKENS  (single source of truth)
    Layer 1 Primitive  →  Layer 2 Semantic  →  Layer 3 Component
@@ -395,4 +407,13 @@ h1, h2, h3, h4, h5, h6 {
 
 .snap-center {
   scroll-snap-align: center;
+}
+
+/* "לייב" badge dot — a clear blink for the Hot Now carousel. */
+@keyframes fomoLiveBlink {
+  0%, 100% { opacity: 1;   transform: scale(1); }
+  50%      { opacity: 0.25; transform: scale(0.7); }
+}
+.fomo-live-dot {
+  animation: fomoLiveBlink 1s ease-in-out infinite;
 }

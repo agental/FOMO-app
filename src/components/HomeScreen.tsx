@@ -1,5 +1,5 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
-import { Plus, MapPin, Compass, Shield, Bell, Calendar, Users, Clock, ChevronDown, Check, X, Search, Zap, Flame } from 'lucide-react';
+import { useState, useEffect, useMemo, useRef, lazy, Suspense } from 'react';
+import { Plus, MapPin, Compass, Shield, Bell, Calendar, Users, Clock, Check, X, Search, Move, SlidersHorizontal } from 'lucide-react';
 import { FilterSheet } from './FilterSheet';
 import { HeaderProfileAvatar } from './HeaderProfileAvatar';
 import { supabase } from '../lib/supabase';
@@ -7,15 +7,15 @@ import { SkeletonCard } from './SkeletonCard';
 import { CachedImage } from './CachedImage';
 import { eventCategories } from '../utils/eventCategories';
 import { CreateModal } from './CreateModal';
-import { MapCreateEventFlow } from './MapCreateEventFlow';
-import { CreateLocationForm } from './CreateLocationForm';
+// Both pull in mapbox-gl — lazy so it downloads only when the create-event / create-location flow opens.
+const MapCreateEventFlow = lazy(() => import('./MapCreateEventFlow').then(m => ({ default: m.MapCreateEventFlow })));
+const CreateLocationForm = lazy(() => import('./CreateLocationForm').then(m => ({ default: m.CreateLocationForm })));
 import { EventDetailsModal } from './EventDetailsModal';
 import { AdminLocationBottomSheet } from './AdminLocationBottomSheet';
 import { CountryGuide } from './CountryGuide';
 import { FloatingNavBar } from './FloatingNavBar';
 import { COUNTRIES } from '../utils/countries';
-import { useEvents } from '../hooks/useEvents';
-import { getNotifLastSeen } from '../utils/notificationsSeen';
+import { useEvents, _eventsCache, filterKey } from '../hooks/useEvents';
 import { createPersistedRecord } from '../utils/warmCache';
 import type { Event } from '../types/event';
 import type { AdminLocation } from '../lib/supabase';
@@ -64,6 +64,12 @@ const CATEGORY_IMAGES: Record<string, string> = {
   yeshivot:  'https://images.pexels.com/photos/256541/pexels-photo-256541.jpeg?auto=compress&cs=tinysrgb&w=600',
 };
 
+// Emoji for known travel destinations (the destination filter bar) — anything else falls back to 📍.
+const DEST_EMOJI: Record<string, string> = {
+  'קופנגן': '🏝️', 'קוסמוי': '🌴', 'קוטאו': '🐠', 'בנגקוק': '🏙️',
+  'פוקט': '🏖️', 'פטאיה': '🌆', 'צ׳יאנג מאי': '🏔️', 'קראבי': '⛰️',
+};
+
 export function HomeScreen({
   onNavigateToProfile,
   onNavigateToMap,
@@ -81,6 +87,9 @@ export function HomeScreen({
   onCreateConsumed,
 }: HomeScreenProps = {}) {
   const _cachedCountries = propUserId ? (_homeUserCache[propUserId]?.selectedCountries ?? initialCountries ?? []) : (initialCountries || []);
+  // Do we ALREADY have events cached for these countries (from a previous open)? If so, show them instantly
+  // and skip the FOMO-dot loading animation + skeleton on this open — those are only for a truly cold start.
+  const _hasCachedEvents = ((_eventsCache[filterKey({ countries: _cachedCountries })]) ?? []).length > 0;
   const [selectedCountries, setSelectedCountries] = useState<string[]>(_cachedCountries);
   const [activeCountry, setActiveCountry] = useState<string | null>(_cachedCountries[0] || null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -96,12 +105,25 @@ export function HomeScreen({
   const [createMode, setCreateMode] = useState<CreateMode>('none');
   const [selectedEvent, setSelectedEvent] = useState<Event | null>(null);
   const [selectedInterest, setSelectedInterest] = useState<string | null>(null);
+  const [selectedDestination, setSelectedDestination] = useState<string | null>(null);
   const [showFilterSheet, setShowFilterSheet] = useState(false);
   const [showCountryPicker, setShowCountryPicker] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
   const [selectedDateFilter, setSelectedDateFilter] = useState<string | null>(null);
   const _huc = propUserId ? _homeUserCache[propUserId] : undefined;
   const [isAdmin, setIsAdmin] = useState(_huc?.isAdmin ?? false);
+  // Reposition an event cover straight from Home (organizer/admin): drag the featured card up/down
+  // to set image_focus_y (0=top … 100=bottom). focusOverrides shows the saved value instantly.
+  const [posId, setPosId] = useState<string | null>(null);
+  const [posFocus, setPosFocus] = useState(50);
+  const [focusOverrides, setFocusOverrides] = useState<Record<string, number>>({});
+  const posDragRef = useRef<{ y: number; f: number } | null>(null);
+  const saveCoverFocus = async (eventId: string, f: number) => {
+    const val = Math.round(f);
+    setFocusOverrides(prev => ({ ...prev, [eventId]: val }));
+    setPosId(null);
+    await supabase.from('events').update({ image_focus_y: val }).eq('id', eventId);
+  };
   const [pendingRequestsCount, setPendingRequestsCount] = useState(globalThis.__fomoPendingCount ?? 0);
   const [userName, setUserName] = useState(_huc?.userName ?? '');
   const [userAvatarUrl, setUserAvatarUrl] = useState<string | null>(_huc?.userAvatarUrl ?? null);
@@ -135,7 +157,7 @@ export function HomeScreen({
   // user's countries), so skeletons show instead of a "no events" flash before
   // the first-open animation takes over on the next frame.
   const [firstOpenLoading, setFirstOpenLoading] = useState(
-    () => !_homeDidInitialRefresh && _cachedCountries.length > 0
+    () => !_homeDidInitialRefresh && _cachedCountries.length > 0 && !_hasCachedEvents
   );
   const [hotIdx, setHotIdx] = useState(0);
   const hotIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -178,14 +200,15 @@ export function HomeScreen({
   }, [initialCountries, currentUserId]);
 
   useEffect(() => {
-    const requestsChannel = supabase
-      .channel('home-requests-sync')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'event_join_requests' }, () => {
+    if (!currentUserId) return;
+    const notifChannel = supabase
+      .channel(`home-notifs-${currentUserId}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications', filter: `user_id=eq.${currentUserId}` }, () => {
         loadPendingRequests();
       })
       .subscribe();
 
-    return () => { supabase.removeChannel(requestsChannel); };
+    return () => { supabase.removeChannel(notifChannel); };
   }, [currentUserId]);
 
   // ── Orbit RAF: runs while isRefreshing ──────────────────────────────────
@@ -359,8 +382,10 @@ export function HomeScreen({
     if (selectedCountries.length === 0) return; // no scope yet — nothing to load
     _homeDidInitialRefresh = true;
     const id = requestAnimationFrame(() => {
-      refreshEvents();          // fetch in background while the animation plays
-      triggerLogoAnimation(false); // dot falls from the "." → 4 orbits → strike
+      refreshEvents();          // always refresh in the background (silent when events are already cached)
+      // Only play the FOMO-dot loading animation on a truly COLD open (no cached events). When we already
+      // have cached events, the feed shows instantly with no animation/flicker on every app entry.
+      if (!_hasCachedEvents) triggerLogoAnimation(false); // dot falls from the "." → 4 orbits → strike
     });
     return () => cancelAnimationFrame(id);
   }, [selectedCountries.length]);
@@ -433,37 +458,17 @@ export function HomeScreen({
   const loadPendingRequests = async () => {
     if (!currentUserId) return;
     try {
-      // (a) Incoming join requests awaiting my approval (events I created)
-      const { data: myEvents } = await supabase
-        .from('events')
-        .select('id')
-        .eq('user_id', currentUserId);
-
-      let incoming = 0;
-      if (myEvents && myEvents.length > 0) {
-        const { data: requests, error } = await supabase
-          .from('event_join_requests')
-          .select('id')
-          .in('event_id', myEvents.map(e => e.id))
-          .eq('status', 'pending');
-        if (error) throw error;
-        incoming = requests?.length || 0;
-      }
-
-      // (b) Decisions on MY OWN requests I haven't seen yet (approved / rejected)
-      const lastSeen = getNotifLastSeen(currentUserId);
-      const { data: myDecisions } = await supabase
-        .from('event_join_requests')
-        .select('updated_at')
+      // The bell dot = number of UNREAD notifications (events + meetups: requests received AND
+      // decisions on my own requests). Opening the notifications screen marks them read → dot clears.
+      const { count, error } = await supabase
+        .from('notifications')
+        .select('id', { count: 'exact', head: true })
         .eq('user_id', currentUserId)
-        .in('status', ['approved', 'rejected'])
-        .order('updated_at', { ascending: false })
-        .limit(50);
-      const unreadDecisions = (myDecisions || []).filter(
-        d => new Date(d.updated_at).getTime() > lastSeen
-      ).length;
-
-      setPendingRequestsCount(incoming + unreadDecisions);
+        .eq('read', false);
+      if (error) throw error;
+      const total = count || 0;
+      globalThis.__fomoPendingCount = total; // keep the instant-badge cache in sync so it clears too
+      setPendingRequestsCount(total);
     } catch (error) {
       console.error('Error loading pending requests:', error);
     }
@@ -473,23 +478,51 @@ export function HomeScreen({
 
 
 
-  const handleApplyFilters = (category: string | null, date: string | null, search: string) => {
+  const handleApplyFilters = (category: string | null, date: string | null, search: string, destination: string | null) => {
     setSelectedInterest(category);
     setSelectedDateFilter(date);
     setSearchQuery(search);
+    setSelectedDestination(destination);
   };
 
   const activeCountryData = activeCountry ? COUNTRIES[activeCountry] : null;
 
+  // Destinations (cities) present in the loaded events, with counts — powers the destination chip bar.
+  // Only surfaces when there are ≥2 distinct destinations (e.g. Thailand's many towns), so it stays
+  // invisible for countries with a single hub.
+  const destinations = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const e of events) {
+      const c = (e.city || '').trim();
+      if (c) counts.set(c, (counts.get(c) || 0) + 1);
+    }
+    return Array.from(counts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .map(([city, count]) => ({ city, count }));
+  }, [events]);
+
+  // Scope the events pool to the chosen destination before any other filter runs.
+  const destScopedEvents = useMemo(
+    () => (selectedDestination ? events.filter(e => (e.city || '').trim() === selectedDestination) : events),
+    [events, selectedDestination],
+  );
+
+  // Clear a stale destination selection when it no longer exists (e.g. switched country).
+  useEffect(() => {
+    if (selectedDestination && !destinations.some(d => d.city === selectedDestination)) {
+      setSelectedDestination(null);
+    }
+  }, [destinations, selectedDestination]);
+
   // Apply date filter to events pool
   const dateFilteredEvents = useMemo(() => {
-    if (!selectedDateFilter || selectedDateFilter === 'all') return events;
+    if (!selectedDateFilter || selectedDateFilter === 'all') return destScopedEvents;
     const now = new Date();
     const todayStr = now.toDateString();
     const tom = new Date(now); tom.setDate(now.getDate() + 1);
     const tomorrowStr = tom.toDateString();
     const weekEnd = new Date(now); weekEnd.setDate(now.getDate() + 7);
-    return events.filter(e => {
+    return destScopedEvents.filter(e => {
       const d = new Date(e.event_date);
       if (selectedDateFilter === 'today')    return d.toDateString() === todayStr;
       if (selectedDateFilter === 'tomorrow') return d.toDateString() === tomorrowStr;
@@ -502,7 +535,7 @@ export function HomeScreen({
         return d >= now && d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
       return true;
     });
-  }, [events, selectedDateFilter]);
+  }, [destScopedEvents, selectedDateFilter]);
 
   // Top 8 hottest upcoming events: weighted by attendees, proximity in time, and recency
   const featuredEvents = useMemo(() => {
@@ -622,6 +655,7 @@ export function HomeScreen({
           <div className="flex items-center gap-1">
             <button
               onClick={() => onNavigateToRequests?.()}
+              data-tour="header-bell"
               className="relative w-10 h-10 rounded-full hover:bg-gray-100 flex items-center justify-center transition-colors active:scale-95"
             >
               <Bell className="w-5 h-5 text-gray-700" strokeWidth={1.5} />
@@ -633,12 +667,19 @@ export function HomeScreen({
               )}
             </button>
             <button
-              onClick={() => setShowSearch(s => !s)}
-              aria-label="חיפוש"
-              aria-pressed={showSearch}
-              className="w-10 h-10 rounded-full hover:bg-gray-100 flex items-center justify-center transition-colors active:scale-95"
+              onClick={() => setShowFilterSheet(true)}
+              data-tour="header-search"
+              aria-label="סינון וחיפוש"
+              aria-pressed={showFilterSheet}
+              className="relative w-10 h-10 rounded-full hover:bg-gray-100 flex items-center justify-center transition-colors active:scale-95"
             >
-              <Search className="w-5 h-5 text-gray-700" strokeWidth={1.8} />
+              <SlidersHorizontal className="w-5 h-5 text-gray-700" strokeWidth={1.8} />
+              {(selectedInterest || selectedDateFilter || searchQuery || selectedDestination) && (
+                <span
+                  className="absolute top-1 right-1 w-2.5 h-2.5 rounded-full border-2 border-white"
+                  style={{ background: '#F97316', boxShadow: '0 0 6px rgba(249,115,22,0.7)' }}
+                />
+              )}
             </button>
           </div>
         </div>
@@ -855,6 +896,7 @@ export function HomeScreen({
 
         {/* ─── Countries row (circles) ──────────────────── */}
         <div
+          data-tour="country-chips"
           className="flex gap-4 overflow-x-auto scrollbar-hide px-4 pb-3"
           style={{ WebkitOverflowScrolling: 'touch' } as React.CSSProperties}
         >
@@ -982,7 +1024,7 @@ export function HomeScreen({
             <>
               {/* ══ FEATURED / HOT EVENTS carousel ══ */}
               {(showFeedSkeleton || featuredEvents.length > 0) && (
-                <div className="mb-8">
+                <div className="mb-8" data-tour="hot-now">
                   <div className="flex items-center gap-2.5 px-4 mb-4">
                     <h3 className="text-lg font-black text-gray-900 tracking-tight" style={{ fontFamily: 'Heebo, sans-serif' }}>
                       🔥 חם עכשיו
@@ -1059,29 +1101,9 @@ export function HomeScreen({
                           if (offset > n / 2) offset -= n;
                           if (offset < -n / 2) offset += n;
                           const bg = event.image_url || null;
-
-                          // Psychology signals for carousel card
-                          const evDate = new Date(event.event_date);
-                          const nowC   = new Date();
-                          const tom2   = new Date(nowC); tom2.setDate(nowC.getDate() + 1);
-                          const cIsToday    = evDate.toDateString() === nowC.toDateString();
-                          const cIsTomorrow = evDate.toDateString() === tom2.toDateString();
-                          const cIsUnlimited = event.max_attendees >= 9999;
-                          const cSpotsLeft   = cIsUnlimited ? Infinity : event.max_attendees - event.attendees.length;
-                          const cFillRate    = cIsUnlimited ? 0 : event.attendees.length / event.max_attendees;
-                          const cIsAlmostFull = !cIsUnlimited && cFillRate >= 0.7;
-                          const cIsVeryScarce = !cIsUnlimited && !cIsAlmostFull && cSpotsLeft <= 5;
-                          const cIsFree = !(event as any).price;
-
-                          const cUrgencyBadge = cIsToday
-                            ? { label: <><Zap size={9} style={{ display: 'inline', verticalAlign: 'middle' }} /> היום!</>, bg: '#F97316' }
-                            : cIsTomorrow
-                              ? { label: <><Calendar size={9} style={{ display: 'inline', verticalAlign: 'middle' }} /> מחר</>, bg: '#8B5CF6' }
-                              : cIsVeryScarce
-                                ? { label: <><Flame size={9} style={{ display: 'inline', verticalAlign: 'middle' }} /> רק {cSpotsLeft}!</>, bg: '#ef4444' }
-                                : cIsAlmostFull
-                                  ? { label: <><Flame size={9} style={{ display: 'inline', verticalAlign: 'middle' }} /> כמעט מלא</>, bg: '#ef4444' }
-                                  : null;
+                          const canEditCover = isAdmin; // reposition is admin-only, for every event
+                          const positioning = posId === event.id;
+                          const curFocus = positioning ? posFocus : (focusOverrides[event.id] ?? (event as any).image_focus_y ?? 50);
 
                           return (
                             <div
@@ -1099,43 +1121,55 @@ export function HomeScreen({
                                 opacity: Math.abs(offset) <= 2 ? 1 - Math.abs(offset) * 0.15 : 0,
                                 cursor: 'pointer',
                               }}
-                              onClick={() => offset === 0 ? setSelectedEvent(event) : setHotIdx(i)}
+                              onClick={() => { if (positioning) return; offset === 0 ? setSelectedEvent(event) : setHotIdx(i); }}
                             >
-                              <div className="relative w-full h-full rounded-2xl overflow-hidden" style={{ boxShadow: '0 4px 20px rgba(0,0,0,0.15), 0 2px 6px rgba(0,0,0,0.07)' }}>
+                              <div
+                                className="relative w-full h-full rounded-2xl overflow-hidden"
+                                style={{ boxShadow: '0 4px 20px rgba(0,0,0,0.15), 0 2px 6px rgba(0,0,0,0.07)', touchAction: positioning ? 'none' : undefined }}
+                                onTouchStart={positioning ? (e) => { e.stopPropagation(); posDragRef.current = { y: e.touches[0].clientY, f: posFocus }; } : undefined}
+                                onTouchMove={positioning ? (e) => { e.stopPropagation(); const d = posDragRef.current; if (!d) return; const dy = e.touches[0].clientY - d.y; setPosFocus(Math.max(0, Math.min(100, d.f - (dy / 200) * 100))); } : undefined}
+                                onTouchEnd={positioning ? (e) => { e.stopPropagation(); posDragRef.current = null; } : undefined}
+                              >
                                 {bg ? (
-                                  <CachedImage url={bg} alt={event.title} className="absolute inset-0 w-full h-full object-cover" />
+                                  <CachedImage url={bg} alt={event.title} className="absolute inset-0 w-full h-full object-cover" style={{ objectPosition: `center ${curFocus}%` }} />
                                 ) : (
                                   <div className="absolute inset-0 bg-gradient-to-br from-brand-500 via-brand-600 to-violet-700" />
                                 )}
                                 <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/20 to-transparent" />
 
-                                {/* Top row: social proof (left) + urgency badge (right) */}
+                                {/* Organizer/admin: reposition the cover straight from Home */}
+                                {offset === 0 && canEditCover && bg && !positioning && (
+                                  <button
+                                    onClick={(e) => { e.stopPropagation(); setPosFocus(curFocus); setPosId(event.id); }}
+                                    className="absolute top-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1.5 rounded-full bg-black/60 px-3 py-1.5 text-white active:scale-95 transition"
+                                    style={{ fontFamily: 'Heebo, sans-serif' }}
+                                  >
+                                    <Move className="w-3.5 h-3.5" />
+                                    <span className="text-[12px] font-semibold">מקם תמונה</span>
+                                  </button>
+                                )}
+                                {positioning && (
+                                  <>
+                                    <div className="absolute inset-0 pointer-events-none z-10" style={{ boxShadow: 'inset 0 0 0 3px rgba(255,255,255,0.9)' }} />
+                                    <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 rounded-full bg-black/60 px-3 py-1.5 text-white text-[12px] font-semibold pointer-events-none" style={{ fontFamily: 'Heebo, sans-serif' }}>גרור ↕ למסגור</div>
+                                    <div className="absolute bottom-3 inset-x-3 z-20 flex gap-2">
+                                      <button onClick={(e) => { e.stopPropagation(); saveCoverFocus(event.id, posFocus); }} className="flex-1 rounded-full bg-white text-gray-900 py-2 text-[13px] font-bold active:scale-95 transition" style={{ fontFamily: 'Heebo, sans-serif' }}>שמור</button>
+                                      <button onClick={(e) => { e.stopPropagation(); setPosId(null); }} className="rounded-full bg-black/55 text-white px-4 py-2 text-[13px] font-semibold active:scale-95 transition" style={{ fontFamily: 'Heebo, sans-serif' }}>ביטול</button>
+                                    </div>
+                                  </>
+                                )}
+
+                                {/* Top row: social proof (left) + urgency badge (right). Shown only for LIMITED
+                                    events (a max was set); unlimited events (max ≥ 9999) show no count. */}
+                                {event.max_attendees < 9999 && (
                                 <div className="absolute top-3 inset-x-3 flex items-center justify-between">
                                   {/* Social proof */}
                                   <div className="flex items-center gap-1 bg-black/40 backdrop-blur-sm text-white text-[11px] font-bold px-2.5 py-1 rounded-full">
                                     <Users className="w-3 h-3" />
                                     <span>{event.attendees.length > 2 ? `${event.attendees.length} הולכים` : event.attendees.length}</span>
                                   </div>
-                                  {/* Urgency / free badge */}
-                                  <div className="flex items-center gap-1">
-                                    {cIsFree && (
-                                      <span
-                                        className="text-white font-black"
-                                        style={{ fontSize: '12px', padding: '2px 8px', borderRadius: 8, background: 'linear-gradient(135deg,#10b981,#059669)', fontFamily: 'Heebo, sans-serif', boxShadow: '0 2px 6px rgba(16,185,129,0.35)' }}
-                                      >
-                                        חינם!
-                                      </span>
-                                    )}
-                                    {cUrgencyBadge && (
-                                      <span
-                                        className="text-white font-black px-2 py-0.5 rounded-full"
-                                        style={{ fontSize: '10px', background: cUrgencyBadge.bg, fontFamily: 'Heebo, sans-serif' }}
-                                      >
-                                        {cUrgencyBadge.label}
-                                      </span>
-                                    )}
-                                  </div>
                                 </div>
+                                )}
 
                                 <div className="absolute bottom-0 left-0 right-0 p-3.5">
                                   <h3
@@ -1192,79 +1226,9 @@ export function HomeScreen({
                 </div>
               )}
 
-              {/* ══ CATEGORY FILTER (after carousel) ══ */}
-              {feedMode === 'events' && (
-                <div className="pb-2">
-                  <div
-                    className="flex gap-2.5 overflow-x-auto scrollbar-hide px-4 pb-2"
-                    style={{ WebkitOverflowScrolling: 'touch' } as React.CSSProperties}
-                  >
-                    {Object.entries(eventCategories).map(([key, c]) => {
-                      const isActive = selectedInterest === key;
-                      return (
-                        <button
-                          key={key}
-                          onClick={() => {
-                            setSelectedInterest(prev => (prev === key ? null : key));
-                            setSelectedDateFilter(null);
-                          }}
-                          aria-pressed={isActive}
-                          className="flex-shrink-0 flex items-center gap-1.5 px-3.5 h-10 rounded-full transition-all active:scale-95"
-                          style={isActive
-                            ? { background: 'rgba(249,115,22,0.07)', color: '#F97316', border: '2px solid #F97316', boxShadow: 'none' }
-                            : { background: '#fff', color: '#4B5563', border: '2px solid transparent', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}
-                        >
-                          <span className="text-[16px] leading-none select-none">{c.emoji}</span>
-                          <span className="text-[13px] font-bold whitespace-nowrap" style={{ fontFamily: 'Heebo, sans-serif' }}>{c.label}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
+              {/* Category + city + date filters moved into the header "סינון" (filter) sheet. */}
 
-                  <div
-                    style={{
-                      height: '44px',
-                      opacity: selectedInterest ? 1 : 0,
-                      pointerEvents: selectedInterest ? 'auto' : 'none',
-                      transition: 'opacity 0.15s ease',
-                    }}
-                  >
-                    <div
-                      className="flex gap-2 overflow-x-auto scrollbar-hide px-4 pb-1"
-                      style={{ WebkitOverflowScrolling: 'touch' } as React.CSSProperties}
-                    >
-                      {[
-                        { v: 'all',     label: 'הכל' },
-                        { v: 'today',   label: 'היום' },
-                        { v: 'weekend', label: 'סוף השבוע' },
-                        { v: 'week',    label: 'השבוע' },
-                        { v: 'month',   label: 'החודש' },
-                      ].map(chip => {
-                        const active = (selectedDateFilter || 'all') === chip.v;
-                        return (
-                          <button
-                            key={chip.v}
-                            onClick={() => setSelectedDateFilter(chip.v === 'all' ? null : chip.v)}
-                            aria-pressed={active}
-                            className="flex-shrink-0 px-4 py-2 rounded-full text-[13px] font-bold transition-all active:scale-95"
-                            style={{
-                              fontFamily: 'Heebo, sans-serif',
-                              background: active ? 'rgba(249,115,22,0.07)' : '#F3F4F6',
-                              color: active ? '#F97316' : '#6B7280',
-                              border: active ? '2px solid #F97316' : '2px solid transparent',
-                              boxShadow: 'none',
-                            }}
-                          >
-                            {chip.label}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* ══ Category empty state — the filter bar above stays, so switching is easy ══ */}
+              {/* ══ Category empty state ══ */}
               {feedMode === 'events' && selectedInterest && events.length === 0 && !showFeedSkeleton && (
                 <div className="flex flex-col items-center px-6 pt-10 pb-12 text-center animate-fade-in">
                   <div className="text-5xl mb-4">{eventCategories[selectedInterest]?.emoji || '🔍'}</div>
@@ -1272,7 +1236,7 @@ export function HomeScreen({
                     אין כרגע אירועי {eventCategories[selectedInterest]?.label || 'בקטגוריה הזו'}
                   </h3>
                   <p className="text-gray-400 text-sm leading-relaxed mb-5 max-w-xs" style={{ fontFamily: 'Rubik, sans-serif' }}>
-                    נסו קטגוריה אחרת למעלה — או תהיו הראשונים ליצור אחד! ✨
+                    נסו סינון אחר — או תהיו הראשונים ליצור אחד! ✨
                   </p>
                   <button
                     onClick={() => setCreateMode('event')}
@@ -1384,7 +1348,7 @@ export function HomeScreen({
                               {/* Thumbnail */}
                               <div style={{ width: 80, height: 80, flexShrink: 0, borderRadius: 16, overflow: 'hidden', background: cat ? `${cat.color}20` : '#F3F4F6' }}>
                                 {bg ? (
-                                  <CachedImage url={bg} alt={event.title} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                                  <CachedImage url={bg} alt={event.title} style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: `center ${(event as any).image_focus_y ?? 50}%` }} />
                                 ) : (
                                   <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 34 }}>
                                     {event.emoji || cat?.emoji || '📍'}
@@ -1407,7 +1371,9 @@ export function HomeScreen({
                                 </div>
                               </div>
 
-                              {/* Attendees badge */}
+                              {/* Attendees badge — hidden for now (few users). To bring it back once events
+                                  fill up, swap `false` for a threshold, e.g. `event.attendees.length >= 8`. */}
+                              {false && (
                               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, flexShrink: 0 }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: 3, background: '#FFF7ED', borderRadius: 20, padding: '5px 9px' }}>
                                   <Users size={11} color="#F97316" strokeWidth={2} />
@@ -1416,6 +1382,7 @@ export function HomeScreen({
                                   </span>
                                 </div>
                               </div>
+                              )}
                             </div>
                           )}
                         </div>
@@ -1443,31 +1410,36 @@ export function HomeScreen({
       />
 
       {/* ─── Modals ─────────────────────────────────── */}
-      {createMode === 'select' && (
-        <CreateModal
-          onSelectEvent={() => setCreateMode('event')}
-          onSelectLocation={() => setCreateMode('location')}
-          onClose={() => setCreateMode('none')}
-          isAdmin={isAdmin}
-        />
-      )}
+      {/* Always mounted (like MapCreateActionSheet) so the glass sheet's own AnimatePresence can
+          play a real exit animation instead of vanishing instantly. */}
+      <CreateModal
+        isOpen={createMode === 'select'}
+        onSelectEvent={() => setCreateMode('event')}
+        onSelectLocation={() => setCreateMode('location')}
+        onClose={() => setCreateMode('none')}
+        isAdmin={isAdmin}
+      />
 
       {createMode === 'event' && currentUserId && (
-        <MapCreateEventFlow
-          isOpen={true}
-          onClose={() => setCreateMode('none')}
-          onSuccess={() => { setCreateMode('none'); refreshEvents(); }}
-          userId={currentUserId}
-          defaultCountry={activeCountry || selectedCountries[0] || undefined}
-        />
+        <Suspense fallback={null}>
+          <MapCreateEventFlow
+            isOpen={true}
+            onClose={() => setCreateMode('none')}
+            onSuccess={() => { setCreateMode('none'); refreshEvents(); }}
+            userId={currentUserId}
+            defaultCountry={activeCountry || selectedCountries[0] || undefined}
+          />
+        </Suspense>
       )}
 
       {createMode === 'location' && currentUserId && (
-        <CreateLocationForm
-          onSuccess={() => setCreateMode('none')}
-          onCancel={() => setCreateMode('none')}
-          currentUserId={currentUserId}
-        />
+        <Suspense fallback={null}>
+          <CreateLocationForm
+            onSuccess={() => setCreateMode('none')}
+            onCancel={() => setCreateMode('none')}
+            currentUserId={currentUserId}
+          />
+        </Suspense>
       )}
 
       {selectedEvent && (
@@ -1487,6 +1459,9 @@ export function HomeScreen({
         initialCategory={selectedInterest}
         initialDate={selectedDateFilter}
         initialSearch={searchQuery}
+        initialDestination={selectedDestination}
+        destinations={destinations.map(d => d.city)}
+        destEmoji={DEST_EMOJI}
         onApply={handleApplyFilters}
         onClose={() => setShowFilterSheet(false)}
       />

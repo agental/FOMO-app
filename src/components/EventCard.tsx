@@ -28,6 +28,7 @@ export function EventCard({
   const emoji       = event.emoji || getCategoryEmoji(event.event_type || '');
   const price       = (event as any).price;
   const displayImage = event.image_url || null;
+  const isExternal  = Boolean((event as any).is_external && (event as any).external_url);
 
   const eventDateStr = event.event_date || (event as any).date || '';
   const eventDate    = new Date(eventDateStr);
@@ -54,7 +55,9 @@ export function EventCard({
   const isThisWeek = eventDate > now && eventDate <= new Date(now.getTime() + 7 * 86400000);
 
   // CTA label — loss aversion when scarce
-  const ctaLabel = isAttending
+  const ctaLabel = isExternal
+    ? '🎟️ כרטיסים'
+    : isAttending
     ? 'ביטול'
     : isFull
       ? 'מלא'
@@ -62,7 +65,9 @@ export function EventCard({
         ? 'הצטרף עכשיו!'
         : 'הצטרף!';
 
-  const ctaBg = isAttending
+  const ctaBg = isExternal
+    ? `linear-gradient(135deg,#F97316,#EA580C)`
+    : isAttending
     ? 'linear-gradient(135deg,#ef4444,#dc2626)'
     : isFull
       ? '#9ca3af'
@@ -122,6 +127,7 @@ export function EventCard({
               <CachedImage
                 url={displayImage} alt={event.title}
                 className="absolute inset-0 w-full h-full object-cover"
+                style={{ objectPosition: `center ${(event as any).image_focus_y ?? 50}%` }}
                 onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }}
               />
               <div className="absolute inset-0" style={{ background: `linear-gradient(135deg, ${accentColor}33, transparent)` }} />
@@ -191,7 +197,7 @@ export function EventCard({
                 {dateStr} · {timeStr}
               </span>
               {/* Zero-Price Effect: "חינם" stands out in green */}
-              {price ? (
+              {isExternal ? null : price ? (
                 <span className="flex items-center gap-1 font-bold" style={{ color: accentColor }}>
                   <Tag className="w-3 h-3" />₪{price}
                 </span>
@@ -214,7 +220,11 @@ export function EventCard({
 
           <div className="flex items-center justify-between mt-2">
             {/* Social proof / scarcity */}
-            {isFull ? (
+            {isExternal ? (
+              <span className="text-[11px] font-bold" style={{ color: '#F97316', fontFamily: 'Heebo, sans-serif' }}>
+                🎟️ אירוע עם כרטיסים
+              </span>
+            ) : isFull ? (
               <span className="text-[11px] font-bold text-red-500" style={{ fontFamily: 'Heebo, sans-serif' }}>
                 🚫 האירוע מלא
               </span>

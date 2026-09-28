@@ -75,6 +75,8 @@ async function run(userId: string): Promise<void> {
 
   // 3) Bell count — same logic as HomeScreen.loadPendingRequests, stashed for an instant badge.
   const pendingPromise = (async () => {
+    const lastSeen = getNotifLastSeen(userId);
+    const lastSeenISO = new Date(lastSeen).toISOString();
     const { data: myEvents } = await supabase.from('events').select('id').eq('user_id', userId);
     let incoming = 0;
     if (myEvents && myEvents.length) {
@@ -82,10 +84,10 @@ async function run(userId: string): Promise<void> {
         .from('event_join_requests')
         .select('id')
         .in('event_id', myEvents.map((e) => e.id as string))
-        .eq('status', 'pending');
+        .eq('status', 'pending')
+        .gt('created_at', lastSeenISO);
       incoming = reqs?.length || 0;
     }
-    const lastSeen = getNotifLastSeen(userId);
     const { data: myDecisions } = await supabase
       .from('event_join_requests')
       .select('updated_at')

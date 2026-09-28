@@ -74,7 +74,7 @@ Deno.serve(async (req) => {
   const SERVICE_ROLE = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
   const admin = createClient(SUPABASE_URL, SERVICE_ROLE);
 
-  let payload: { table?: string; record?: Record<string, unknown> };
+  let payload: { table?: string; record?: Record<string, unknown>; old_record?: Record<string, unknown> };
   try { payload = await req.json(); } catch { return json({ error: "bad json" }, 400); }
 
   const table = payload.table;
@@ -106,16 +106,123 @@ Deno.serve(async (req) => {
   } else if (table === "group_messages") {
     const senderId = row.user_id as string;
     const channelId = row.channel_id as string;
-    if (row.type === "system" || !senderId || !channelId) return json({ skip: "group skip" });
+    if (!senderId || !channelId) return json({ skip: "group skip" });
 
-    const { data: members } = await admin
-      .from("group_members")
-      .select("user_id, status")
-      .eq("channel_id", channelId);
-    recipientIds = (members || [])
-      .filter((m) => m.status !== "left" && m.user_id !== senderId)
-      .map((m) => m.user_id as string);
-    if (recipientIds.length === 0) return json({ skip: "no group recipients" });
+    // System notices ("X joined/left the group") are stored as type:'text' with an invisible
+    // SYS_MARK (U+2061) prefix — NOT type:'system'. Detect them here so they don't push the whole
+    // group on every join/leave.
+    const content = (row.content as string) || "";
+    const isSystemNotice = content.charCodeAt(0) === 0x2061;
+    const isJoinNotice = isSystemNotice && content.includes("הצטרף");
+
+    // Group title (flags + emoji + city) — used in every case.
+    const { data: ch } = await admin
+      .from("group_channels")
+      .select("city_name, city_emoji, country_code")
+      .eq("id", channelId)
+      .maybeSingle();
+    title = [flagEmoji((ch?.country_code as string) || ""), (ch?.city_emoji as string) || "", (ch?.city_name as string) || "קבוצה"]
+      .map((s) => (s || "").trim()).filter(Boolean).join(" ") || "קבוצה";
+
+    if (isSystemNotice) {
+      // "left" (and any non-join notice) → notify no one. "joined" → congratulate ONLY the person
+      // who was just approved / joined (the notice's sender), never the rest of the group.
+      if (!isJoinNotice) return json({ skip: "system notice" });
+      recipientIds = [senderId];
+      body = "🎉 אושרת לקבוצה! ברוך/ה הבא/ה";
+    } else {
+      // Normal message → push the other approved members (never the sender).
+      const { data: members } = await admin
+        .from("group_members")
+        .select("user_id, status")
+        .eq("channel_id", channelId);
+      recipientIds = (members || [])
+        .filter((m) => m.status !== "left" && m.user_id !== senderId)
+        .map((m) => m.user_id as string);
+      if (recipientIds.length === 0) return json({ skip: "no group recipients" });
+      body = `${(row.display_name as string) || "מישהו"}: ${preview(row.content as string, row.type as string)}`;
+    }
+  } else if (table === "meetups") {
+    // A meetup ("ציוץ") change. Compare old vs new pending_requests + attendees to detect:
+    //   • NEW request  (id added to pending)         → push the ORGANIZER
+    //   • APPROVED     (id moved pending → attendees) → push that user
+    //   • REJECTED     (id left pending, didn't join) → push that user
+    // Requires old_record (meetups REPLICA IDENTITY FULL — already set).
+    const oldPending = Array.isArray(payload.old_record?.pending_requests) ? (payload.old_record!.pending_requests as string[]) : [];
+    const newPending = Array.isArray(row.pending_requests) ? (row.pending_requests as string[]) : [];
+    const oldAtt = Array.isArray(payload.old_record?.attendees) ? (payload.old_record!.attendees as string[]) : [];
+    const newAtt = Array.isArray(row.attendees) ? (row.attendees as string[]) : [];
+    const organizerId = row.user_id as string;
+    const meetupName = (row.text as string) || "הציוץ";
+    const mEmoji = (row.emoji as string) || "☕";
+    const added = newPending.filter((id) => !oldPending.includes(id));
+    const approved = newAtt.filter((id) => !oldAtt.includes(id) && oldPending.includes(id));
+    const rejected = oldPending.filter((id) => !newPending.includes(id) && !newAtt.includes(id));
+
+    if (added.length > 0 && !(added.length === 1 && added[0] === organizerId)) {
+      recipientIds = [organizerId];
+      title = "FOMO";
+      body = `בקשה חדשה להצטרף לציוץ שלך ${mEmoji}`;
+    } else if (approved.length > 0) {
+      recipientIds = approved;
+      title = "FOMO";
+      body = `אושרת לציוץ "${meetupName}"! ${mEmoji}`;
+    } else if (rejected.length > 0) {
+      recipientIds = rejected;
+      title = "FOMO";
+      body = `הבקשה שלך לציוץ "${meetupName}" נדחתה`;
+    } else {
+      return json({ skip: "meetup no-op" });
+    }
+  } else if (table === "event_join_requests") {
+    // INSERT (status 'pending') → notify the event ORGANIZER. UPDATE to approved/rejected → the REQUESTER.
+    // Fired by a pg trigger, so old_record (OLD) is always present on UPDATE.
+    const isUpdate = !!payload.old_record;
+    const newStatus = (row.status as string) || "";
+    const oldStatus = (payload.old_record?.status as string) || "";
+    const { data: ev } = await admin.from("events").select("user_id, title").eq("id", row.event_id).maybeSingle();
+    if (!ev) return json({ skip: "no event" });
+    const evTitle = (ev.title as string) || "האירוע";
+    title = "FOMO";
+    if (!isUpdate) {
+      if (newStatus !== "pending") return json({ skip: "not pending" });
+      const organizerId = ev.user_id as string;
+      if (!organizerId || organizerId === row.user_id) return json({ skip: "self" });
+      const { data: actor } = await admin.from("users").select("display_name").eq("id", row.user_id).maybeSingle();
+      recipientIds = [organizerId];
+      body = `${(actor?.display_name as string) || "מישהו"} ביקש/ה להצטרף לאירוע "${evTitle}" 🎟️`;
+    } else {
+      if (oldStatus === newStatus || (newStatus !== "approved" && newStatus !== "rejected")) return json({ skip: "no decision" });
+      recipientIds = [row.user_id as string];
+      body = newStatus === "approved" ? `אושרת לאירוע "${evTitle}"! 🎉` : `הבקשה שלך לאירוע "${evTitle}" נדחתה`;
+    }
+  } else if (table === "message_reports") {
+    // A new user report → notify all app admins.
+    const { data: admins } = await admin.from("users").select("id").eq("role", "admin");
+    recipientIds = [...new Set((admins || []).map((a) => a.id as string))].filter(Boolean);
+    if (recipientIds.length === 0) return json({ skip: "no admins" });
+    title = "FOMO";
+    body = "🚩 דיווח חדש על משתמש — בדוק בלוח הניהול";
+  } else if (table === "users") {
+    // An admin just set/changed a ban (banned_until) → tell the banned user.
+    const until = (row.banned_until as string) || null;
+    const oldUntil = (payload.old_record?.banned_until as string) || null;
+    if (!until || until === oldUntil) return json({ skip: "no ban change" });
+    if (new Date(until).getTime() <= Date.now()) return json({ skip: "ban not active" });
+    recipientIds = [row.id as string];
+    title = "FOMO";
+    body = "החשבון שלך הושעה. לפרטים אפשר לפנות לתמיכה.";
+  } else if (table === "group_members") {
+    // A city-group join request = a group_members row that turns status:'pending'. Notify the group's
+    // admins (app admins, role='admin') — never the requester. Only on a genuinely new pending row.
+    if (row.status !== "pending") return json({ skip: "not a pending join" });
+    if (((payload.old_record?.status as string) || "") === "pending") return json({ skip: "already pending" });
+    const requesterId = row.user_id as string;
+    const channelId = row.channel_id as string;
+
+    const { data: admins } = await admin.from("users").select("id").eq("role", "admin");
+    recipientIds = [...new Set((admins || []).map((a) => a.id as string))].filter((id) => id && id !== requesterId);
+    if (recipientIds.length === 0) return json({ skip: "no group admins" });
 
     const { data: ch } = await admin
       .from("group_channels")
@@ -124,7 +231,7 @@ Deno.serve(async (req) => {
       .maybeSingle();
     title = [flagEmoji((ch?.country_code as string) || ""), (ch?.city_emoji as string) || "", (ch?.city_name as string) || "קבוצה"]
       .map((s) => (s || "").trim()).filter(Boolean).join(" ") || "קבוצה";
-    body = `${(row.display_name as string) || "מישהו"}: ${preview(row.content as string, row.type as string)}`;
+    body = `${(row.display_name as string) || "מישהו"} מבקש/ת להצטרף לקבוצה 👋`;
   } else {
     return json({ skip: "unknown table" });
   }
@@ -134,9 +241,9 @@ Deno.serve(async (req) => {
     .from("push_tokens")
     .select("token")
     .in("user_id", recipientIds);
-  const tokens = [...new Set((tokenRows || []).map((t) => t.token as string).filter(Boolean))];
+  const tokens = [...new Set((tokenRows || []).map((t: { token: string }) => t.token).filter(Boolean))];
   if (tokens.length === 0) return json({ sent: 0, reason: "no tokens" });
 
-  await sendExpo(admin, tokens.map((to) => ({ to, title, body, sound: "default" as const })));
+  await sendExpo(admin, tokens.map((to: string) => ({ to, title, body, sound: "default" as const })));
   return json({ sent: tokens.length });
 });

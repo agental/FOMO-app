@@ -1,37 +1,68 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, lazy, Suspense } from 'react';
 import { SplashScreen } from './components/SplashScreen';
 import { HomeScreen } from './components/HomeScreen';
-import ProfileScreen from './components/ProfileScreen';
+const ProfileScreen = lazy(() => import('./components/ProfileScreen'));
 import { AuthScreen } from './components/AuthScreen';
 import { OnboardingScreen } from './components/OnboardingScreen';
 import { CreateProfileWizard } from './components/CreateProfileWizard';
 import { CountrySelectionScreen } from './components/CountrySelectionScreen';
-import { MapScreen } from './components/MapScreen';
+import { ErrorBoundary } from './components/ErrorBoundary';
+// Apple Maps (MapKit JS) is the app's map. Lazy so mapkit loads only when the map tab is first opened.
+const AppleMapScreen = lazy(() => import('./components/AppleMapScreen').then(m => ({ default: m.AppleMapScreen })));
 import { useRealtimeNotifications } from './hooks/useRealtimeNotifications';
 import { savePushToken } from './services/pushToken';
 import { preloadAppData } from './boot/preload';
 import { fetchChatList } from './services/chatListService';
 import type { PlacePayload } from './utils/placeMessage';
-import { AdminDashboard } from './components/AdminDashboard';
-import { BanScreen } from './components/BanScreen';
+// Admin-only + heavy — lazy so regular users never download it.
+const AdminDashboard = lazy(() => import('./components/AdminDashboard').then(m => ({ default: m.AdminDashboard })));
 import { isBanned, type BanInfo } from './services/banService';
-import { MessagesScreen } from './components/MessagesScreen';
-import { RequestsScreen } from './components/RequestsScreen';
-import { ChatScreen } from './components/ChatScreen';
-import { SettingsScreen } from './components/SettingsScreen';
-import { NotificationsScreen } from './components/NotificationsScreen';
-import { PrivacyScreen } from './components/PrivacyScreen';
-import { AboutScreen } from './components/AboutScreen';
-import { MyEventsScreen } from './components/MyEventsScreen';
-import { supabase } from './lib/supabase';
+// Secondary screens — lazy so they're not in the first-paint bundle (each loads on first navigation).
+const BanScreen = lazy(() => import('./components/BanScreen').then(m => ({ default: m.BanScreen })));
+const MessagesScreen = lazy(() => import('./components/MessagesScreen').then(m => ({ default: m.MessagesScreen })));
+const RequestsScreen = lazy(() => import('./components/RequestsScreen').then(m => ({ default: m.RequestsScreen })));
+const ChatScreen = lazy(() => import('./components/ChatScreen').then(m => ({ default: m.ChatScreen })));
+const SettingsScreen = lazy(() => import('./components/SettingsScreen').then(m => ({ default: m.SettingsScreen })));
+const NotificationsScreen = lazy(() => import('./components/NotificationsScreen').then(m => ({ default: m.NotificationsScreen })));
+const PrivacyScreen = lazy(() => import('./components/PrivacyScreen').then(m => ({ default: m.PrivacyScreen })));
+const AboutScreen = lazy(() => import('./components/AboutScreen').then(m => ({ default: m.AboutScreen })));
+const MyEventsScreen = lazy(() => import('./components/MyEventsScreen').then(m => ({ default: m.MyEventsScreen })));
+// Launch Mode (pre-launch countdown + referral) — lazy so post-launch users never download it.
+const LaunchScreen = lazy(() => import('./components/LaunchScreen').then(m => ({ default: m.LaunchScreen })));
+import { fetchLaunchState, shouldShowLaunch, captureReferralFromUrl, claimPendingReferral, type LaunchState } from './services/launchService';
+import { loadValue, saveValue, removeValue, flushWrites } from './utils/warmCache';
+import { supabase, hardSignOut } from './lib/supabase';
+import { OnboardingTour, type TourStep } from './components/OnboardingTour';
+
+// First-run coach-mark tour steps (shown once to new users on their first visit to Home).
+const TOUR_STEPS: TourStep[] = [
+  { emoji: '👋', title: 'ברוכים הבאים ל-FOMO!', body: 'בוא נעשה סיבוב זריז — 30 שניות, ותכיר את כל מה שאפשר לעשות כאן.' },
+  { target: '[data-tour="country-chips"]', emoji: '🌍', title: 'היעדים שלך', body: 'עבור בין מדינות ויעדים כדי לראות מה קורה בכל מקום.' },
+  { target: '[data-tour="hot-now"]', emoji: '🔥', title: 'חם עכשיו', body: 'האירועים הכי לוהטים כרגע — החלק לצדדים כדי לגלול ביניהם.' },
+  { target: '[data-tour="category-chips"]', emoji: '🎯', title: 'סינון מהיר', body: 'סנן אירועים לפי סוג — מסיבות, טרקים, אוכל ועוד.' },
+  { target: '[data-tour="header-search"]', emoji: '🔍', title: 'חיפוש', body: 'מצא אירוע, מקום או עיר תוך שנייה.' },
+  { target: '[data-tour="nav-map"]', emoji: '🗺️', title: 'מפה', body: 'גלה אירועים ומקומות סביבך על המפה החיה.' },
+  { target: '[data-tour="nav-create"]', emoji: '➕', title: 'צור אירוע', body: 'יש לך משהו מגניב? צור אירוע משלך בכמה קליקים.' },
+  { target: '[data-tour="nav-chat"]', emoji: '💬', title: 'צ׳אטים', body: 'דבר עם המשתתפים והמארגנים בצ׳אט של כל אירוע.' },
+  { target: '[data-tour="nav-events"]', emoji: '🎫', title: 'האירועים שלי', body: 'כל האירועים שנרשמת אליהם והכרטיסים שלך — במקום אחד.' },
+  { emoji: '🎉', title: 'יאללה, מוכנים!', body: 'זהו — אתה מכיר את FOMO. בוא נתחיל לגלות אירועים!' },
+];
+
+// Screens worth restoring after a short-background WebView reload (NOT transient/pre-auth flows or admin).
+const RESTORABLE_SCREENS: string[] = ['home', 'map', 'messages', 'myEvents', 'requests', 'notifications', 'profile', 'settings', 'about', 'privacy', 'chat', 'userProfile'];
+// How recently the app must have been active for the last screen to be restored. Longer than this ⇒ treat
+// as a fresh open → Home (approximates "the app was fully closed").
+const NAV_RESTORE_WINDOW_MS = 30 * 60 * 1000;
 
 function App() {
-  type Screen = 'auth' | 'onboarding' | 'createProfile' | 'country' | 'home' | 'profile' | 'map' | 'admin' | 'userProfile' | 'messages' | 'requests' | 'chat' | 'settings' | 'notifications' | 'privacy' | 'about' | 'myEvents';
+  type Screen = 'auth' | 'onboarding' | 'createProfile' | 'country' | 'home' | 'profile' | 'map' | 'admin' | 'userProfile' | 'messages' | 'requests' | 'chat' | 'settings' | 'notifications' | 'privacy' | 'about' | 'myEvents' | 'launch';
   const [splashDone, setSplashDone] = useState(false);
   const [currentScreen, setCurrentScreen] = useState<Screen>('auth');
+  const [launchState, setLaunchState] = useState<LaunchState | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
   const [previousScreen, setPreviousScreen] = useState<Screen | null>(null);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [showTour, setShowTour] = useState(false);
   const [banInfo, setBanInfo] = useState<BanInfo | null>(null); // set when the signed-in user is banned
   const [selectedCountries, setSelectedCountries] = useState<Set<string>>(new Set());
   const [viewingUserId, setViewingUserId] = useState<string | null>(null);
@@ -40,7 +71,6 @@ function App() {
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
   const [chatOtherUserId, setChatOtherUserId] = useState<string | null>(null);
   const [openCreate, setOpenCreate] = useState(false);
-  const [mapMounted, setMapMounted] = useState(false);
 
   // The "+" create button lives on the Home screen. From any other screen it
   // routes back to Home and signals it to open the create sheet.
@@ -54,6 +84,10 @@ function App() {
       document.documentElement.style.overflowX = '';
     };
   }, []);
+
+  // Capture a referral code from the launch link (`?ref=CODE`) as early as possible — before the
+  // OAuth round-trip can reload the page — and strip it from the URL. It's claimed after sign-in.
+  useEffect(() => { captureReferralFromUrl(); }, []);
 
   // Native OAuth bridge: the Expo wrapper opens Google/Apple in the system browser
   // (embedded webviews are blocked by the providers) and calls this back with the
@@ -79,18 +113,107 @@ function App() {
   // Remember the screen the user came from, so a viewed profile can return there
   useEffect(() => {
     if (currentScreen !== 'userProfile') setProfileBackScreen(currentScreen);
-    if (currentScreen === 'map') setMapMounted(true);
   }, [currentScreen]);
 
-  // Refresh session silently when the user returns to the app after being in background
+  // Nav restore: continuously snapshot the CURRENT real screen (+ its sub-state) so a WebView reload after a
+  // SHORT background returns the user exactly where they were — any screen, not just Home. A truly closed/
+  // reclaimed-after-long app opens clean at Home (the snapshot's timestamp is stale → routeAfterAuthOrLaunch
+  // ignores it). Transient/pre-auth screens are NOT snapshotted, so the last real screen survives the reload.
   useEffect(() => {
+    if (!RESTORABLE_SCREENS.includes(currentScreen)) return;
+    saveValue('navSnap', {
+      screen: currentScreen,
+      conversationId: currentConversationId,
+      otherUserId: chatOtherUserId,
+      viewingUserId,
+      ts: Date.now(),
+    });
+  }, [currentScreen, currentConversationId, chatOtherUserId, viewingUserId]);
+
+  // NAV RESTORE POLICY: a fresh load (cold launch OR a WebView reload after iOS reclaimed it) always
+  // starts at Home — we deliberately do NOT restore the last screen, because guessing it after a
+  // reload landed users on the wrong page. "Stay where you were" is handled by NOT reloading the live
+  // WebView on a short/medium background (see the native wrapper), so an app kept open in the
+  // background resumes exactly in place; a truly closed/reclaimed app opens clean at Home.
+
+  // First-run coach-mark tour: show ONCE when a new user first lands on Home. The "seen" flag goes
+  // through warmCache (native-reliable), scoped per user, so it survives reloads/restarts.
+  useEffect(() => {
+    if (currentScreen !== 'home' || !currentUserId) return;
+    if (loadValue<boolean>(`tourSeen:${currentUserId}`, false)) return;
+    const t = setTimeout(() => setShowTour(true), 700); // let Home render + settle first
+    return () => clearTimeout(t);
+  }, [currentScreen, currentUserId]);
+
+  const finishTour = () => {
+    if (currentUserId) saveValue<boolean>(`tourSeen:${currentUserId}`, true);
+    setShowTour(false);
+  };
+
+  // Post-auth routing for a fully-onboarded user: the ONE place launch mode can intercept. The server
+  // decides (get_launch_state); admins/bypass/early-access and post-launch users pass straight through.
+  // FAILS OPEN — any error sends the user into the app, never traps them on a blank/launch screen.
+  // Always lands on Home on a fresh load (see NAV RESTORE POLICY above).
+  const routeAfterAuthOrLaunch = async (): Promise<void> => {
+    // Attribute a pending ?ref= referral (server-verified; safe no-op if none / already claimed).
+    claimPendingReferral().catch(() => {});
+    try {
+      const state = await fetchLaunchState();
+      if (state && shouldShowLaunch(state)) {
+        setLaunchState(state);
+        setCurrentScreen('launch');
+        return;
+      }
+    } catch { /* fail-open → fall through into the app */ }
+    // Restore the last screen after a SHORT-background reload (any restorable screen). A stale snapshot
+    // (app was closed / away long) falls through to Home.
+    try {
+      const snap = loadValue<{ screen?: string; conversationId?: string; otherUserId?: string; viewingUserId?: string; ts?: number } | null>('navSnap', null);
+      if (snap?.screen && snap.ts && Date.now() - snap.ts < NAV_RESTORE_WINDOW_MS && RESTORABLE_SCREENS.includes(snap.screen)) {
+        if (snap.screen === 'chat') {
+          if (snap.conversationId && snap.otherUserId) {
+            setCurrentConversationId(snap.conversationId);
+            setChatOtherUserId(snap.otherUserId);
+            setCurrentScreen('chat');
+            return;
+          }
+        } else if (snap.screen === 'userProfile') {
+          if (snap.viewingUserId) {
+            setViewingUserId(snap.viewingUserId);
+            setCurrentScreen('userProfile');
+            return;
+          }
+        } else {
+          setCurrentScreen(snap.screen as Screen);
+          return;
+        }
+      }
+    } catch { /* ignore → Home */ }
+    setCurrentScreen('home');
+  };
+
+  // Refresh session silently when the user returns to the app after being in background. And the
+  // MOMENT the app is hidden/backgrounded, force-persist all pending writes (esp. the current-screen
+  // snapshot) so a WebView reclaim can't drop the last navigation and restore an older screen.
+  useEffect(() => {
+    // Stamp the nav snapshot with the moment we go to background, so the restore window measures HOW LONG
+    // the user was away (short background → restore that screen; long/closed → Home).
+    const stampNav = () => { try { const s = loadValue('navSnap', null) as Record<string, unknown> | null; if (s) saveValue('navSnap', { ...s, ts: Date.now() }); } catch { /* ignore */ } };
     const handleVisibility = () => {
       if (document.visibilityState === 'visible') {
         supabase.auth.getSession().catch(() => {});
+      } else {
+        stampNav();
+        flushWrites();
       }
     };
+    const handleHide = () => { stampNav(); flushWrites(); };
     document.addEventListener('visibilitychange', handleVisibility);
-    return () => document.removeEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('pagehide', handleHide);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('pagehide', handleHide);
+    };
   }, []);
 
   useEffect(() => {
@@ -199,12 +322,17 @@ function App() {
       if (data.profile_completed) {
         if (data.selected_countries && data.selected_countries.length > 0) {
           setSelectedCountries(new Set(data.selected_countries));
-          setCurrentScreen('home');
+          // Launch mode may intercept here (server-decided, fail-open); otherwise return to the last
+          // screen the user was on (native-app style), or Home if none saved.
+          await routeAfterAuthOrLaunch();
         } else {
           setCurrentScreen('country');
         }
       } else {
-        setCurrentScreen('onboarding');
+        // Mid-signup: if the profile wizard was already started (a saved draft exists), resume it
+        // directly instead of dropping the user back at the start of onboarding after a reload.
+        const hasDraft = !!loadValue<Record<string, unknown> | null>(`createProfileDraft:${userId}`, null);
+        setCurrentScreen(hasDraft ? 'createProfile' : 'onboarding');
       }
     } catch (err) {
       console.error('handleAuthSuccess error:', err);
@@ -241,8 +369,12 @@ function App() {
 
         if (error) throw error;
 
+        const cameFromInApp = !!previousScreen; // country change from Settings vs. initial onboarding
         setPreviousScreen(null);
-        setCurrentScreen('home');
+        // Initial onboarding funnels through the launch gate (server-decided); a mid-session country
+        // change just returns to the app.
+        if (cameFromInApp) setCurrentScreen('home');
+        else await routeAfterAuthOrLaunch();
       } catch (error) {
         console.error('Error saving countries:', error);
         alert('אירעה שגיאה בשמירת המדינות');
@@ -306,6 +438,17 @@ function App() {
 
 
 
+  // Dev/preview hook: open the onboarding flow directly with ?preview=onboarding
+  // (harmless in production — regular users never hit this param).
+  if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('preview') === 'onboarding') {
+    return (
+      <OnboardingScreen
+        onComplete={() => { window.location.search = ''; }}
+        onLogin={() => { window.location.search = ''; }}
+      />
+    );
+  }
+
   if (!splashDone) {
     return <SplashScreen onComplete={() => setSplashDone(true)} />;
   }
@@ -363,7 +506,8 @@ function App() {
               const { data } = await supabase.from('users').select('selected_countries').eq('id', currentUserId).maybeSingle();
               if (data?.selected_countries && data.selected_countries.length > 0) {
                 setSelectedCountries(new Set(data.selected_countries));
-                setCurrentScreen('home');
+                // Fresh signup complete → funnel through the launch gate (server-decided, fail-open).
+                await routeAfterAuthOrLaunch();
                 return;
               }
             } catch { /* fall through */ }
@@ -371,7 +515,7 @@ function App() {
           setCurrentScreen('country');
         }}
         onBack={async () => {
-          await supabase.auth.signOut();
+          await hardSignOut();
           setCurrentScreen('auth');
         }}
       />
@@ -416,16 +560,19 @@ function App() {
           setViewingUserId(userId);
           setCurrentScreen('userProfile');
         }}
+        onOpenMapAt={(lat: number, lng: number) => { setMapFocus({ latitude: lat, longitude: lng }); setCurrentScreen('map'); }}
       />
     );
   }
 
   if (currentScreen === 'admin') {
     return (
-      <AdminDashboard
-        currentUserId={currentUserId!}
-        onBack={() => setCurrentScreen('home')}
-      />
+      <Suspense fallback={null}>
+        <AdminDashboard
+          currentUserId={currentUserId!}
+          onBack={() => setCurrentScreen('home')}
+        />
+      </Suspense>
     );
   }
 
@@ -458,6 +605,7 @@ function App() {
           setViewingUserId(userId);
           setCurrentScreen('userProfile');
         }}
+        onOpenMapAt={(lat: number, lng: number) => { setMapFocus({ latitude: lat, longitude: lng }); setCurrentScreen('map'); }}
       />
     );
   }
@@ -476,6 +624,7 @@ function App() {
         onNavigateToNotifications={() => setCurrentScreen('notifications')}
         onNavigateToPrivacy={() => setCurrentScreen('privacy')}
         onNavigateToAbout={() => setCurrentScreen('about')}
+        onReplayTour={() => { if (currentUserId) { removeValue(`tourSeen:${currentUserId}`); removeValue(`msgTourSeen:${currentUserId}`); } setCurrentScreen('home'); setShowTour(true); }}
         onSignOut={() => setCurrentScreen('auth')}
       />
     );
@@ -501,6 +650,20 @@ function App() {
 
   if (currentScreen === 'about') {
     return <AboutScreen onBack={() => setCurrentScreen('settings')} />;
+  }
+
+  // Launch Mode — pre-launch countdown + referral hub. Shown only when the server said to (see
+  // routeAfterAuthOrLaunch); onEnterApp hands control back to the app once launch is over / access granted.
+  if (currentScreen === 'launch' && launchState) {
+    return (
+      <Suspense fallback={null}>
+        <LaunchScreen
+          initialState={launchState}
+          currentUserId={currentUserId}
+          onEnterApp={() => setCurrentScreen('home')}
+        />
+      </Suspense>
+    );
   }
 
   // Home + Messages + Map rendered together — the Map stays mounted after its first visit so
@@ -548,29 +711,27 @@ function App() {
           onCreateConsumed={() => setOpenCreate(false)}
         />
       )}
-      {mapMounted && (
-        <div style={{
-          position: 'fixed', inset: 0,
-          zIndex: currentScreen === 'map' ? 100 : -1,
-          visibility: currentScreen === 'map' ? 'visible' : 'hidden',
-          pointerEvents: currentScreen === 'map' ? 'auto' : 'none',
-        }}>
-          <MapScreen
+      {showTour && currentScreen === 'home' && (
+        <OnboardingTour steps={TOUR_STEPS} onFinish={finishTour} />
+      )}
+      {/* Apple Maps mounts only while the map tab is open. */}
+      {currentScreen === 'map' && (
+        <Suspense fallback={null}>
+          <ErrorBoundary onBack={() => setCurrentScreen('home')} label="map">
+          <AppleMapScreen
             userId={currentUserId!}
             selectedCountries={Array.from(selectedCountries)}
             onBack={() => setCurrentScreen('home')}
             onNavigateToHome={() => setCurrentScreen('home')}
             onNavigateToMyEvents={() => setCurrentScreen('myEvents')}
             onNavigateToMessages={() => setCurrentScreen('messages')}
-            onNavigateToUserProfile={(userId: string) => {
-              setViewingUserId(userId);
-              setCurrentScreen('userProfile');
-            }}
+            onNavigateToUserProfile={(userId: string) => { setViewingUserId(userId); setCurrentScreen('userProfile'); }}
             onMessageUser={handleMessageUser}
             focusLocation={mapFocus}
             onFocusHandled={() => setMapFocus(null)}
           />
-        </div>
+          </ErrorBoundary>
+        </Suspense>
       )}
       {/* Personal chat is an OVERLAY (not an early-return) so Messages stays mounted behind it — you see
           the chat list through the gap as you swipe the chat away, exactly like the city group chat. */}

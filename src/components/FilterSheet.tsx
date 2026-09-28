@@ -19,15 +19,19 @@ interface FilterSheetProps {
   initialCategory: string | null;
   initialDate: string | null;
   initialSearch?: string;
-  onApply: (category: string | null, date: string | null, search: string) => void;
+  initialDestination?: string | null;
+  destinations?: string[];                 // city/town names present in the feed
+  destEmoji?: Record<string, string>;      // optional emoji per city
+  onApply: (category: string | null, date: string | null, search: string, destination: string | null) => void;
   onClose: () => void;
 }
 
-export function FilterSheet({ visible, initialCategory, initialDate, initialSearch = '', onApply, onClose }: FilterSheetProps) {
-  const [category, setCategory] = useState<string | null>(initialCategory);
-  const [date,     setDate]     = useState<string | null>(initialDate);
-  const [search,   setSearch]   = useState(initialSearch);
-  const [mounted,  setMounted]  = useState(false);
+export function FilterSheet({ visible, initialCategory, initialDate, initialSearch = '', initialDestination = null, destinations = [], destEmoji = {}, onApply, onClose }: FilterSheetProps) {
+  const [category,    setCategory]    = useState<string | null>(initialCategory);
+  const [date,        setDate]        = useState<string | null>(initialDate);
+  const [search,      setSearch]      = useState(initialSearch);
+  const [destination, setDestination] = useState<string | null>(initialDestination);
+  const [mounted,     setMounted]     = useState(false);
 
   // Drag state
   const [dragY,    setDragY]    = useState(0);
@@ -41,17 +45,18 @@ export function FilterSheet({ visible, initialCategory, initialDate, initialSear
       setCategory(initialCategory);
       setDate(initialDate);
       setSearch(initialSearch);
+      setDestination(initialDestination);
       setDragY(0);
       requestAnimationFrame(() => setMounted(true));
     } else {
       setMounted(false);
     }
-  }, [visible, initialCategory, initialDate, initialSearch]);
+  }, [visible, initialCategory, initialDate, initialSearch, initialDestination]);
 
   if (!visible) return null;
 
   const handleApply = () => {
-    onApply(category, date, search);
+    onApply(category, date, search, destination);
     onClose();
   };
 
@@ -59,9 +64,10 @@ export function FilterSheet({ visible, initialCategory, initialDate, initialSear
     setCategory(null);
     setDate(null);
     setSearch('');
+    setDestination(null);
   };
 
-  const activeCount = (category ? 1 : 0) + (date ? 1 : 0) + (search ? 1 : 0);
+  const activeCount = (category ? 1 : 0) + (date ? 1 : 0) + (search ? 1 : 0) + (destination ? 1 : 0);
 
   /* ── drag handlers ── */
   const onPointerDown = (e: React.PointerEvent) => {
@@ -297,6 +303,43 @@ export function FilterSheet({ visible, initialCategory, initialDate, initialSear
             })}
           </div>
         </div>
+
+        {/* ── City / destination section ── */}
+        {destinations.length > 0 && (
+          <>
+            <div style={{ height: 1, background: '#F3F4F6', margin: '0 20px 20px' }} />
+            <div style={{ padding: '0 20px 26px' }}>
+              <p style={{
+                fontSize: 12, fontWeight: 700, color: '#9CA3AF',
+                letterSpacing: '0.08em', textTransform: 'uppercase',
+                fontFamily: "'Heebo', sans-serif", margin: '0 0 12px',
+              }}>עיר</p>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                {destinations.map(city => {
+                  const active = destination === city;
+                  return (
+                    <button
+                      key={city}
+                      onClick={() => setDestination(active ? null : city)}
+                      style={{
+                        display: 'inline-flex', alignItems: 'center', gap: 6,
+                        padding: '9px 14px', borderRadius: 9999,
+                        border: active ? '2px solid #F97316' : '1.5px solid #F3F4F6',
+                        background: active ? '#FFF7ED' : '#FAFAFA',
+                        color: active ? '#EA580C' : '#6B7280',
+                        fontSize: 13, fontWeight: 700, fontFamily: "'Heebo', sans-serif",
+                        cursor: 'pointer', transition: 'all 0.18s ease',
+                      }}
+                    >
+                      <span style={{ fontSize: 15, lineHeight: 1 }}>{destEmoji[city] || '📍'}</span>
+                      {city}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </>
+        )}
 
         {/* ── Bottom actions ── */}
         <div style={{

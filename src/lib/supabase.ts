@@ -38,12 +38,18 @@ const nativeSessionStorage = {
   },
   setItem(key: string, value: string): void {
     try { if (typeof localStorage !== 'undefined') localStorage.setItem(key, value); } catch { /* ignore */ }
+    // Keep the in-memory native blob in sync — getItem falls back to it, so a stale entry here would
+    // otherwise shadow the fresh value on the phone.
+    try { if (bw.__FOMO_NATIVE_CACHE) bw.__FOMO_NATIVE_CACHE[key] = value; } catch { /* ignore */ }
     if (bw.ReactNativeWebView) {
       try { bw.ReactNativeWebView.postMessage(JSON.stringify({ type: 'cacheSet', key, value })); } catch { /* ignore */ }
     }
   },
   removeItem(key: string): void {
     try { if (typeof localStorage !== 'undefined') localStorage.removeItem(key); } catch { /* ignore */ }
+    // CRITICAL for sign-out: also drop it from the in-memory native blob. Otherwise getItem falls
+    // back to the stale session still sitting in __FOMO_NATIVE_CACHE → the user gets signed back in.
+    try { if (bw.__FOMO_NATIVE_CACHE) delete bw.__FOMO_NATIVE_CACHE[key]; } catch { /* ignore */ }
     if (bw.ReactNativeWebView) {
       try { bw.ReactNativeWebView.postMessage(JSON.stringify({ type: 'cacheRemove', key })); } catch { /* ignore */ }
     }
@@ -63,6 +69,26 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     flowType: 'implicit',
   },
 });
+
+/**
+ * Sign out RELIABLY inside the Expo WebView.
+ *
+ * `signOut({ scope: 'local' })` clears the session from localStorage + the in-memory native blob and
+ * posts a `cacheRemove`, but that native write is DEBOUNCED — if the user closes the app before it
+ * flushes, the session is still sitting in AsyncStorage and gets restored on the next launch (the user
+ * "can't log out"). So we also wipe the in-memory blob and fire `cacheClear`, which the native wrapper
+ * applies to AsyncStorage IMMEDIATELY. Clearing the whole cache on logout is intentional — it also
+ * prevents the previous account's cached data leaking to the next login on a shared device.
+ */
+export async function hardSignOut(): Promise<void> {
+  try { await supabase.auth.signOut({ scope: 'local' }); } catch { /* leave the account regardless */ }
+  try {
+    if (bw.__FOMO_NATIVE_CACHE) {
+      for (const k of Object.keys(bw.__FOMO_NATIVE_CACHE)) delete bw.__FOMO_NATIVE_CACHE[k];
+    }
+  } catch { /* ignore */ }
+  try { bw.ReactNativeWebView?.postMessage(JSON.stringify({ type: 'cacheClear' })); } catch { /* ignore */ }
+}
 
 export type User = {
   id: string;

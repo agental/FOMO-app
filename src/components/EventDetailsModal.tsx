@@ -1,6 +1,7 @@
-import { useState, useEffect, useRef, type ChangeEvent } from 'react';
-import { Calendar, MapPin, MessageCircle, Navigation, Pencil, Users, Trash2 } from 'lucide-react';
-import { MapCreateEventFlow } from './MapCreateEventFlow';
+import { useState, useEffect, useRef, lazy, Suspense, type ChangeEvent } from 'react';
+import { Calendar, MapPin, MessageCircle, Navigation, Pencil, Users, Trash2, Move, Ticket } from 'lucide-react';
+// Edit flow pulls in mapbox-gl — lazy so opening an event's details doesn't download the map library.
+const MapCreateEventFlow = lazy(() => import('./MapCreateEventFlow').then(m => ({ default: m.MapCreateEventFlow })));
 import { useSwipeBack } from '../hooks/useSwipeBack';
 import { CityGroupChat } from './CityGroupChat';
 import { supabase, type Event } from '../lib/supabase';
@@ -9,7 +10,6 @@ import { joinEventGroup, eventCountryCode, EVENT_GROUP_FALLBACK_EMOJI } from '..
 import { flagEmoji } from '../utils/flags';
 import { UserAvatar } from './UserAvatar';
 import { CachedImage } from './CachedImage';
-import { getCategoryEmoji } from '../utils/eventCategories';
 import { BookingFlow } from './BookingFlow';
 import { ShareEventSheet } from './ShareEventSheet';
 import { OpenLocationSheet } from './OpenLocationSheet';
@@ -34,6 +34,9 @@ type EventDetailsModalProps = {
   onMessageUser?: (userId: string) => void;
   /** Called after the owner deletes the event (refresh lists); onClose is called as well. */
   onDeleted?: () => void;
+  /** Open straight into the event's group chat on mount (used by the notifications "enter group" action).
+   *  Only honoured when the event has a group AND the viewer is the owner or an approved attendee. */
+  initialOpenGroup?: boolean;
   /** 'modal' (default) = full-screen; 'sheet' = Chabad-style bottom sheet (opens half, drag up to full). */
   variant?: 'modal' | 'sheet';
 };
@@ -48,7 +51,7 @@ const CATEGORY_CONFIG: Record<string, { gradient: string; accent: string; light:
 };
 const DEFAULT_CONFIG = { gradient: 'from-slate-500 via-gray-500 to-zinc-600', accent: '#F97316', light: '#fff7ed', image: '', label: 'אירוע 📅' };
 
-export function EventDetailsModal({ event, onClose, currentUserId: propUserId, onNavigateToUserProfile, onOpenMapAt, onMessageUser, onDeleted, variant = 'modal' }: EventDetailsModalProps) {
+export function EventDetailsModal({ event, onClose, currentUserId: propUserId, onNavigateToUserProfile, onOpenMapAt, onMessageUser, onDeleted, initialOpenGroup, variant = 'modal' }: EventDetailsModalProps) {
   const [attendees, setAttendees]     = useState<Attendee[]>([]);
   const [isJoined, setIsJoined]       = useState(false);
   const [requestStatus, setRequestStatus] = useState<'none' | 'pending' | 'approved' | 'rejected'>('none');
@@ -119,7 +122,9 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
     const y = e.touches[0].clientY;
     dragStartY.current = y; lastY.current = y;
     const inScroll = !!scrollRef.current && scrollRef.current.contains(e.target as Node);
-    cardDrag.current = !inScroll || snap !== 'full' || (scrollRef.current?.scrollTop ?? 0) <= 0;
+    // At half AND full the content scrolls; only when it's already at the top (or at peek) does a drag move
+    // the whole card instead. This lets the half-sheet scroll its content without first expanding to full.
+    cardDrag.current = !inScroll || snap === 'peek' || (scrollRef.current?.scrollTop ?? 0) <= 0;
   };
   const onContentTouchMove = (e: React.TouchEvent) => {
     const y = e.touches[0].clientY;
@@ -130,7 +135,8 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
       else return;
     }
     const dy = y - dragStartY.current;
-    if (snap === 'full' && dy < 0) { cardDrag.current = false; setDragging(false); setDragDy(0); return; }
+    // Dragging UP at half/full → let the content scroll instead of moving the card.
+    if (snap !== 'peek' && dy < 0) { cardDrag.current = false; setDragging(false); setDragDy(0); return; }
     setDragging(true); setDragDy(dy);
   };
   const onContentTouchEnd = () => {
@@ -204,7 +210,32 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
       setUploadingCover(false);
     }
   };
-  const emoji    = (event as any).emoji || '';
+
+  // ── Cover framing (reposition): the organizer or an admin drags the cover vertically to choose
+  // which part shows. Saved per event as image_focus_y (0 = top … 100 = bottom). ──
+  const canEditCover = isAdmin; // reposition is admin-only
+  const [focusY, setFocusY] = useState<number>(() => Number((event as any).image_focus_y ?? 50));
+  const [positioning, setPositioning] = useState(false);
+  const heroRef = useRef<HTMLDivElement>(null);
+  const dragRef = useRef<{ y: number; f: number } | null>(null);
+  useEffect(() => { setFocusY(Number((event as any).image_focus_y ?? 50)); setPositioning(false); }, [event.id]);
+
+  const onPosStart = (e: React.TouchEvent) => { dragRef.current = { y: e.touches[0].clientY, f: focusY }; };
+  const onPosMove = (e: React.TouchEvent) => {
+    const d = dragRef.current;
+    if (!d) return;
+    const h = heroRef.current?.offsetHeight || 320;
+    const dy = e.touches[0].clientY - d.y;
+    setFocusY(Math.max(0, Math.min(100, d.f - (dy / h) * 100))); // drag down → reveal the top
+  };
+  const onPosEnd = () => { dragRef.current = null; };
+  const saveFocus = async () => {
+    const { error } = await supabase.from('events').update({ image_focus_y: Math.round(focusY) }).eq('id', event.id);
+    setPositioning(false);
+    if (error) { showToast({ title: 'שגיאה', text: 'שמירת המיקום נכשלה', emoji: '⚠️', background: 'linear-gradient(135deg,#EF4444,#DC2626)' }); return; }
+    showToast({ title: 'המיקום נשמר', text: 'כך התמונה תוצג', emoji: '🖼️', background: 'linear-gradient(135deg,#22c55e,#16a34a)' });
+  };
+
   const price    = (event as any).price as number | null | undefined;
   const ticketTypes = (((event as any).ticket_types as TicketType[] | undefined) || []).filter(t => t && t.price > 0);
   const hasTickets  = ticketTypes.length > 0;
@@ -279,6 +310,15 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
     await joinEventGroup(event);
     setShowGroup(true);
   };
+
+  // Deep-link straight into the group (from the notifications "enter group" action). Only when the event
+  // actually has a group AND we're allowed in (owner / approved attendee).
+  useEffect(() => {
+    if (initialOpenGroup && hasGroup && currentUserId && (isOwner || event.attendees.includes(currentUserId))) {
+      openEventGroup();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const checkRequest = async () => {
     if (!currentUserId || isOwner) return;
@@ -420,18 +460,34 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
       {/* Hero image with padding */}
         <div className="px-4 pt-4 pb-5">
           <div
+            ref={heroRef}
             className="relative rounded-[20px] overflow-hidden"
-            style={{ aspectRatio: '1 / 1', width: '100%' }}
+            style={{ aspectRatio: '4 / 5', width: '100%', touchAction: positioning ? 'none' : undefined }}
+            onTouchStart={positioning ? onPosStart : undefined}
+            onTouchMove={positioning ? onPosMove : undefined}
+            onTouchEnd={positioning ? onPosEnd : undefined}
           >
             <div className={`absolute inset-0 bg-gradient-to-br ${cat.gradient}`} />
             {heroImg && (
               <CachedImage
                 url={heroImg} alt={event.title}
                 className="absolute inset-0 w-full h-full object-cover"
+                style={{ objectPosition: `center ${focusY}%` }}
                 onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }}
               />
             )}
-            {isAdmin && (
+
+            {positioning && (
+              <>
+                <div className="absolute inset-0 pointer-events-none" style={{ boxShadow: 'inset 0 0 0 3px rgba(255,255,255,0.92)' }} />
+                <div className="absolute top-3 left-1/2 -translate-x-1/2 z-10 rounded-full bg-black/60 px-3 py-1.5 text-white text-[12.5px] font-semibold pointer-events-none" style={{ fontFamily: 'Heebo, sans-serif' }}>
+                  גרור ↕ למסגור
+                </div>
+              </>
+            )}
+
+            {/* Admin: replace the cover image */}
+            {isAdmin && !positioning && (
               <>
                 <input ref={coverInputRef} type="file" accept="image/*" onChange={handleCoverFile} style={{ display: 'none' }} />
                 <button
@@ -446,6 +502,29 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
                   <span className="text-[12.5px] font-semibold">{uploadingCover ? 'מעלה…' : 'החלף תמונה'}</span>
                 </button>
               </>
+            )}
+
+            {/* Organizer / admin: reposition (frame) the cover */}
+            {canEditCover && heroImg && !positioning && (
+              <button
+                onClick={() => setPositioning(true)}
+                className="absolute bottom-3 right-3 z-10 flex items-center gap-1.5 rounded-full bg-black/55 px-3 py-2 text-white backdrop-blur-sm active:scale-95 transition"
+                style={{ fontFamily: 'Heebo, sans-serif' }}
+              >
+                <Move size={15} />
+                <span className="text-[12.5px] font-semibold">מקם</span>
+              </button>
+            )}
+
+            {positioning && (
+              <div className="absolute bottom-3 inset-x-3 z-10 flex gap-2">
+                <button onClick={saveFocus} className="flex-1 rounded-full bg-white text-gray-900 py-2 text-[13.5px] font-bold active:scale-95 transition" style={{ fontFamily: 'Heebo, sans-serif' }}>
+                  שמור מיקום
+                </button>
+                <button onClick={() => { setFocusY(Number((event as any).image_focus_y ?? 50)); setPositioning(false); }} className="rounded-full bg-black/55 text-white px-4 py-2 text-[13.5px] font-semibold active:scale-95 transition" style={{ fontFamily: 'Heebo, sans-serif' }}>
+                  ביטול
+                </button>
+              </div>
             )}
           </div>
         </div>
@@ -506,7 +585,7 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
               <span className="flex items-center gap-2">
                 <MapPin className="w-4 h-4 flex-shrink-0" style={{ color: '#F97316' }} />
                 <span className="text-[13px] font-semibold" style={{ color: '#F97316' }}>
-                  {flagEmoji(event.country ?? '')} {event.city}
+                  {flagEmoji(event.country ?? '')} {event.city}{event.address ? ` · ${event.address}` : ''}
                 </span>
               </span>
               <span className="flex items-center gap-1 text-[12px] font-bold" style={{ color: '#9CA3AF', fontFamily: 'Heebo, sans-serif' }}>
@@ -622,60 +701,24 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
                 style={{ height: 180 }}
               >
                 <div
-                  className="absolute top-2 right-2 z-30 bg-white/95 backdrop-blur-sm text-[11px] font-bold px-2.5 py-1 rounded-full flex items-center gap-1 shadow-sm"
+                  className="absolute top-2 right-2 z-10 bg-white/95 backdrop-blur-sm text-[11px] font-bold px-2.5 py-1 rounded-full flex items-center gap-1 shadow-sm"
                   style={{ color: '#F97316', fontFamily: 'Heebo, sans-serif' }}
                 >
                   <MapPin className="w-3 h-3" /> פתח במפה
                 </div>
+                <div
+                  className="absolute inset-0"
+                  style={{ background: 'linear-gradient(135deg,#DCE7F2,#E7EFE2)' }}
+                />
                 <img
-                  src={`https://api.mapbox.com/styles/v1/mapbox/streets-v12/static/${event.longitude},${event.latitude},14,0/600x420@2x?access_token=${import.meta.env.VITE_MAPBOX_TOKEN}`}
-                  alt="map"
                   className="absolute inset-0 w-full h-full object-cover"
-                  onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                  src={`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/mapkit-snapshot?lat=${event.latitude}&lng=${event.longitude}&w=600&h=200&z=15`}
+                  alt="מפה"
+                  loading="lazy"
+                  onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
                 />
 
-                {/* pin */}
-                <div className="absolute inset-0 flex items-center justify-center" style={{ zIndex: 20 }}>
-                  <div className="relative flex-shrink-0" style={{ marginTop: -37 }}>
-                    <svg
-                      width="65" height="74" viewBox="0 0 36 41" fill="none"
-                      xmlns="http://www.w3.org/2000/svg"
-                      style={{ overflow: 'visible', display: 'block', filter: 'drop-shadow(0 1px 5px rgba(0,0,0,0.15))' }}
-                    >
-                      <defs>
-                        <clipPath id="edm-clip">
-                          <circle cx="15.75" cy="15.75" r="12.75" />
-                        </clipPath>
-                      </defs>
-                      <path fillRule="evenodd" clipRule="evenodd"
-                        d="M15.75 0C24.4485 0 31.5 7.05152 31.5 15.75C31.5 23.3702 26.0883 29.7265 18.8985 31.1852L16.2393 34.9931C16.1841 35.0725 16.1109 35.1372 16.0257 35.182C15.9405 35.2267 15.846 35.25 15.75 35.25C15.654 35.25 15.5595 35.2267 15.4743 35.182C15.3891 35.1372 15.3159 35.0725 15.2607 34.9931L12.6015 31.1852C5.41168 29.7265 0 23.3702 0 15.75C0 7.05152 7.05152 0 15.75 0Z"
-                        fill={'#F97316'}
-                      />
-                      <path d="M17.25 39C17.25 38.1716 16.5784 37.5 15.75 37.5C14.9216 37.5 14.25 38.1716 14.25 39C14.25 39.8284 14.9216 40.5 15.75 40.5C16.5784 40.5 17.25 39.8284 17.25 39Z" fill={'#F97316'} />
-                      <circle cx="15.75" cy="15.75" r="12.75" fill="white" />
-                      {event.image_url ? (
-                        <image href={event.image_url} x="3" y="3" width="25.5" height="25.5" clipPath="url(#edm-clip)" preserveAspectRatio="xMidYMid slice" />
-                      ) : (
-                        <foreignObject x="3" y="3" width="25.5" height="25.5">
-                          <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, lineHeight: 1 }}>
-                            {getCategoryEmoji(event.event_type || '')}
-                          </div>
-                        </foreignObject>
-                      )}
-                      {emoji && (
-                        <>
-                          <path d="M25.5 30C29.2279 30 32.25 26.9779 32.25 23.25C32.25 19.5221 29.2279 16.5 25.5 16.5C21.7721 16.5 18.75 19.5221 18.75 23.25C18.75 26.9779 21.7721 30 25.5 30Z" fill="white" />
-                          <path d="M31.5 23.25C31.5 19.9363 28.8137 17.25 25.5 17.25C22.1863 17.25 19.5 19.9363 19.5 23.25C19.5 26.5637 22.1863 29.25 25.5 29.25V30C21.7721 30 18.75 26.9779 18.75 23.25C18.75 19.5221 21.7721 16.5 25.5 16.5C29.2279 16.5 32.25 19.5221 32.25 23.25C32.25 26.9779 29.2279 30 25.5 30V29.25C28.8137 29.25 31.5 26.5637 31.5 23.25Z" fill={'#F97316'} />
-                          <foreignObject x="19.5" y="17.25" width="12" height="12">
-                            <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 9, lineHeight: 1 }}>
-                              {emoji}
-                            </div>
-                          </foreignObject>
-                        </>
-                      )}
-                    </svg>
-                  </div>
-                </div>
+                {/* Custom pin removed — the Apple snapshot already renders a single marker at the location. */}
               </div>
             </div>
           )}
@@ -703,7 +746,37 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
     }
   };
 
-  const joinButton = isOwner ? (
+  // External (aggregated) events: buy tickets on the source site instead of the join/approval flow.
+  const isExternal = Boolean((event as any).is_external && (event as any).external_url);
+  const openTickets = () => {
+    const url = (event as any).external_url as string | undefined;
+    if (!url) return;
+    const w = window as any;
+    try {
+      if (w.ReactNativeWebView) {
+        w.ReactNativeWebView.postMessage(JSON.stringify({ type: 'openExternal', url }));
+        return;
+      }
+    } catch { /* fall through to web */ }
+    window.open(url, '_blank', 'noopener');
+  };
+
+  const joinButton = isExternal ? (
+    <button
+      onClick={openTickets}
+      className="w-full font-black text-[17px] text-white active:scale-[0.97] transition-transform flex items-center justify-center gap-2"
+      style={{
+        fontFamily: 'Heebo, sans-serif',
+        height: 56,
+        borderRadius: 28,
+        background: `linear-gradient(135deg, ${'#F97316'}, ${'#EA580C'})`,
+        boxShadow: `0 8px 24px ${'#F97316'}55`,
+      }}
+    >
+      <Ticket size={20} strokeWidth={2.5} />
+      רכוש כרטיסים
+    </button>
+  ) : isOwner ? (
     // Owner sees Edit + Delete instead of join
     <div className="w-full flex items-center gap-2.5">
       <button
@@ -770,6 +843,7 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
           countryFlag={(event as any).emoji || EVENT_GROUP_FALLBACK_EMOJI}
           cityName={event.title || 'אירוע'}
           cityEmoji={(event as any).emoji || EVENT_GROUP_FALLBACK_EMOJI}
+          ownerId={event.user_id}
           currentUserId={currentUserId}
           currentUserName={me.name}
           currentUserAvatar={me.avatar}
@@ -799,14 +873,16 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
         />
       )}
       {showEdit && isOwner && currentUserId && (
-        <MapCreateEventFlow
-          isOpen={showEdit}
-          onClose={() => setShowEdit(false)}
-          onSuccess={() => setShowEdit(false)}
-          userId={currentUserId}
-          existingEvent={event as any}
-          initialLocation={event.latitude != null ? { latitude: event.latitude, longitude: event.longitude } : undefined}
-        />
+        <Suspense fallback={null}>
+          <MapCreateEventFlow
+            isOpen={showEdit}
+            onClose={() => setShowEdit(false)}
+            onSuccess={() => setShowEdit(false)}
+            userId={currentUserId}
+            existingEvent={event as any}
+            initialLocation={event.latitude != null ? { latitude: event.latitude, longitude: event.longitude } : undefined}
+          />
+        </Suspense>
       )}
     </>
   );
@@ -858,12 +934,12 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
             ref={scrollRef}
             style={{
               flex: '1 1 auto', minHeight: 0,
-              paddingBottom: 100,
-              // Scrolls only when the card is full and not being dragged — otherwise the card moves,
-              // not the content (and iOS can't rubber-band the body inside the sheet).
-              overflowY: snap === 'full' && !dragging ? 'auto' : 'hidden',
+              paddingBottom: 150,
+              // Scrolls at half AND full (not peek) when not mid-drag — so the half-sheet's content is
+              // reachable without first expanding to full. At peek the card only moves, never scrolls.
+              overflowY: snap !== 'peek' && !dragging ? 'auto' : 'hidden',
               overscrollBehavior: 'none',
-              touchAction: snap === 'full' && !dragging ? 'pan-y' : 'none',
+              touchAction: snap !== 'peek' && !dragging ? 'pan-y' : 'none',
             }}
           >
             {detailBody}
@@ -992,7 +1068,7 @@ export function EventDetailsModal({ event, onClose, currentUserId: propUserId, o
       <div
         ref={scrollRef}
         className="overflow-y-auto overscroll-contain"
-        style={{ height: 'calc(100% - 57px)', paddingBottom: 100 }}
+        style={{ height: 'calc(100% - 57px)', paddingBottom: 150 }}
       >
         {detailBody}
       </div>
