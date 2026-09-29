@@ -1,22 +1,27 @@
+import launchBg from '../../assets/launch-background.mp4';
+
 /**
- * Native-iOS launch background — flat white, with ONE extremely subtle warm-orange ambient glow
- * anchored behind the profile-photo area (not spread across the whole screen). No blobs, no grain,
- * no vignette — this is a system-app background, not a marketing page.
+ * Launch background — a looping, muted video (friends watching a Koh Phangan sunset) filling the
+ * screen, with a top/bottom gradient scrim so the logo, countdown and buttons stay legible.
  */
 export function LaunchBackground() {
   return (
-    <div aria-hidden style={{ position: 'fixed', inset: 0, overflow: 'hidden', pointerEvents: 'none', background: '#FFFFFF' }}>
+    <div aria-hidden style={{ position: 'fixed', inset: 0, overflow: 'hidden', pointerEvents: 'none', background: '#0C0C10' }}>
+      <video
+        src={launchBg}
+        autoPlay
+        muted
+        loop
+        playsInline
+        preload="auto"
+        style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }}
+      />
       <div
         style={{
           position: 'absolute',
-          top: '-4%',
-          left: '50%',
-          transform: 'translateX(-50%)',
-          width: 420,
-          height: 420,
-          borderRadius: '50%',
-          background: 'radial-gradient(circle, rgba(249,115,22,0.07), transparent 68%)',
-          filter: 'blur(30px)',
+          inset: 0,
+          background:
+            'linear-gradient(180deg, rgba(8,8,12,0.60) 0%, rgba(8,8,12,0.15) 26%, rgba(8,8,12,0.30) 62%, rgba(8,8,12,0.72) 100%)',
         }}
       />
     </div>

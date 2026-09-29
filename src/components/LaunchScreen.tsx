@@ -14,8 +14,8 @@ import { supabase, hardSignOut } from '../lib/supabase';
 import { loadValue, saveValue } from '../utils/warmCache';
 
 const SF = "-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Heebo, sans-serif";
-const INK = '#111827';
-const SECONDARY = '#6E6E73'; // Apple's secondaryLabel
+const INK = '#FFFFFF';
+const SECONDARY = 'rgba(255,255,255,0.78)';
 const ORANGE = '#F97316';
 
 /**
@@ -103,7 +103,7 @@ export function LaunchScreen({
         inset: 0,
         overflowY: 'auto',
         WebkitOverflowScrolling: 'touch',
-        background: '#FFFFFF',
+        background: 'transparent',
         // Native-app feel: no text selection / iOS long-press "copy" callout (no inputs here).
         userSelect: 'none',
         WebkitUserSelect: 'none',
@@ -200,8 +200,8 @@ export function LaunchScreen({
             style={{
               width: '100%', height: 46, borderRadius: 20, border: 'none',
               cursor: notified ? 'default' : 'pointer',
-              background: notified ? 'rgba(60,60,67,0.06)' : 'rgba(249,115,22,0.10)',
-              color: notified ? SECONDARY : '#C2410C',
+              background: notified ? 'rgba(255,255,255,0.12)' : 'rgba(249,115,22,0.22)',
+              color: notified ? SECONDARY : '#FED7AA',
               fontFamily: SF, fontWeight: 600, fontSize: 15, letterSpacing: '-0.1px',
               display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
             }}
@@ -233,7 +233,7 @@ export function LaunchScreen({
           </div>
           <button
             onClick={onSignOut}
-            style={{ background: 'none', border: 'none', cursor: 'pointer', fontFamily: SF, fontWeight: 400, fontSize: 12, color: 'rgba(60,60,67,0.4)', padding: 4 }}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', fontFamily: SF, fontWeight: 400, fontSize: 12, color: 'rgba(255,255,255,0.5)', padding: 4 }}
           >
             התנתקות
           </button>
